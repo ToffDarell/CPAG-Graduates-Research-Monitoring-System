@@ -161,7 +161,12 @@ router.post('/register', async (req, res) => {
                     studentId: studentId,
                     isActive: true  // Students are automatically active
                 }
-                : {}
+                : role === "admin/dean"
+                ? {
+                    isActive: true // Admin/Dean are automatically active
+                }
+                :{}
+
             )
         };
 
@@ -203,8 +208,18 @@ router.post('/login', async (req, res) => {
 
         const user = await User.findOne({ email });
 
-        // Check if user exists and password matches
-        if (!user || !(await user.matchPassword(password))) {
+        // Check if user exists
+        if (!user) {
+            return res.status(401).json({ message: 'Invalid credentials' });
+        }
+
+        // Check if account is active
+        if (!user.isActive) {
+            return res.status(401).json({ message: 'Account is not active. Please complete your registration.' });
+        }
+
+        // Check if password matches
+        if (!(await user.matchPassword(password))) {
             return res.status(401).json({ message: 'Invalid credentials' });
         }
 
