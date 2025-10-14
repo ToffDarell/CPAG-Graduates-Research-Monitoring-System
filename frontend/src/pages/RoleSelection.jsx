@@ -1,0 +1,77 @@
+import React from "react";
+import { useNavigate } from "react-router-dom";
+import { FaUserTie, FaUserGraduate, FaChalkboardTeacher, FaUserShield } from 'react-icons/fa';
+
+const RoleSelection = () => {
+  const navigate = useNavigate();
+
+  const roles = [
+    { value: "admin/dean", label: "Dean", icon: FaUserShield },
+    { value: "program head", label: "Program Head", icon: FaUserTie },
+    { value: "faculty adviser", label: "Faculty Adviser", icon: FaChalkboardTeacher },
+    { value: "graduate student", label: "Student", icon: FaUserGraduate }
+  ];
+
+  const handleRoleSelect = (roleValue) => {
+    // Store selected role in sessionStorage
+    sessionStorage.setItem('selectedRole', roleValue);
+    // Navigate to login page
+    navigate(`/login?role=${encodeURIComponent(roleValue)}`);
+  };
+
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100 p-4">
+      <div className="bg-white p-8 rounded-xl shadow-2xl w-full max-w-4xl border border-gray-100">
+        {/* Logo Section */}
+        <div className="flex justify-center mb-6">
+          <img 
+            src="/logo.jpg" 
+            alt="Department Logo" 
+            className="h-30 w-30 object-contain"
+            onError={(e) => {
+              // Hide image if logo doesn't exist
+              e.target.style.display = 'none';
+            }}
+          />
+        </div>
+
+        <div className="text-center mb-8">
+          <h1 className="text-4xl font-bold text-gray-800 mb-2">
+            Welcome to CPAG Masteral Research Archive and Monitoring System
+          </h1>
+          <p className="text-gray-600 text-lg">
+            Please select your role to continue
+          </p>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+          {roles.map((role) => {
+            const Icon = role.icon;
+            return (
+              <button
+                key={role.value}
+                onClick={() => handleRoleSelect(role.value)}
+                className="p-8 rounded-xl border-2 border-gray-200 bg-white hover:border-blue-500 hover:shadow-xl transition-all duration-300 flex flex-col items-center justify-center space-y-4 group"
+              >
+                <div className="w-24 h-24 rounded-full bg-gray-100 group-hover:bg-blue-50 flex items-center justify-center transition-colors duration-300">
+                  <Icon className="text-5xl text-gray-600 group-hover:text-blue-600 transition-colors duration-300" />
+                </div>
+                <span className="text-lg font-semibold text-gray-700 group-hover:text-blue-700 transition-colors duration-300">
+                  {role.label}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="mt-8 text-center">
+          <p className="text-sm text-gray-500">
+            By continuing, you agree to use your buksu institutional email address
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default RoleSelection;

@@ -1,0 +1,73 @@
+import mongoose from "mongoose";
+import bcrypt from "bcryptjs";
+
+const userSchema = new mongoose.Schema(
+  {
+    name: {
+      type: String,
+      required: [true, "Full name is required"], // Now required for all roles
+    },
+    email: {
+      type: String,
+      required: true,
+      unique: true,
+      // Institutional email only (faculty OR student)
+      match: [
+        /@(buksu\.edu\.ph|student\.buksu\.edu\.ph)$/,
+        "Invalid institutional email address",
+      ],
+    },
+    password: {
+      type: String,
+      required: function() {
+        return this.isActive; // Only required when account is active
+      },
+    },
+    role: {
+      type: String,
+      enum: [
+        "admin/dean",
+        "faculty adviser",
+        "program head",
+        "graduate student",
+      ],
+      required: true,
+    },
+    invitationToken: {
+      type: String,
+    },
+    invitationExpires: {
+      type: Date,
+    },
+    isActive: {
+      type: Boolean,
+      default: false, // false until they complete registration via invitation
+    },
+    studentId: {
+      type: String,
+      required: function() {
+        return this.role === "graduate student"; // Required only for students
+      },
+      unique: true,
+      sparse: true
+    },
+  },
+  { timestamps: true }
+);
+
+// ✅ Encrypt password before saving
+userSchema.pre("save", async function (next) {
+  if (!this.isModified("password")) return next();
+  const salt = await bcrypt.genSalt(10);
+  this.password = await bcrypt.hash(this.password, salt);
+  next();
+});
+
+// ✅ Compare entered password with hashed one
+userSchema.methods.matchPassword = async function (enteredPassword) {
+  return await bcrypt.compare(enteredPassword, this.password);
+};
+
+const User = mongoose.model("User", userSchema);
+
+export default User;
