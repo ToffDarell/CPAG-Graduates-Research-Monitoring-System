@@ -251,14 +251,16 @@ export const sendEmail = async (req, res) => {
     const { to, subject, text } = req.body;
     // Create transporter for email
     const transporter = nodemailer.createTransport({
-      service: "gmail",
+      host: process.env.SMTP_HOST,
+      port: process.env.SMTP_PORT,
+      secure: false, // true for 465, false for other ports
       auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASS,
+        user: process.env.SMTP_USER,
+        pass: process.env.SMTP_PASS,
       },
     });
     await transporter.sendMail({
-      from: process.env.EMAIL_USER,
+      from: process.env.SMTP_FROM,
       to,
       subject,
       text,
@@ -312,20 +314,22 @@ export const inviteFaculty = async (req, res) => {
 
     // Send email notification
     console.log(`Attempting to send email to: ${email}`);
-    console.log(`Using EMAIL_USER: ${process.env.EMAIL_USER}`);
+    console.log(`Using EMAIL_USER: ${process.env.SMTP_FROM}`);
     
     // Create transporter for email
     const nodemailer = await import('nodemailer');
     const transporter = nodemailer.default.createTransport({
-      service: "gmail",
+      host: process.env.SMTP_HOST,
+      port: process.env.SMTP_PORT,
+      secure: false, // true for 465, false for other ports
       auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASS,
+        user: process.env.SMTP_USER,
+        pass: process.env.SMTP_PASS,
       },
     });
     
     const emailResult = await transporter.sendMail({
-      from: process.env.EMAIL_USER,
+      from: process.env.SMTP_FROM,
       to: email,
       subject: "Faculty Invitation - Masteral Archive and Monitoring System",
       html: `
