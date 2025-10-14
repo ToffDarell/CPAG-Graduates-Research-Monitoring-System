@@ -331,10 +331,10 @@ export const inviteFaculty = async (req, res) => {
     const emailResult = await transporter.sendMail({
       from: process.env.SMTP_FROM,
       to: email,
-      subject: "Faculty Invitation - Masteral Archive and Monitoring System",
+      subject: "Faculty Invitation - CPAG Masteral Research Archive and Monitoring System",
       html: `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-          <h2 style="color: #7C1D23;">Welcome to Masteral Archive and Monitoring System</h2>
+          <h2 style="color: #7C1D23;">Welcome to CPAG Masteral Research Archive and Monitoring System</h2>
           <p>Hello <strong>${name}</strong>,</p>
           <p>You have been invited to join as a <strong>${role}</strong> in our system.</p>
           <p>Please click the button below to complete your registration and set your password:</p>
