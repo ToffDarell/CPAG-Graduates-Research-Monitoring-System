@@ -54,7 +54,7 @@ const userSchema = new mongoose.Schema(
       },
       unique: true,
       sparse: true
-    },
+    }
   },
   { timestamps: true }
 );
