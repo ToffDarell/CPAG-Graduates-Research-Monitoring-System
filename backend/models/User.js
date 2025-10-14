@@ -41,7 +41,11 @@ const userSchema = new mongoose.Schema(
     },
     isActive: {
       type: Boolean,
-      default: false, // false until they complete registration via invitation
+      
+      default: function() {
+        // Admin/Dean and students are automatically active
+        return this.role === 'admin/dean' || this.role === 'graduate student';
+      },
     },
     studentId: {
       type: String,
