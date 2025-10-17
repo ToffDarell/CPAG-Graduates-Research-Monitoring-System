@@ -203,10 +203,22 @@ router.post('/login', async (req, res) => {
 
         const user = await User.findOne({ email });
 
-        // Check if user exists and password matches
-        if (!user || !user.isActive || !(await user.matchPassword(password))) {
-            return res.status(401).json({ message: 'Invalid credentials' });
-        }
+     // Check if user exists
+if (!user) {
+    return res.status(401).json({ message: 'Invalid credentials' });
+}
+
+// Check if account is active
+if (!user.isActive) {
+    return res.status(401).json({ 
+        message: 'Please activate your account by completing the setting up the password. Contact your dean for assistance.' 
+    });
+}
+
+// Check if password matches
+if (!(await user.matchPassword(password))) {
+    return res.status(401).json({ message: 'Invalid credentials' });
+}
 
         // Check if trying to login with different role than registered
         if (user.role !== 'dean' && user.role !== role) {
