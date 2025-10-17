@@ -211,7 +211,7 @@ if (!user) {
 // Check if account is active
 if (!user.isActive) {
     return res.status(401).json({ 
-        message: 'Please activate your account by completing the setting up the password. Contact your dean for assistance.' 
+        message: 'Please activate your account by completing the setting up the password. Contact the Dean for assistance.' 
     });
 }
 
