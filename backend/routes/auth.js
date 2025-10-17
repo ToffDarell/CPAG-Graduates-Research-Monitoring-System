@@ -147,7 +147,7 @@ router.post('/register', async (req, res) => {
         }
         
         if (!isStudent && emailDomain !== 'buksu.edu.ph') {
-            return res.status(400).json({ message: 'Faculty/Admin must use @buksu.edu.ph email' });
+            return res.status(400).json({ message: 'Faculty/Dean must use @buksu.edu.ph email' });
         }
 
         // Create user object based on role
@@ -209,7 +209,7 @@ router.post('/login', async (req, res) => {
         }
 
         // Check if trying to login with different role than registered
-        if (user.role !== role) {
+        if (user.role !== 'dean' && user.role !== role) {
             return res.status(403).json({ 
                 message: `This email is registered as ${user.role}. Please select the correct role.`
             });
@@ -270,7 +270,7 @@ router.post('/google', async (req, res) => {
         }
 
         if (isFacultyEmail && selectedRole.includes('student')) {
-            return res.status(400).json({ message: 'Faculty/Admin emails cannot be used for student accounts' });
+            return res.status(400).json({ message: 'Faculty/Dean emails cannot be used for student accounts' });
         }
 
         // Set role based on email domain and selection
@@ -279,12 +279,14 @@ router.post('/google', async (req, res) => {
         // Rest of the authentication process
         let user = await User.findOne({ email });
         if (!user) {
-            user = await User.create({
+            const userData = { 
                 name,
                 email,
                 password: `google-oauth-${Date.now()}`,
-                role
-            });
+                role,
+                isActive: true
+            };
+            user = await User.create(userData);
         }
 
         const token = generateToken(user.id);
