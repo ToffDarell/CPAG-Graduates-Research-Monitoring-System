@@ -12,6 +12,9 @@ import {
   getPanelAssignments,
   uploadDocument,
   getDocuments,
+  viewDocument, 
+  downloadDocument,
+  deleteDocument,
   updateFaculty,
   inviteFaculty,
   createFaculty,
@@ -22,7 +25,10 @@ import {
   getSettings,
   logout,
   sendEmail,
-} from "../controllers/deanController.js";
+  toggleFacultyActivation,
+  addResearchRemarks,
+  getResearchFeedback,
+    } from "../controllers/deanController.js";
 
 
 
@@ -31,25 +37,56 @@ const router = express.Router();
 // Configure multer for file uploads
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    cb(null, "uploads/");
+    // Use import instead of require for ES modules
+    import('path').then(path => {
+      const uploadPath = path.join(process.cwd(), 'backend', 'uploads');
+      cb(null, uploadPath);
+    });
   },
   filename: (req, file, cb) => {
-    cb(null, Date.now() + "-" + file.originalname);
+    // Clean filename to avoid issues
+    const cleanName = file.originalname.replace(/[^a-zA-Z0-9.-]/g, '_');
+    cb(null, Date.now() + "-" + cleanName);
   },
 });
 
-const upload = multer({ storage });
+const upload = multer({ 
+  storage,
+  limits: {
+    fileSize: 10 * 1024 * 1024, // 10MB limit
+  },
+  fileFilter: (req, file, cb) => {
+    // Allow only specific file types
+    const allowedTypes = [
+      'application/pdf',
+      'application/msword',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'application/vnd.ms-excel',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'application/vnd.ms-powerpoint',
+      'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      'text/plain'
+    ];
+    
+    if (allowedTypes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Invalid file type. Only PDF, Word, Excel, PowerPoint, and text files are allowed.'));
+    }
+  }
+});
 
 // Apply authentication middleware to all routes
-router.use(protect, checkAuth(["admin/dean", "Admin/Dean"]));
+router.use(protect, checkAuth(["dean", "Dean"]));
 
 // Faculty management
 router.get("/faculty", getFaculty);
 router.post("/faculty", createFaculty);
 router.put("/faculty/:id", updateFaculty);
 router.delete("/faculty/:id", deleteFaculty);
+router.put("/faculty/:id/toggle-status", toggleFacultyActivation);
 
-// Research records and analytics
+// Research records and analytics     
 router.get("/research", getResearchRecords);
 router.get("/analytics", getAnalytics);
 
@@ -69,6 +106,9 @@ router.put("/assign-panel/:id", assignPanel);
 // Document management
 router.post("/documents", upload.single("file"), uploadDocument);
 router.get("/documents", getDocuments);
+router.get("/documents/:id", viewDocument); // Add this line
+router.get("/documents/:id/download", downloadDocument);
+router.delete("/documents/:id", deleteDocument);
 
 // Legacy upload route for backward compatibility
 router.post("/upload", upload.single("file"), legacyUpload);
@@ -85,5 +125,9 @@ router.post("/invite-faculty", inviteFaculty);
 
 // Send email
 router.post("/send-email", sendEmail);
+
+// Search research
+router.post("/research/:researchId/remarks", addResearchRemarks);
+router.get("/research/:researchId/feedback", getResearchFeedback);
 
 export default router;
