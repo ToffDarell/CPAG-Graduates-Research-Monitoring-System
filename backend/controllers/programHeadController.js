@@ -134,7 +134,7 @@ export const uploadForm = async (req, res) => {
       fileSize: req.file.size,
       mimeType: req.file.mimetype,
       uploadedBy: req.user.id,
-      accessibleTo: ["admin/dean", "program head", "faculty adviser"],
+      accessibleTo: ["dean", "program head", "faculty adviser"],
     });
 
     await document.save();
