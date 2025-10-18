@@ -11,9 +11,85 @@ export const getFaculty = async (req, res) => {
   try {
     const faculty = await User.find({
       role: { $in: ["faculty adviser", "program head"] },
-      isActive: true,
     }).select("-password");
     res.json(faculty);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Add remarks/feedback for research
+export const addResearchRemarks = async (req, res) => {
+  try {
+    const { researchId } = req.params;
+    const { message, type = 'dean_feedback' } = req.body;
+    
+    const research = await Research.findById(researchId);
+    if (!research) {
+      return res.status(404).json({ message: "Research not found" });
+    }
+    
+    // Create feedback record
+    const feedback = new Feedback({
+      research: researchId,
+      student: research.students[0], // Assuming single student
+      adviser: research.adviser,
+      type: type,
+      message: message,
+      status: 'pending'
+    });
+    
+    await feedback.save();
+    
+    // Update research with dean feedback flag
+    research.sharedWithDean = true;
+    research.sharedAt = new Date();
+    research.sharedBy = req.user.id;
+    await research.save();
+    
+    res.json({ message: "Remarks added successfully", feedback });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Get research feedback
+export const getResearchFeedback = async (req, res) => {
+  try {
+    const { researchId } = req.params;
+    
+    const feedback = await Feedback.find({ research: researchId })
+      .populate("student", "name")
+      .populate("adviser", "name")
+      .sort({ createdAt: -1 });
+    
+    res.json(feedback);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+export const toggleFacultyActivation = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const faculty = await User.findById(id);
+
+    if (!faculty) {
+      return res.status(404).json({ message: "Faculty member not found" });
+    }
+
+    faculty.isActive = !faculty.isActive;
+    await faculty.save();
+
+    res.json({ message: `Faculty member status updated ${faculty.isActive ? 'activated' : 'deactivated'} sucessfully`,
+    faculty: {
+      _id: faculty._id,
+      name: faculty.name,
+      email: faculty.email,
+      role: faculty.role,
+      isActive: faculty.isActive
+    }
+  });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -77,14 +153,39 @@ export const archiveResearch = async (req, res) => {
 };
 
 // Get monitoring and evaluation data
+
 export const getMonitoringData = async (req, res) => {
   try {
-    const research = await Research.find()
-      .populate("students", "name email")
-      .populate("adviser", "name email")
+    const { search, status, department } = req.query;
+    
+    // Build query object
+    let query = {};
+    
+    // Search functionality
+    if (search) {
+      query.$or = [
+        { title: { $regex: search, $options: 'i' } },
+        { 'adviser.name': { $regex: search, $options: 'i' } },
+        { 'students.name': { $regex: search, $options: 'i' } }
+      ];
+    }
+    
+    // Status filter
+    if (status && status !== 'all') {
+      query.status = status;
+    }
+    
+    // Department filter (if you have department field)
+    if (department && department !== 'all') {
+      query.department = department;
+    }
+
+    const research = await Research.find(query)
+      .populate("students", "name email department")
+      .populate("adviser", "name email department")
       .sort({ updatedAt: -1 });
 
-    // Also include feedback if Feedback model exists
+    // Include feedback
     let feedback = [];
     try {
       const Feedback = (await import("../models/Feedback.js")).default;
@@ -126,6 +227,21 @@ export const uploadDocument = async (req, res) => {
       return res.status(400).json({ message: "No file uploaded" });
     }
 
+    console.log('Uploaded file details:', {
+      originalname: req.file.originalname,
+      filename: req.file.filename,
+      path: req.file.path,
+      size: req.file.size,
+      mimetype: req.file.mimetype
+    });
+
+    // Check if file actually exists
+    const fs = await import('fs');
+    if (!fs.existsSync(req.file.path)) {
+      console.error('File was not saved properly:', req.file.path);
+      return res.status(500).json({ message: "File was not saved properly" });
+    }
+
     // Try to import Document model
     const Document = (await import("../models/Document.js")).default;
     const document = new Document({
@@ -137,11 +253,101 @@ export const uploadDocument = async (req, res) => {
       fileSize: req.file.size,
       mimeType: req.file.mimetype,
       uploadedBy: req.user.id,
-      accessibleTo: req.body.accessibleTo ? JSON.parse(req.body.accessibleTo) : ["admin/dean"],
+      accessibleTo: req.body.accessibleTo ? JSON.parse(req.body.accessibleTo) : ["dean"],
     });
 
     await document.save();
+    console.log('Document saved successfully:', document._id);
     res.json({ message: "Document uploaded successfully", document });
+  } catch (error) {
+    console.error('Upload error:', error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+//Download document
+export const downloadDocument = async (req, res) => {
+  try {
+    const Document = (await import("../models/Document.js")).default;
+    const document = await Document.findById(req.params.id);
+
+    if (!document) {
+      return res.status(404).json({ message: "Document not found" });
+    }
+
+    const isUploader = document.uploadedBy.toString() === req.user.id;
+    const hasRoleAccess = document.accessibleTo.includes(req.user.role);
+
+
+    // Check if user has access to this document
+    if (!isUploader && !hasRoleAccess) {
+      return res.status(403).json({ message: "You are not authorized to download this document" });
+    }
+
+    const fs = await import('fs');
+    const path = await import('path');
+
+    // Construct the correct file path
+    let filePath;
+    if (path.isAbsolute(document.filepath)) {
+      filePath = document.filepath;
+    } else {
+      filePath = path.join(process.cwd(), 'backend', 'uploads', path.basename(document.filepath));
+    }
+    
+    console.log('Looking for file at:', filePath); // Debug log
+    console.log('Original filepath:', document.filepath); // Debug log
+
+    if (!fs.existsSync(filePath)) {
+      // Try alternative path
+      const altPath = path.join(process.cwd(), document.filepath);
+      console.log('Trying alternative path:', altPath);
+      
+      if (fs.existsSync(altPath)) {
+        res.setHeader('Content-Disposition', `attachment; filename="${document.filename}"`);
+        res.setHeader('Content-Type', document.mimeType);
+        const fileStream = fs.createReadStream(altPath);
+        fileStream.pipe(res);
+        return;
+      }
+      
+      return res.status(404).json({ message: "File not found on server" });
+    }
+
+    res.setHeader('Content-Disposition', `attachment; filename="${document.filename}"`);
+    res.setHeader('Content-Type', document.mimeType);
+
+    const fileStream = fs.createReadStream(filePath);
+    fileStream.pipe(res);
+  } catch (error) {
+    console.error('Download error:', error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Delete document
+export const deleteDocument = async (req, res) => {
+  try {
+    const Document = (await import("../models/Document.js")).default;
+    const document = await Document.findById(req.params.id);
+    
+    if (!document) {
+      return res.status(404).json({ message: "Document not found" });
+    }
+
+    // Check if user is the uploader or dean
+    if (document.uploadedBy.toString() !== req.user.id && req.user.role !== 'dean') {
+      return res.status(403).json({ message: "Access denied" });
+    }
+
+    // Delete file from filesystem
+    const fs = await import('fs');
+    if (fs.existsSync(document.filepath)) {
+      fs.unlinkSync(document.filepath);
+    }
+
+    await Document.findByIdAndDelete(req.params.id);
+    res.json({ message: "Document deleted successfully" });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -160,6 +366,70 @@ export const getDocuments = async (req, res) => {
     res.status(500).json({ message: error.message });
   }
 };
+
+// View document (for inline viewing)
+export const viewDocument = async (req, res) => {
+  try {
+    const Document = (await import("../models/Document.js")).default;
+    const document = await Document.findById(req.params.id);
+
+    if (!document) {
+      return res.status(404).json({ message: "Document not found" });
+    }
+
+    // Check if user has access to this document
+    const isUploader = document.uploadedBy.toString() === req.user.id;
+    const hasRoleAccess = document.accessibleTo.includes(req.user.role);
+
+    if (!isUploader && !hasRoleAccess) {
+      return res.status(403).json({message: "You are not authorized to view this document"});
+    }
+    const fs = await import('fs');
+    const path = await import('path');
+
+    // Construct the correct file path
+    let filePath;
+    if (path.isAbsolute(document.filepath)) {
+      filePath = document.filepath;
+    } else {
+      filePath = path.join(process.cwd(), 'backend', 'uploads', path.basename(document.filepath));
+    }
+    
+    console.log('Looking for file at:', filePath);
+
+    if (!fs.existsSync(filePath)) {
+      // Try alternative path
+      const altPath = path.join(process.cwd(), document.filepath);
+      console.log('Trying alternative path:', altPath);
+      
+      if (fs.existsSync(altPath)) {
+        res.setHeader('Content-Type', document.mimeType);
+        res.setHeader('Content-Disposition', `inline; filename="${document.filename}"`);
+        const fileStream = fs.createReadStream(altPath);
+        fileStream.pipe(res);
+        return;
+      }
+      
+      return res.status(404).json({ message: "File not found on server" });
+    }
+
+    // Set headers for inline viewing
+    res.setHeader('Content-Type', document.mimeType);
+    res.setHeader('Content-Disposition', `inline; filename="${document.filename}"`);
+    
+    // For PDFs, add additional headers for better browser support
+    if (document.mimeType === 'application/pdf') {
+      res.setHeader('Cache-Control', 'public, max-age=31536000');
+    }
+
+    const fileStream = fs.createReadStream(filePath);
+    fileStream.pipe(res);
+  } catch (error) {
+    console.error('View document error:', error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
 // Update faculty member
 export const updateFaculty = async (req, res) => {
   try {
