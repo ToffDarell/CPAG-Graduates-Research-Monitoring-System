@@ -26,7 +26,7 @@ const userSchema = new mongoose.Schema(
     role: {
       type: String,
       enum: [
-        "admin/dean",
+        "dean",
         "faculty adviser",
         "program head",
         "graduate student",
@@ -43,8 +43,8 @@ const userSchema = new mongoose.Schema(
       type: Boolean,
       
       default: function() {
-        // Admin/Dean and students are automatically active
-        return this.role === 'admin/dean' || this.role === 'graduate student';
+        // Dean and students are automatically active
+        return this.role === 'dean' || this.role === 'graduate student';
       },
     },
     studentId: {
