@@ -36,7 +36,7 @@ const documentSchema = new mongoose.Schema(
     accessibleTo: [
       {
         type: String,
-        enum: ["admin/dean", "program head", "faculty adviser", "graduate student"],
+        enum: ["dean", "program head", "faculty adviser", "graduate student"],
       },
     ],
     isActive: {
