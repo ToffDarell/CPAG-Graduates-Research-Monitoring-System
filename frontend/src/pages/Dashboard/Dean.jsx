@@ -101,7 +101,14 @@ const DeanDashboard = () => {
     setLoading(true);
     try {
       const token = localStorage.getItem('token');
-      const res = await axios.put(`/api/dean/faculty/${editingFaculty._id}`, editingFaculty, {
+
+      const updateData = {
+        name: editingFaculty.name,
+        email: editingFaculty.email,
+        role: editingFaculty.role
+      };
+
+      const res = await axios.put(`/api/dean/faculty/${editingFaculty._id}`, updateData, {
         headers: { Authorization: `Bearer ${token}` }
       });
       setShowEditFacultyModal(false);
@@ -109,11 +116,16 @@ const DeanDashboard = () => {
       fetchFaculty();
       alert('Faculty updated successfully!');
     } catch (error) {
-      alert(error.response?.data?.message || 'Error updating faculty');
+      console.error('Update faculty error:', error);
+      if (error.response?.data?.errors) {
+        alert('Validation errors:\n ' + error.response?.data?.errors.join('\n'));
+      } else {
+        alert(error.response?.data?.message || 'Error updating faculty');
+      } 
     } finally {
       setLoading(false);
     }
-  };
+  }
 
   const handleDeleteFaculty = async (id) => {
     if (!window.confirm('Are you sure you want to remove this faculty member?')) return;
@@ -386,7 +398,7 @@ const DeanDashboard = () => {
                     <input
                       type="email"
                       required
-                      value={newFaculty.email}
+                      value={editingFaculty ? editingFaculty.email : newFaculty.email}
                       onChange={(e) => setNewFaculty({...newFaculty, email: e.target.value})}
                       className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-[#7C1D23] transition-colors"
                       placeholder="faculty@buksu.edu.ph"
@@ -397,7 +409,7 @@ const DeanDashboard = () => {
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-2">Role</label>
                     <select
-                      value={newFaculty.role}
+                      value={editingFaculty ? editingFaculty.role : newFaculty.role}
                       onChange={(e) => setNewFaculty({...newFaculty, role: e.target.value})}
                       className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-[#7C1D23] transition-colors"
                     >
