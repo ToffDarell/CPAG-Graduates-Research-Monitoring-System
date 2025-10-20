@@ -14,11 +14,12 @@ export const protect = async (req, res, next) =>{
     if (req.headers.authorization && req.headers.authorization.startsWith("Bearer")) {
       try {
         token = req.headers.authorization.split(" ")[1];
-
+        console.log("JWT_SECRET exists:", !!process.env.JWT_SECRET);
         const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
         req.user = await User.findById(decoded.id).select("-password");
-
+        console.log("User found:", req.user ? "User exists" : "User not found");
+        console.log("User role:", req.user?.role);
         return next();
       } catch (error) {
         console.error("Token verification failed: ", error.message);
@@ -32,22 +33,33 @@ export const protect = async (req, res, next) =>{
   export const checkAuth = (roles = []) => {
     return (req, res, next) => {
       const user = req.user;
-    if (!user) return res.status(401).json({ message: "Unauthorized" });
+      if (!user) return res.status(401).json({ message: "Unauthorized" });
 
-    //Instituional email check
-    if (!user.email.endsWith("@buksu.edu.ph") && !user.email.endsWith("@student.buksu.edu.ph")) {
-      return res.status(403).json({ message: "Institutional email required" });
-    }
+      // Debug logging to see what's happening
+      console.log("User role:", user.role);
+      console.log("Allowed roles:", roles);
 
-    //Role Check
-    if (roles.length && !roles.includes(user.role)){
-          console.log(`Access denied: User role "${user.role}" not in allowed roles:`, roles);
-          return res.status(403).json({ message: `Access denied. User role: ${user.role}, Required: ${roles.join(', ')}` });
-    }
-    next();
+      // Role Check - simple case-insensitive comparison
+      const userRole = user.role;
+      
+      // If no roles specified, allow access
+      if (roles.length === 0) {
+        return next();
+      }
 
-  }
-}
+      // Check if user role matches any of the allowed roles (case-insensitive)
+      const hasAccess = roles.some(allowedRole => 
+        allowedRole.toLowerCase() === userRole.toLowerCase()
+      );
+
+      if (!hasAccess) {
+        console.log(`Access denied: User role "${userRole}" not in allowed roles:`, roles);
+        return res.status(403).json({ message: `Access denied. User role: ${userRole}, Required: ${roles.join(', ')}` });
+      }
+      
+      next();
+   }
+ }
 
 export const authorize = (roles = []) => {
   return checkAuth(roles); // Reuse existing checkAuth function

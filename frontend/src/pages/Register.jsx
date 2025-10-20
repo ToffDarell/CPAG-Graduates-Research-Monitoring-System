@@ -25,7 +25,7 @@ const Register = ({ setUser }) => {
   const siteKey = import.meta.env.VITE_RECAPTCHA_SITE_KEY;
 
   const roles = [
-    { value: "admin/dean", label: "Dean", icon: FaUserShield },
+    { value: "dean", label: "Dean", icon: FaUserShield },
     { value: "program head", label: "Program Head", icon: FaUserTie },
     { value: "faculty adviser", label: "Faculty Adviser", icon: FaChalkboardTeacher },
     { value: "graduate student", label: "Student", icon: FaUserGraduate }
@@ -109,7 +109,7 @@ const Register = ({ setUser }) => {
         }
         
         if (!isStudent && emailDomain !== "buksu.edu.ph") {
-          setError("Faculty/Admin must use @buksu.edu.ph email");
+          setError("Faculty/Dean must use @buksu.edu.ph email");
           setIsLoading(false);
           return;
         }

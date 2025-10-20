@@ -24,11 +24,11 @@ const app = express();
 
 app.use(express.json());
 
-//existing
+//Routes
 app.use("/api/users", authRoutes)
 
 
-//new
+//Routes
 app.use("/api/adviser", adviserRoutes);
 app.use("/api/programhead", programHeadRoutes);
 app.use("/api/student", studentRoutes);

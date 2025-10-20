@@ -6,7 +6,7 @@ const RoleSelection = () => {
   const navigate = useNavigate();
 
   const roles = [
-    { value: "admin/dean", label: "Dean", icon: FaUserShield },
+    { value: "dean", label: "Dean", icon: FaUserShield },
     { value: "program head", label: "Program Head", icon: FaUserTie },
     { value: "faculty adviser", label: "Faculty Adviser", icon: FaChalkboardTeacher },
     { value: "graduate student", label: "Student", icon: FaUserGraduate }

@@ -52,7 +52,7 @@ function App() {
   // Helper function to get dashboard path from role
   const getDashboardPath = (role) => {
     const roleMap = {
-      "admin/dean": "dean",
+      "dean": "dean",
       "faculty adviser": "faculty",
       "program head": "program-head",
       "graduate student": "graduate",
@@ -104,7 +104,7 @@ function App() {
         <Route
           path="/dashboard/dean"
           element={
-            user?.role === "admin/dean" ? (
+            user?.role === "dean" ? (
               <DeanDashboard />
             ) : (
               <Navigate to="/login" />

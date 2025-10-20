@@ -44,7 +44,7 @@ const transporter = nodemailer.createTransport({
 });
 
 // -------------------- AUTH PROTECTION --------------------
-router.use(protect, checkAuth(["admin/dean", "Admin/Dean"])); // Allow both case variations
+router.use(protect, checkAuth(["dean", "Dean"])); // Allow both case variations
 // ✅ Every route below requires Admin/Dean role
 
 // -------------------- MANAGE FACULTY ACCOUNTS --------------------
@@ -228,7 +228,7 @@ router.post("/documents", upload.single("file"), async (req, res) => {
       fileSize: req.file.size,
       mimeType: req.file.mimetype,
       uploadedBy: req.user.id,
-      accessibleTo: req.body.accessibleTo ? JSON.parse(req.body.accessibleTo) : ["admin/dean"],
+      accessibleTo: req.body.accessibleTo ? JSON.parse(req.body.accessibleTo) : ["dean"],
     });
 
     await document.save();

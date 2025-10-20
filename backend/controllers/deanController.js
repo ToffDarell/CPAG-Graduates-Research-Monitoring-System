@@ -433,12 +433,60 @@ export const viewDocument = async (req, res) => {
 // Update faculty member
 export const updateFaculty = async (req, res) => {
   try {
-    const updated = await User.findByIdAndUpdate(req.params.id, req.body, {
+    const { id } = req.params;
+    const updateData = { ...req.body };
+    
+    // Remove password from update if not provided (to avoid validation errors)
+    if (!updateData.password) {
+      delete updateData.password;
+    }
+    
+    // Check if email is being changed and if it already exists
+    if (updateData.email) {
+      const existingUser = await User.findOne({ 
+        email: updateData.email, 
+        _id: { $ne: id } 
+      });
+      
+      if (existingUser) {
+        return res.status(400).json({ 
+          message: "Email already exists for another user" 
+        });
+      }
+    }
+    
+    const updated = await User.findByIdAndUpdate(id, updateData, {
       new: true,
-    });
-    res.json({ message: "Faculty account updated", updated });
+      runValidators: true
+    }).select('-password');
+    
+    if (!updated) {
+      return res.status(404).json({ message: "Faculty member not found" });
+    }
+    
+    res.json({ message: "Faculty account updated successfully", updated });
   } catch (error) {
-    res.status(400).json({ message: error.message });
+    console.error('Update faculty error:', error);
+    
+    // Handle specific validation errors
+    if (error.name === 'ValidationError') {
+      const errors = Object.values(error.errors).map(err => err.message);
+      return res.status(400).json({ 
+        message: "Validation error", 
+        errors: errors 
+      });
+    }
+    
+    if (error.code === 11000) {
+      return res.status(400).json({ 
+        message: "Email already exists" 
+      });
+    }
+    
+    res.status(500).json({ 
+      message: "Error updating faculty", 
+      error: error.message 
+    });
   }
 };
 
