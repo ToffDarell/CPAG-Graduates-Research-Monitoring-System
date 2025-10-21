@@ -1,6 +1,7 @@
 import express from "express";
 import multer from "multer";
 import path from "path";
+import fs from "fs";
 import { protect, checkAuth } from "../middleware/auth.js";
 import {
   getFaculty,
@@ -34,14 +35,17 @@ import {
 
 const router = express.Router();
 
+// Create uploads directory if it doesn't exist
+const uploadsDir = path.join(process.cwd(), 'uploads');
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+  console.log('Created uploads directory:', uploadsDir);
+}
 // Configure multer for file uploads
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    // Use import instead of require for ES modules
-    import('path').then(path => {
-      const uploadPath = path.join(process.cwd(), 'backend', 'uploads');
+      const uploadPath = path.join(process.cwd(), 'uploads');
       cb(null, uploadPath);
-    });
   },
   filename: (req, file, cb) => {
     // Clean filename to avoid issues
