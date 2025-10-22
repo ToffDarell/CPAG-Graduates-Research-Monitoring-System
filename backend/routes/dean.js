@@ -16,6 +16,8 @@ import {
   viewDocument, 
   downloadDocument,
   deleteDocument,
+  archiveDocument,
+  restoreDocument,
   updateFaculty,
   inviteFaculty,
   createFaculty,
@@ -29,6 +31,7 @@ import {
   toggleFacultyActivation,
   addResearchRemarks,
   getResearchFeedback,
+  getArchivedDocuments,
     } from "../controllers/deanController.js";
 
 
@@ -110,8 +113,11 @@ router.put("/assign-panel/:id", assignPanel);
 // Document management
 router.post("/documents", upload.single("file"), uploadDocument);
 router.get("/documents", getDocuments);
-router.get("/documents/:id", viewDocument); // Add this line
+router.get("/documents/archived", getArchivedDocuments); 
+router.get("/documents/:id", viewDocument);
 router.get("/documents/:id/download", downloadDocument);
+router.put("/documents/:id/archive", archiveDocument);
+router.put("/documents/:id/restore", restoreDocument);
 router.delete("/documents/:id", deleteDocument);
 
 // Legacy upload route for backward compatibility
