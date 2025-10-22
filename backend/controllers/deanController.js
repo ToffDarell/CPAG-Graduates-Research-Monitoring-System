@@ -220,6 +220,45 @@ export const getPanelAssignments = async (req, res) => {
   }
 };
 
+// Get archived documents
+export const getArchivedDocuments = async (req, res) => {
+  try {
+    const Document = (await import("../models/Document.js")).default;
+    const documents = await Document.find({ isActive: false })
+      .populate("uploadedBy", "name")
+      .sort({ createdAt: -1 });
+    res.json(documents);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Restore archived document
+export const restoreDocument = async (req, res) => {
+  try {
+    const Document = (await import("../models/Document.js")).default;
+    const document = await Document.findById(req.params.id);
+    
+    if (!document) {
+      return res.status(404).json({ message: "Document not found" });
+    }
+
+    // Check if user is dean
+    if (req.user.role !== 'dean') {
+      return res.status(403).json({ message: "Only dean can restore documents" });
+    }
+
+    // Restore the document
+    document.isActive = true;
+    await document.save();
+
+    res.json({ message: "Document restored successfully", document });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+
 // Upload document
 export const uploadDocument = async (req, res) => {
   try {
@@ -260,8 +299,12 @@ export const uploadDocument = async (req, res) => {
     console.log('Document saved successfully:', document._id);
     res.json({ message: "Document uploaded successfully", document });
   } catch (error) {
-    console.error('Upload error:', error);
-    res.status(500).json({ message: error.message });
+    console.error('Document upload error:', error);
+    console.error('Error stack:', error.stack);
+    res.status(500).json({ 
+      message: error.message || 'Error uploading document',
+      details: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
   }
 };
 
@@ -352,6 +395,44 @@ export const deleteDocument = async (req, res) => {
     res.status(500).json({ message: error.message });
   }
 };
+
+// Archive document (soft delete)
+export const archiveDocument = async (req, res) => {
+  try {
+    console.log('Archive document request:', req.params.id);
+    console.log('User role:', req.user?.role);
+    console.log('User ID:', req.user?.id);
+    
+    const Document = (await import("../models/Document.js")).default;
+    const document = await Document.findById(req.params.id);
+    
+    if (!document) {
+      console.log('Document not found:', req.params.id);
+      return res.status(404).json({ message: "Document not found" });
+    }
+
+    console.log('Document found:', document._id);
+    console.log('Document uploadedBy:', document.uploadedBy);
+
+    // Check if user is the uploader or dean
+    if (document.uploadedBy.toString() !== req.user.id && req.user.role !== 'dean') {
+      console.log('Access denied - not uploader or dean');
+      return res.status(403).json({ message: "Access denied" });
+    }
+
+    // Archive the document by setting isActive to false
+    document.isActive = false;
+    await document.save();
+
+    console.log('Document archived successfully:', document._id);
+    res.json({ message: "Document archived successfully" });
+  } catch (error) {
+    console.error('Archive document error:', error);
+    console.error('Error stack:', error.stack);
+    res.status(500).json({ message: error.message });
+  }
+};
+
 
 // Get documents
 export const getDocuments = async (req, res) => {
