@@ -16,7 +16,7 @@ const RoleSelection = () => {
     // Store selected role in sessionStorage
     sessionStorage.setItem('selectedRole', roleValue);
     // Navigate to login page
-    navigate(`/login?role=${encodeURIComponent(roleValue)}`);
+    navigate(`/register?role=${encodeURIComponent(roleValue)}`);
   };
 
   return (
@@ -37,10 +37,10 @@ const RoleSelection = () => {
 
         <div className="text-center mb-8">
           <h1 className="text-4xl font-bold text-gray-800 mb-2">
-            Welcome to CPAG Masteral Research Archive and Monitoring System
+            Create Your Account
           </h1>
           <p className="text-gray-600 text-lg">
-            Please select your role to continue
+            Select your role to register
           </p>
         </div>
 
@@ -65,8 +65,17 @@ const RoleSelection = () => {
         </div>
 
         <div className="mt-8 text-center">
-          <p className="text-sm text-gray-500">
+          <p className="text-sm text-gray-500 mb-4">
             By continuing, you agree to use your buksu institutional email address
+          </p>
+          <p className="text-sm text-gray-600">
+            Already have an account?{" "}
+            <button
+              onClick={() => navigate("/login")}
+              className="text-blue-600 hover:text-blue-700 font-semibold"
+            >
+              Login here
+            </button>
           </p>
         </div>
       </div>
