@@ -220,12 +220,6 @@ if (!(await user.matchPassword(password))) {
     return res.status(401).json({ message: 'Invalid credentials' });
 }
 
-        // Check if trying to login with different role than registered
-        if (user.role !== 'dean' && user.role !== role) {
-            return res.status(403).json({ 
-                message: `This email is registered as ${user.role}. Please select the correct role.`
-            });
-        }
 
         const token = generateToken(user.id);
         res.status(200).json({
@@ -254,7 +248,7 @@ router.get('/me', protect, async (req, res) => {
 // ========== Google OAuth ==========
 router.post('/google', async (req, res) => {
     try {
-        const { credential, selectedRole } = req.body;  // Add selectedRole from frontend
+        const { credential, selectedRole } = req.body;  
         if (!credential) {
             return res.status(400).json({ message: 'Missing Google credential' });
         }
@@ -276,44 +270,67 @@ router.post('/google', async (req, res) => {
             return res.status(400).json({ message: 'Institutional emails only' });
         }
 
-        // Prevent faculty emails for student accounts and vice versa
+        // Rest of the authentication process
+        let user = await User.findOne({ email });
+
+        if (user) {
+            const token = generateToken(user.id);
+            return res.status(200).json({
+                id: user.id,
+                name: user.name,
+                email: user.email,
+                role: user.role,
+                token,
+            });
+        } 
+
+         // Require selectedRole for new signups
+         if (!selectedRole) {
+            return res.status(400).json({ 
+                message: 'Account not found. Please sign up by selecting a role first.' 
+            });
+        }
+
+        // Validate email domain matches selected role for new registrations
         if (isStudentEmail && !selectedRole.includes('student')) {
-            return res.status(400).json({ message: 'Student emails can only be used for graduate student accounts' });
+            return res.status(400).json({ 
+                message: 'Student emails can only be used for graduate student accounts' 
+            });
         }
 
         if (isFacultyEmail && selectedRole.includes('student')) {
-            return res.status(400).json({ message: 'Faculty/Dean emails cannot be used for student accounts' });
+            return res.status(400).json({ 
+                message: 'Faculty/Dean emails cannot be used for student accounts' 
+            });
         }
 
-        // Set role based on email domain and selection
-        const role = isStudentEmail ? 'graduate student' : selectedRole;
-
-        // Rest of the authentication process
-        let user = await User.findOne({ email });
-        if (!user) {
-            const userData = { 
-                name,
-                email,
-                password: `google-oauth-${Date.now()}`,
-                role,
-                isActive: true
-            };
-            user = await User.create(userData);
+          // Create new user with selected role
+          const role = isStudentEmail ? 'graduate student' : selectedRole;
+          const userData = { 
+              name,
+              email,
+              password: `google-oauth-${Date.now()}`,
+              role,
+              isActive: true
+          };
+          user = await User.create(userData);
+  
+          const token = generateToken(user.id);
+          return res.status(200).json({
+              id: user.id,
+              name: user.name,
+              email: user.email,
+              role: user.role,
+              token,
+          });
+        } catch (err) {
+            console.error('Google auth error:', err);
+            return res.status(401).json({ 
+                message: 'Google authentication failed', 
+                error: err.message 
+            });
         }
-
-        const token = generateToken(user.id);
-        return res.status(200).json({
-            id: user.id,
-            name: user.name,
-            email: user.email,
-            role: user.role,
-            token,
-        });
-    } catch (err) {
-        console.error('Google auth error:', err);
-        return res.status(401).json({ message: 'Google authentication failed', error: err.message });
-    }
-});
+    }); 
 
 // ========== JWT Token Generator ==========
 const generateToken = (id) => {
