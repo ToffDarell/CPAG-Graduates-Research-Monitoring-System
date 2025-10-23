@@ -187,7 +187,7 @@ const Register = ({ setUser }) => {
         {/* Back button - only show if not invitation */}
         {!isInvitation && (
           <Link 
-            to="/" 
+            to="/signup" 
             className="inline-flex items-center text-blue-600 hover:text-blue-700 mb-4 text-sm font-medium"
           >
             <FaArrowLeft className="mr-2" />
@@ -374,7 +374,7 @@ const Register = ({ setUser }) => {
           <p className="text-sm text-gray-600">
             Already have an account?{' '}
             <Link 
-              to={`/login?role=${encodeURIComponent(formData.role)}`}
+              to="/login"
               className="text-blue-600 hover:text-blue-700 font-semibold"
             >
               Log in here
