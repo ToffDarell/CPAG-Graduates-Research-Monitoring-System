@@ -10,7 +10,6 @@ const Login = ({ setUser }) => {
   const [formData, setFormData] = useState({
     email: "",
     password: "",
-    role: ""  // Added role to initial state
   });
   const [error, setError] = useState("");
   const [recaptchaToken, setRecaptchaToken] = useState("");
@@ -19,35 +18,11 @@ const Login = ({ setUser }) => {
   const navigate = useNavigate();
   const siteKey = import.meta.env.VITE_RECAPTCHA_SITE_KEY;
 
-  const roles = [
-    { value: "dean", label: "Dean", icon: FaUserShield },
-    { value: "program head", label: "Program Head", icon: FaUserTie },
-    { value: "faculty adviser", label: "Faculty Adviser", icon: FaChalkboardTeacher },
-    { value: "graduate student", label: "Student", icon: FaUserGraduate }
-  ];
-
-  // Get role from URL parameter or sessionStorage
-  useEffect(() => {
-    const roleFromUrl = searchParams.get('role');
-    const roleFromSession = sessionStorage.getItem('selectedRole');
-    const selectedRole = roleFromUrl || roleFromSession;
-    
-    if (selectedRole) {
-      setFormData(prev => ({ ...prev, role: selectedRole }));
-    } else {
-      // If no role is selected, redirect to role selection page
-      navigate('/');
-    }
-  }, [searchParams, navigate]);
-
+ 
   const handleChange = (e) => {
     setFormData({ ...formData, [e.target.name]: e.target.value });
   };
 
-  const handleRoleSelect = (roleValue) => {
-    setFormData({ ...formData, role: roleValue });
-    sessionStorage.setItem('selectedRole', roleValue);
-  };
 
   const getDashboardPath = (role) => {
     const roleMap = {
@@ -63,22 +38,10 @@ const Login = ({ setUser }) => {
     e.preventDefault();
     setIsLoading(true);
     try {
-      // Email domain validation based on role
-      const isStudent = formData.role === "graduate student";
-      const emailDomain = formData.email.split('@')[1];
-      
-      if (isStudent && emailDomain !== "student.buksu.edu.ph") {
-        setError("Graduate students must use @student.buksu.edu.ph email");
-        return;
-      }
-      
-      if (!isStudent && emailDomain !== "buksu.edu.ph") {
-        setError("Faculty/Dean must use @buksu.edu.ph email");
-        return;
-      }
 
       const res = await axios.post("/api/users/login", { 
-        ...formData, 
+        email: formData.email,
+        password: formData.password,
         recaptcha: recaptchaToken 
       });
       localStorage.setItem("token", res.data.token);
@@ -96,7 +59,7 @@ const Login = ({ setUser }) => {
     try {
       const res = await axios.post("/api/users/google", { 
         credential: credentialResponse.credential,
-        selectedRole: formData.role  // Pass the selected role
+        selectedRole: null
       });
       localStorage.setItem("token", res.data.token);
       setUser(res.data);
@@ -111,8 +74,7 @@ const Login = ({ setUser }) => {
     setError(error.error);
   };
 
-  // Get the selected role details for display
-  const selectedRoleDetails = roles.find(r => r.value === formData.role);
+
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100 p-4">
@@ -129,26 +91,6 @@ const Login = ({ setUser }) => {
             }}
           />
         </div>
-
-        {/* Back button */}
-        <Link 
-          to="/" 
-          className="inline-flex items-center text-blue-600 hover:text-blue-700 mb-4 text-sm font-medium"
-        >
-          <FaArrowLeft className="mr-2" />
-          Change Role
-        </Link>
-
-        {/* Display selected role */}
-        {selectedRoleDetails && (
-          <div className="mb-6 p-4 bg-blue-50 rounded-lg border border-blue-100">
-            <div className="flex items-center justify-center space-x-3">
-              <span className="text-lg font-semibold text-blue-700">
-                Logging in as {selectedRoleDetails.label}
-              </span>
-            </div>
-          </div>
-        )}
 
         <h2 className="text-3xl font-bold mb-8 text-center text-gray-800">
           Welcome Back
@@ -256,7 +198,7 @@ const Login = ({ setUser }) => {
           <p className="text-sm text-gray-600">
             Don't have an account?{' '}
             <Link 
-              to={`/register?role=${encodeURIComponent(formData.role)}`}
+              to="/signup"
               className="text-blue-600 hover:text-blue-700 font-semibold"
             >
               Sign up here
