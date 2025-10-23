@@ -213,7 +213,7 @@ const DeanDashboard = () => {
     { id: 'faculty', label: 'Faculty Management', icon: <FaUsers /> },
     { id: 'research', label: 'Research Records', icon: <FaFolder /> },
     { id: 'archive', label: 'Archive', icon: <FaArchive /> },
-    { id: 'monitoring', label: 'Monitoring', icon: <FaChartBar /> },
+    { id: 'monitoring', label: 'Monitoring & Evaluation', icon: <FaChartBar /> },
     { id: 'panels', label: 'Panel Assignment', icon: <FaUsersCog /> },
     { id: 'documents', label: 'Documents', icon: <FaFileAlt /> },
     { id: 'archived-documents', label: 'Archived Documents', icon: <FaArchive /> } 
