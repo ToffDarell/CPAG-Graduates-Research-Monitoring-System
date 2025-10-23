@@ -63,7 +63,7 @@ function App() {
   return (
     <Router>
       <Routes>
-        {/* Role Selection as Home Page */}
+        {/* Login as Home Page */}
         <Route
           path="/"
           element={
@@ -72,23 +72,37 @@ function App() {
                 to={`/dashboard/${getDashboardPath(user.role)}`}
               />
             ) : (
+              <Login setUser={setUser} />
+            )
+          }
+        />
+
+        {/* Role Selection for Signup */}
+        <Route
+          path="/signup"
+          element={
+            user ? (
+              <Navigate to={`/dashboard/${getDashboardPath(user.role)}`} />
+            ) : (
               <RoleSelection />
             )
           }
         />
 
-        {/* Home route (optional, can be removed if not needed) */}
-        <Route path="/home" element={<><Navbar user={user} setUser={setUser} /><Home user={user} error={error} /></>} />
+        {/* Keep login route as well (optional) */}
         <Route
           path="/login"
           element={
             user ? (
               <Navigate to={`/dashboard/${getDashboardPath(user.role)}`} />
             ) : (
-              <><Navbar user={user} setUser={setUser} /><Login setUser={setUser} /></>
+              <Login setUser={setUser} />
             )
           }
         />
+
+        {/* Home route (optional, can be removed if not needed) */}
+        <Route path="/home" element={<><Navbar user={user} setUser={setUser} /><Home user={user} error={error} /></>} />
         <Route
           path="/register"
           element={
