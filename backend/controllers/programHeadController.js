@@ -93,6 +93,25 @@ export const deleteSchedule = async (req, res) => {
   }
 };
 
+// Delete research title
+export const deleteResearchTitle = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const research = await Research.findById(id);
+    
+    if (!research) {
+      return res.status(404).json({ message: "Research not found" });
+    }
+
+    await Research.findByIdAndDelete(id);
+
+    res.json({ message: "Research title deleted successfully" });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
 // Get process monitoring data
 export const getProcessMonitoring = async (req, res) => {
   try {
