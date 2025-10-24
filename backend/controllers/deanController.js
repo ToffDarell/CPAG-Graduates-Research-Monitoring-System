@@ -132,21 +132,40 @@ export const getResearchRecords = async (req, res) => {
 };
 
 // Archive research project
+// Archive or Unarchive research project
 export const archiveResearch = async (req, res) => {
   try {
-    const research = await Research.findByIdAndUpdate(
-      req.params.id,
-      {
-        status: "archived",
-        archivedAt: new Date(),
-        archivedBy: req.user.id,
-      },
-      { new: true }
-    );
+    const research = await Research.findById(req.params.id);
+    
     if (!research) {
       return res.status(404).json({ message: "Research not found" });
     }
-    res.json({ message: "Research archived successfully", research });
+
+    // Toggle archive status
+    const newStatus = research.status === 'archived' ? 'approved' : 'archived';
+    const updateData = {
+      status: newStatus
+    };
+
+    if (newStatus === 'archived') {
+      updateData.archivedAt = new Date();
+      updateData.archivedBy = req.user.id;
+    } else {
+      // Unarchiving
+      updateData.archivedAt = null;
+      updateData.archivedBy = null;
+    }
+
+    const updatedResearch = await Research.findByIdAndUpdate(
+      req.params.id,
+      updateData,
+      { new: true }
+    );
+
+    res.json({ 
+      message: `Research ${newStatus === 'archived' ? 'archived' : 'unarchived'} successfully`, 
+      research: updatedResearch 
+    });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
