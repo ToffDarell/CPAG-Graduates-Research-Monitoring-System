@@ -23,6 +23,7 @@ import {
   createResearchTitle,
   getStudents,
   addStudentsToResearch,
+  deleteResearchTitle,
 } from "../controllers/programHeadController.js";
 
 const router = express.Router();
@@ -75,4 +76,7 @@ router.post("/research", createResearchTitle);
 router.get("/students", getStudents);
 router.post("/research/add-students", addStudentsToResearch);
 
-export default router;
+// Research title management
+router.delete("/research/:id", deleteResearchTitle);
+
+  export default router;
