@@ -576,6 +576,28 @@ const FacultyAdviserAssignment = () => {
     }
   };
 
+  const handleDeleteResearch = async (researchId) => {
+    if (!window.confirm('Are you sure you want to delete this research title? This action cannot be undone.')) {
+      return;
+    }
+    
+    setLoading(true);
+    try {
+      const token = localStorage.getItem('token');
+      await axios.delete(`/api/programhead/research/${researchId}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      
+      fetchResearchTitles();
+      alert('Research title deleted successfully!');
+    } catch (error) {
+      console.error('Error deleting research:', error);
+      alert('Error deleting research title: ' + (error.response?.data?.message || error.message));
+    } finally {
+      setLoading(false);
+    }
+  };
+
   // Update the select element in the form
   return (
     <div className="space-y-5">
@@ -728,6 +750,13 @@ const FacultyAdviserAssignment = () => {
                       Remove Adviser
                     </button>
                   )}
+                  <button 
+                    onClick={() => handleDeleteResearch(research._id)}
+                    disabled={loading}
+                    className="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 transition-colors text-sm font-medium disabled:opacity-50"
+                  >
+                    Delete
+                  </button>
                 </div>
               </div>
             </div>
