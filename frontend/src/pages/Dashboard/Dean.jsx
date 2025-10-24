@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { FaUsers, FaFolder, FaArchive, FaChartBar, FaUsersCog, FaFileAlt, FaPlus, FaSearch, FaEdit, FaTrash, FaTimes, FaSignOutAlt, FaBars, FaTimes as FaClose, FaDownload, FaEye, FaToggleOn, FaToggleOff,  } from 'react-icons/fa';
+import { FaUsers, FaFolder, FaArchive, FaChartBar, FaUsersCog, FaFileAlt, FaPlus, FaSearch, FaEdit, FaTrash, FaTimes, FaSignOutAlt, FaBars, FaTimes as FaClose, FaDownload, FaEye, FaToggleOn, FaToggleOff, FaExclamationTriangle  } from 'react-icons/fa';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 
@@ -690,8 +690,7 @@ const isOverdue = (research) => {
 };
 
 // Enhanced research card component
-const ResearchMonitoringCard = ({ research }) => {
-  const [showDetails, setShowDetails] = useState(false);
+const ResearchMonitoringCard = ({ research, onViewDetails }) => {
   const overdue = isOverdue(research);
   
   return (
@@ -712,7 +711,7 @@ const ResearchMonitoringCard = ({ research }) => {
           
           <div className="mt-2 space-y-1">
             <p className="text-xs text-gray-600">
-              <span className="font-medium">Faculty:</span> {research.adviser?.name || 'N/A'}
+              <span className="font-medium">Faculty Adviser:</span> {research.adviser?.name || 'N/A'}
             </p>
             <p className="text-xs text-gray-600">
               <span className="font-medium">Department:</span> {research.adviser?.department || 'N/A'}
@@ -740,7 +739,7 @@ const ResearchMonitoringCard = ({ research }) => {
         
         <div className="flex items-center gap-2">
           <button
-            onClick={() => setShowDetails(true)}
+            onClick={() => onViewDetails(research)}
             className="px-3 py-1 bg-[#7C1D23] text-white rounded-md hover:bg-[#5a1519] transition-colors text-xs font-medium"
           >
             View Details
@@ -957,54 +956,495 @@ const ResearchDetailsModal = ({ research, isOpen, onClose }) => {
   );
 };
 
-const ResearchRecords = ({ stats, research }) => (
-  <div className="space-y-5">
-    <h2 className="text-xl font-bold text-gray-800">Research Records</h2>
-    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-      <div className="bg-white p-5 rounded-lg border-l-4 border-[#7C1D23] shadow-sm">
-        <h3 className="text-sm font-semibold text-gray-600 uppercase">Total Research</h3>
-        <p className="text-3xl font-bold text-gray-800 mt-2">{stats.total || 0}</p>
-      </div>
-      <div className="bg-white p-5 rounded-lg border-l-4 border-[#1E3A8A] shadow-sm">
-        <h3 className="text-sm font-semibold text-gray-600 uppercase">Approved</h3>
-        <p className="text-3xl font-bold text-gray-800 mt-2">{stats.approved || 0}</p>
-      </div>
-      <div className="bg-white p-5 rounded-lg border-l-4 border-[#D4AF37] shadow-sm">
-        <h3 className="text-sm font-semibold text-gray-600 uppercase">Pending</h3>
-        <p className="text-3xl font-bold text-gray-800 mt-2">{stats.pending || 0}</p>
-      </div>
-    </div>
-    <div className="bg-white rounded-lg border border-gray-200 p-4 mt-4">
-      <h3 className="text-base font-semibold text-gray-800 mb-4">All Research Projects</h3>
-      {research.length === 0 ? (
-        <p className="text-gray-500 text-center text-sm py-8">No research projects yet.</p>
-      ) : (
-        <div className="space-y-3">
-          {research.map((item) => (
-            <div key={item._id} className="border border-gray-200 rounded-lg p-4">
-              <div className="flex justify-between items-start">
-                <div>
-                  <h4 className="text-sm font-semibold text-gray-800">{item.title}</h4>
-                  <p className="text-xs text-gray-600 mt-1">
-                    Student: {item.students?.[0]?.name || 'N/A'} • Adviser: {item.adviser?.name || 'N/A'}
-                  </p>
-                </div>
-                <span className={`px-3 py-1 rounded-full text-xs font-medium ${
-                  item.status === 'approved' ? 'bg-green-100 text-green-700' :
-                  item.status === 'pending' ? 'bg-yellow-100 text-yellow-700' :
-                  item.status === 'archived' ? 'bg-gray-100 text-gray-700' :
-                  'bg-blue-100 text-blue-700'
-                }`}>
-                  {item.status}
+const ResearchRecordDetailsModal = ({ research, isOpen, onClose, onDownload }) => {
+  const [feedback, setFeedback] = useState([]);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (isOpen && research) {
+      fetchResearchFeedback(research._id);
+    }
+  }, [isOpen, research]);
+
+  const fetchResearchFeedback = async (researchId) => {
+    try {
+      setLoading(true);
+      const token = localStorage.getItem('token');
+      const res = await axios.get(`/api/dean/research/${researchId}/feedback`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      setFeedback(res.data);
+    } catch (error) {
+      console.error('Error fetching feedback:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (!isOpen || !research) return null;
+
+  const getStatusColor = (status) => {
+    const colors = {
+      'approved': 'bg-green-100 text-green-700',
+      'pending': 'bg-yellow-100 text-yellow-700',
+      'under review': 'bg-blue-100 text-blue-700',
+      'rejected': 'bg-red-100 text-red-700',
+      'completed': 'bg-purple-100 text-purple-700',
+      'archived': 'bg-gray-100 text-gray-700'
+    };
+    return colors[status?.toLowerCase()] || 'bg-gray-100 text-gray-700';
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-lg shadow-xl max-w-4xl w-full max-h-[90vh] overflow-y-auto">
+        {/* Modal Header */}
+        <div className="bg-gradient-to-r from-[#7C1D23] to-[#5a1519] text-white p-6 rounded-t-lg sticky top-0 z-10">
+          <div className="flex justify-between items-start">
+            <div className="flex-1">
+              <h3 className="text-xl font-bold mb-2">{research.title}</h3>
+              <div className="flex items-center space-x-3">
+                <span className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-medium ${getStatusColor(research.status)} border`}>
+                  {research.status}
+                </span>
+                <span className="text-sm text-gray-200">
+                  Submitted: {new Date(research.createdAt).toLocaleDateString()}
                 </span>
               </div>
             </div>
-          ))}
+            <button 
+              onClick={onClose}
+              className="text-white hover:text-gray-200 transition-colors ml-4"
+            >
+              <FaTimes className="h-6 w-6" />
+            </button>
+          </div>
         </div>
+
+        {/* Modal Content */}
+        <div className="p-6 space-y-6">
+          {/* Research Information Grid */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {/* Left Column */}
+            <div className="space-y-4">
+              <div>
+                <h4 className="text-sm font-semibold text-gray-500 uppercase mb-2">Student Information</h4>
+                <div className="bg-gray-50 p-4 rounded-lg space-y-2">
+                  <p className="text-sm"><span className="font-medium">Name:</span> {research.students?.[0]?.name || 'N/A'}</p>
+                  <p className="text-sm"><span className="font-medium">Email:</span> {research.students?.[0]?.email || 'N/A'}</p>
+                  <p className="text-sm"><span className="font-medium">Department:</span> {research.students?.[0]?.department || 'N/A'}</p>
+                </div>
+              </div>
+
+              <div>
+                <h4 className="text-sm font-semibold text-gray-500 uppercase mb-2">Faculty Adviser</h4>
+                <div className="bg-gray-50 p-4 rounded-lg space-y-2">
+                  <p className="text-sm"><span className="font-medium">Name:</span> {research.adviser?.name || 'N/A'}</p>
+                  <p className="text-sm"><span className="font-medium">Email:</span> {research.adviser?.email || 'N/A'}</p>
+                  <p className="text-sm"><span className="font-medium">Department:</span> {research.adviser?.department || 'N/A'}</p>
+                </div>
+              </div>
+            </div>
+
+            {/* Right Column */}
+            <div className="space-y-4">
+              <div>
+                <h4 className="text-sm font-semibold text-gray-500 uppercase mb-2">Research Timeline</h4>
+                <div className="bg-gray-50 p-4 rounded-lg space-y-2">
+                  <p className="text-sm"><span className="font-medium">Submission Date:</span> {new Date(research.createdAt).toLocaleDateString()}</p>
+                  <p className="text-sm"><span className="font-medium">Last Updated:</span> {new Date(research.updatedAt).toLocaleDateString()}</p>
+                  <p className="text-sm"><span className="font-medium">Stage:</span> {research.stage || 'N/A'}</p>
+                  <p className="text-sm"><span className="font-medium">Progress:</span> {research.progress || 0}%</p>
+                </div>
+              </div>
+
+              {/* Panel Members */}
+              {research.panel && research.panel.length > 0 && (
+                <div>
+                  <h4 className="text-sm font-semibold text-gray-500 uppercase mb-2">Panel Members</h4>
+                  <div className="bg-gray-50 p-4 rounded-lg space-y-2">
+                    {research.panel.map((member, index) => (
+                      <p key={index} className="text-sm">• {member.name || 'N/A'}</p>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Abstract/Summary */}
+          {research.abstract && (
+            <div>
+              <h4 className="text-sm font-semibold text-gray-500 uppercase mb-2">Research Abstract</h4>
+              <div className="bg-gray-50 p-4 rounded-lg">
+                <p className="text-sm text-gray-700 leading-relaxed">{research.abstract}</p>
+              </div>
+            </div>
+          )}
+
+          {/* Uploaded Documents */}
+          <div>
+            <h4 className="text-sm font-semibold text-gray-500 uppercase mb-2">Uploaded Documents</h4>
+            <div className="bg-gray-50 rounded-lg overflow-hidden">
+              {research.forms && research.forms.length > 0 ? (
+                <div className="divide-y divide-gray-200">
+                  {research.forms.map((form, index) => (
+                    <div key={index} className="p-4 flex items-center justify-between hover:bg-gray-100 transition-colors">
+                      <div className="flex items-center space-x-3">
+                        <FaFileAlt className="h-5 w-5 text-[#7C1D23]" />
+                        <div>
+                          <p className="text-sm font-medium text-gray-900">{form.filename || `Document ${index + 1}`}</p>
+                          <p className="text-xs text-gray-500">
+                            {form.type || 'Document'} • Uploaded {new Date(form.uploadedAt).toLocaleDateString()}
+                          </p>
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => onDownload(research._id, form._id)}
+                        className="flex items-center space-x-2 px-3 py-1.5 bg-[#7C1D23] text-white rounded-md hover:bg-[#5a1519] transition-colors text-sm"
+                      >
+                        <FaDownload className="h-3 w-3" />
+                        <span>Download</span>
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="p-8 text-center text-gray-500 text-sm">
+                  No documents uploaded yet.
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Comments/Feedback History */}
+          <div>
+            <h4 className="text-sm font-semibold text-gray-500 uppercase mb-2">Comments & Feedback History</h4>
+            <div className="bg-gray-50 rounded-lg max-h-60 overflow-y-auto">
+              {loading ? (
+                <div className="p-8 text-center">
+                  <div className="inline-block animate-spin rounded-full h-6 w-6 border-b-2 border-[#7C1D23]"></div>
+                  <p className="mt-2 text-sm text-gray-500">Loading feedback...</p>
+                </div>
+              ) : feedback && feedback.length > 0 ? (
+                <div className="divide-y divide-gray-200">
+                  {feedback.map((item, index) => (
+                    <div key={index} className="p-4">
+                      <div className="flex justify-between items-start mb-2">
+                        <div className="flex items-center space-x-2">
+                          <span className="text-sm font-medium text-gray-900">
+                            {item.adviser?.name || 'Dean'}
+                          </span>
+                          <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${getStatusColor(item.type)}`}>
+                            {item.type}
+                          </span>
+                        </div>
+                        <span className="text-xs text-gray-500">
+                          {new Date(item.createdAt).toLocaleDateString()}
+                        </span>
+                      </div>
+                      <p className="text-sm text-gray-700">{item.message}</p>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="p-8 text-center text-gray-500 text-sm">
+                  No feedback or comments yet.
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Modal Footer */}
+        <div className="bg-gray-50 px-6 py-4 rounded-b-lg flex justify-end space-x-3 border-t border-gray-200">
+          <button
+            onClick={onClose}
+            className="px-4 py-2 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300 transition-colors font-medium"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const ResearchRecords = ({ stats, research }) => {
+  const [searchQuery, setSearchQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [academicYearFilter, setAcademicYearFilter] = useState('all');
+  const [filteredResearch, setFilteredResearch] = useState(research);
+  const [selectedResearch, setSelectedResearch] = useState(null);
+  const [showDetailsModal, setShowDetailsModal] = useState(false);
+
+  // Filter research based on search and filters
+  useEffect(() => {
+    let filtered = research;
+    
+    // Search filter
+    if (searchQuery) {
+      filtered = filtered.filter(item => 
+        item.title?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        item.adviser?.name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        item.students?.some(student => 
+          student.name?.toLowerCase().includes(searchQuery.toLowerCase())
+        ) ||
+        item.adviser?.department?.toLowerCase().includes(searchQuery.toLowerCase())
+      );
+    }
+    
+    // Status filter
+    if (statusFilter !== 'all') {
+      filtered = filtered.filter(item => item.status === statusFilter);
+    }
+    
+    // Academic year filter
+    if (academicYearFilter !== 'all') {
+      filtered = filtered.filter(item => {
+        const year = new Date(item.createdAt).getFullYear();
+        return year.toString() === academicYearFilter;
+      });
+    }
+    
+    setFilteredResearch(filtered);
+  }, [research, searchQuery, statusFilter, academicYearFilter]);
+
+  const handleViewDetails = (researchItem) => {
+    setSelectedResearch(researchItem);
+    setShowDetailsModal(true);
+  };
+
+  const handleArchiveResearch = async (id, currentStatus) => {
+    const action = currentStatus === 'archived' ? 'unarchive' : 'archive';
+    if (!window.confirm(`Are you sure you want to ${action} this research?`)) return;
+    
+    try {
+      const token = localStorage.getItem('token');
+      await axios.put(`/api/dean/archive/${id}`, {}, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      
+      // Refresh the research list
+      window.location.reload(); // Or better: call a parent refresh function
+      alert(`Research ${action}d successfully!`);
+    } catch (error) {
+      console.error(`Error ${action}ing research:`, error);
+      alert(`Error ${action}ing research`);
+    }
+  };
+
+  const handleDownloadDocument = async (researchId, documentId) => {
+    try {
+      const token = localStorage.getItem('token');
+      const response = await axios.get(`/api/dean/research/${researchId}/download/${documentId}`, {
+        headers: { Authorization: `Bearer ${token}` },
+        responseType: 'blob'
+      });
+      
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', `research_document_${documentId}.pdf`);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error('Error downloading document:', error);
+      alert('Error downloading document');
+    }
+  };
+
+  // Get unique academic years from research data
+  const academicYears = [...new Set(research.map(r => new Date(r.createdAt).getFullYear()))].sort((a, b) => b - a);
+
+  const getStatusColor = (status) => {
+    const colors = {
+      'approved': 'bg-green-100 text-green-700 border-green-300',
+      'pending': 'bg-yellow-100 text-yellow-700 border-yellow-300',
+      'under review': 'bg-blue-100 text-blue-700 border-blue-300',
+      'rejected': 'bg-red-100 text-red-700 border-red-300',
+      'completed': 'bg-purple-100 text-purple-700 border-purple-300',
+      'archived': 'bg-gray-100 text-gray-700 border-gray-300'
+    };
+    return colors[status?.toLowerCase()] || 'bg-gray-100 text-gray-700 border-gray-300';
+  };
+
+  return (
+    <div className="space-y-5">
+      <div className="flex justify-between items-center">
+        <h2 className="text-xl font-bold text-gray-800">Research Records</h2>
+        <span className="text-sm text-gray-600">{filteredResearch.length} record(s) found</span>
+      </div>
+
+      {/* Statistics Cards */}
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div className="bg-white p-5 rounded-lg border-l-4 border-[#7C1D23] shadow-sm">
+          <h3 className="text-sm font-semibold text-gray-600 uppercase">Total Research</h3>
+          <p className="text-3xl font-bold text-gray-800 mt-2">{stats.total || 0}</p>
+        </div>
+        <div className="bg-white p-5 rounded-lg border-l-4 border-green-500 shadow-sm">
+          <h3 className="text-sm font-semibold text-gray-600 uppercase">Approved</h3>
+          <p className="text-3xl font-bold text-gray-800 mt-2">{stats.approved || 0}</p>
+        </div>
+        <div className="bg-white p-5 rounded-lg border-l-4 border-yellow-500 shadow-sm">
+          <h3 className="text-sm font-semibold text-gray-600 uppercase">Pending</h3>
+          <p className="text-3xl font-bold text-gray-800 mt-2">{stats.pending || 0}</p>
+        </div>
+        <div className="bg-white p-5 rounded-lg border-l-4 border-gray-500 shadow-sm">
+          <h3 className="text-sm font-semibold text-gray-600 uppercase">Archived</h3>
+          <p className="text-3xl font-bold text-gray-800 mt-2">{stats.archived || 0}</p>
+        </div>
+      </div>
+
+      {/* Search and Filters */}
+      <div className="bg-white rounded-lg border border-gray-200 p-4">
+        <div className="flex flex-col md:flex-row gap-4">
+          {/* Search Input */}
+          <div className="flex-1">
+            <div className="relative">
+              <FaSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search by title, faculty name, or department..."
+                className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-[#7C1D23] text-sm"
+              />
+            </div>
+          </div>
+          
+          {/* Status Filter */}
+          <div className="md:w-48">
+            <select
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-[#7C1D23] text-sm"
+            >
+              <option value="all">All Status</option>
+              <option value="pending">Pending</option>
+              <option value="approved">Approved</option>
+              <option value="under review">Under Review</option>
+              <option value="rejected">Rejected</option>
+              <option value="completed">Completed</option>
+              <option value="archived">Archived</option>
+            </select>
+          </div>
+          
+          {/* Academic Year Filter */}
+          <div className="md:w-48">
+            <select
+              value={academicYearFilter}
+              onChange={(e) => setAcademicYearFilter(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-[#7C1D23] text-sm"
+            >
+              <option value="all">All Years</option>
+              {academicYears.map(year => (
+                <option key={year} value={year}>{year}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+      </div>
+
+      {/* Research Records Table/List */}
+      <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+        {filteredResearch.length === 0 ? (
+          <div className="p-8 text-center">
+            <FaFolder className="mx-auto h-12 w-12 text-gray-400" />
+            <p className="mt-2 text-gray-500">No research records available.</p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-gray-200">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Research Title
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Author/Faculty
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Department
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Submission Date
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Status
+                  </th>
+                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Actions
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="bg-white divide-y divide-gray-200">
+                {filteredResearch.map((item) => (
+                  <tr key={item._id} className="hover:bg-gray-50 transition-colors">
+                    <td className="px-6 py-4">
+                      <div className="text-sm font-medium text-gray-900">{item.title}</div>
+                      <div className="text-xs text-gray-500">
+                        Student: {item.students?.[0]?.name || 'N/A'}
+                      </div>
+                    </td>
+                    <td className="px-6 py-4">
+                      <div className="text-sm text-gray-900">{item.adviser?.name || 'N/A'}</div>
+                      <div className="text-xs text-gray-500">{item.adviser?.email || ''}</div>
+                    </td>
+                    <td className="px-6 py-4">
+                      <div className="text-sm text-gray-900">{item.adviser?.department || 'N/A'}</div>
+                    </td>
+                    <td className="px-6 py-4 text-sm text-gray-500">
+                      {new Date(item.createdAt).toLocaleDateString()}
+                    </td>
+                    <td className="px-6 py-4">
+                      <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium border ${getStatusColor(item.status)}`}>
+                        {item.status}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4 text-right text-sm font-medium">
+                      <div className="flex items-center justify-end space-x-2">
+                        <button
+                          onClick={() => handleViewDetails(item)}
+                          className="text-[#7C1D23] hover:text-[#5a1519] transition-colors"
+                          title="View Details"
+                        >
+                          <FaEye className="h-4 w-4" />
+                        </button>
+                        <button
+                          onClick={() => handleArchiveResearch(item._id, item.status)}
+                          className={`${item.status === 'archived' ? 'text-green-600 hover:text-green-800' : 'text-gray-600 hover:text-gray-800'} transition-colors`}
+                          title={item.status === 'archived' ? 'Unarchive' : 'Archive'}
+                        >
+                          <FaArchive className="h-4 w-4" />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* Research Details Modal */}
+      {showDetailsModal && selectedResearch && (
+        <ResearchRecordDetailsModal
+          research={selectedResearch}
+          isOpen={showDetailsModal}
+          onClose={() => {
+            setShowDetailsModal(false);
+            setSelectedResearch(null);
+          }}
+          onDownload={handleDownloadDocument}
+        />
       )}
     </div>
-  </div>
-);
+  );
+};
 
 const ArchiveProjects = ({ research }) => (
   <div className="space-y-5">
@@ -1031,42 +1471,14 @@ const ArchiveProjects = ({ research }) => (
   </div>
 );
 
-// Backend enhancement for overdue detection
-export const getMonitoringData = async (req, res) => {
-  try {
-    const research = await Research.find()
-      .populate("students", "name email department")
-      .populate("adviser", "name email department")
-      .sort({ updatedAt: -1 });
-
-    // Add overdue detection
-    const researchWithOverdue = research.map(item => {
-      const now = new Date();
-      const expectedCompletion = new Date(item.createdAt);
-      expectedCompletion.setFullYear(expectedCompletion.getFullYear() + 2); // 2-year timeline
-      
-      const isOverdue = item.status !== 'completed' && now > expectedCompletion;
-      
-      return {
-        ...item.toObject(),
-        isOverdue,
-        daysOverdue: isOverdue ? Math.floor((now - expectedCompletion) / (1000 * 60 * 60 * 24)) : 0
-      };
-    });
-
-    res.json({ research: researchWithOverdue, feedback });
-  } catch (error) {
-    res.status(500).json({ message: "Error fetching monitoring data" });
-  }
-};
-
-
 
 const MonitoringEvaluation = ({ research }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [departmentFilter, setDepartmentFilter] = useState('all');
   const [filteredResearch, setFilteredResearch] = useState(research);
+  const [selectedResearch, setSelectedResearch] = useState(null);
+  const [showDetailsModal, setShowDetailsModal] = useState(false);
 
   useEffect(() => {
     let filtered = research;
@@ -1097,6 +1509,12 @@ const MonitoringEvaluation = ({ research }) => {
     
     setFilteredResearch(filtered);
   }, [research, searchQuery, statusFilter, departmentFilter]);
+
+
+  const handleViewDetails = (researchItem) => {
+    setSelectedResearch(researchItem);
+    setShowDetailsModal(true);
+  };
 
   return (
     <div className="space-y-5">
@@ -1163,6 +1581,19 @@ const MonitoringEvaluation = ({ research }) => {
           </div>
         )}
       </div>
+
+        {/* Details Modal */}
+      {showDetailsModal && selectedResearch && (
+        <ResearchDetailsModal
+          research={selectedResearch}
+          isOpen={showDetailsModal}
+          onClose={() => {
+            setShowDetailsModal(false);
+            setSelectedResearch(null);
+          }}
+        />
+      )}
+      
     </div>
   );
 };
