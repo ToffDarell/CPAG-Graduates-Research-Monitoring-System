@@ -131,7 +131,6 @@ export const getResearchRecords = async (req, res) => {
   }
 };
 
-// Archive research project
 // Archive or Unarchive research project
 export const archiveResearch = async (req, res) => {
   try {
@@ -172,7 +171,6 @@ export const archiveResearch = async (req, res) => {
 };
 
 // Get monitoring and evaluation data
-
 export const getMonitoringData = async (req, res) => {
   try {
     const { search, status, department } = req.query;
@@ -540,17 +538,30 @@ export const updateFaculty = async (req, res) => {
     if (!updateData.password) {
       delete updateData.password;
     }
-    
-    // Check if email is being changed and if it already exists
-    if (updateData.email) {
+
+    if (updateData.name) {
       const existingUser = await User.findOne({ 
-        email: updateData.email, 
+        name: { $regex: new RegExp(`^${updateData.name}$`, 'i') },
         _id: { $ne: id } 
       });
       
       if (existingUser) {
         return res.status(400).json({ 
-          message: "Email already exists for another user" 
+          message: "A faculty member with this name already exists. Please use a different name." 
+        });
+      }
+    }
+    
+    // Check if email is being changed and if it already exists
+    if (updateData.email) {
+      const existingUser = await User.findOne({ 
+        email: { $regex: new RegExp(`^${updateData.email}$`, 'i') },
+        _id: { $ne: id } 
+      });
+      
+      if (existingUser) {
+        return res.status(400).json({ 
+          message: "A faculty member with this email already exists. Please use a different email." 
         });
       }
     }
@@ -578,8 +589,10 @@ export const updateFaculty = async (req, res) => {
     }
     
     if (error.code === 11000) {
+      const field = Object.keys(error.keyPattern)[0];
+      const fieldName = field === 'email' ? 'email' : 'name'; // Determine which field caused the conflict
       return res.status(400).json({ 
-        message: "Email already exists" 
+        message: `A faculty member with this ${fieldName} already exists. Please use a different ${fieldName}.` 
       });
     }
     
