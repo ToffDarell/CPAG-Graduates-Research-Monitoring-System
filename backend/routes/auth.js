@@ -127,6 +127,16 @@ router.post('/register', async (req, res) => {
             return res.status(400).json({ message: 'All fields (name, email, password, role) are required' });
         }
 
+
+           // Restrict direct registration to only students and deans
+           const allowedRoles = ['graduate student', 'dean'];
+           if (!allowedRoles.includes(role)) {
+               return res.status(403).json({ 
+                   message: 'Direct registration is only allowed for Students and Deans. Faculty and Program Heads must register through invitation links sent by the Dean.' 
+               });
+           }
+   
+
         // institutional email check
         if (!email.endsWith('@buksu.edu.ph') && !email.endsWith('@student.buksu.edu.ph')) {
             return res.status(400).json({ message: 'Institutional emails only' });
@@ -135,8 +145,13 @@ router.post('/register', async (req, res) => {
         // Check if email exists
         const existingUser = await User.findOne({ email });
         if (existingUser) {
-            return res.status(400).json({ message: 'Email already registered' });
-        }
+            if (!existingUser.isActive) {
+                return res.status(401).json({ 
+                    message: 'Please activate your account by completing the setting up the password. Contact the Dean for assistance.' 
+                });
+            }
+            return res.status(400).json({ message: 'Account is not active. Please contact the Dean for assistance.' });
+        } 
 
         // Validate email domain based on role
         const emailDomain = email.split('@')[1];
@@ -161,7 +176,9 @@ router.post('/register', async (req, res) => {
                     studentId: studentId,
                     isActive: true  // Students are automatically active
                 }
-                : {}
+                : {
+                    isActive: true  // Deans are automatically active
+                }
             )
         };
 
