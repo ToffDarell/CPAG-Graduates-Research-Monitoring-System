@@ -212,7 +212,7 @@ const DeanDashboard = () => {
   const tabs = [
     { id: 'faculty', label: 'Faculty Management', icon: <FaUsers /> },
     { id: 'research', label: 'Research Records', icon: <FaFolder /> },
-    { id: 'archive', label: 'Archive', icon: <FaArchive /> },
+    { id: 'archive', label: 'Archived Projects', icon: <FaArchive /> },
     { id: 'monitoring', label: 'Monitoring & Evaluation', icon: <FaChartBar /> },
     { id: 'panels', label: 'Panel Assignment', icon: <FaUsersCog /> },
     { id: 'documents', label: 'Documents', icon: <FaFileAlt /> },
@@ -232,9 +232,22 @@ const DeanDashboard = () => {
           onToggleStatus={handleToggleFacultyStatus} 
         />;
       case 'research':
-        return <ResearchRecords stats={researchStats} research={researchList} />;
+        return <ResearchRecords 
+          stats={researchStats} 
+          research={researchList}
+          onRefresh={() => {
+            fetchResearch();
+            fetchAnalytics();
+          }}
+        />;
       case 'archive':
-        return <ArchiveProjects research={researchList.filter(r => r.status === 'archived')} />;
+        return <ArchiveProjects 
+          research={researchList.filter(r => r.status === 'archived')}
+          onRefresh={() => {
+            fetchResearch();
+            fetchAnalytics();
+          }}
+        />;
       case 'monitoring':
         return <MonitoringEvaluation research={researchList} />;
       case 'panels':
@@ -1170,7 +1183,7 @@ const ResearchRecordDetailsModal = ({ research, isOpen, onClose, onDownload }) =
   );
 };
 
-const ResearchRecords = ({ stats, research }) => {
+const ResearchRecords = ({ stats, research, onRefresh }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [academicYearFilter, setAcademicYearFilter] = useState('all');
@@ -1180,7 +1193,7 @@ const ResearchRecords = ({ stats, research }) => {
 
   // Filter research based on search and filters
   useEffect(() => {
-    let filtered = research;
+    let filtered = research.filter(item => item.status !== 'archived');
     
     // Search filter
     if (searchQuery) {
@@ -1226,7 +1239,7 @@ const ResearchRecords = ({ stats, research }) => {
       });
       
       // Refresh the research list
-      window.location.reload(); // Or better: call a parent refresh function
+      if (onRefresh) onRefresh();
       alert(`Research ${action}d successfully!`);
     } catch (error) {
       console.error(`Error ${action}ing research:`, error);
@@ -1446,31 +1459,182 @@ const ResearchRecords = ({ stats, research }) => {
   );
 };
 
-const ArchiveProjects = ({ research }) => (
-  <div className="space-y-5">
-    <h2 className="text-xl font-bold text-gray-800">Archived Projects</h2>
-    <div className="bg-white rounded-lg border border-gray-200 p-4">
-      {research.length === 0 ? (
-        <p className="text-gray-500 text-center text-sm py-8">No archived projects yet.</p>
-      ) : (
-        <div className="space-y-3">
-          {research.map((item) => (
-            <div key={item._id} className="border border-gray-200 rounded-lg p-4 bg-gray-50">
-              <h4 className="text-sm font-semibold text-gray-800">{item.title}</h4>
-              <p className="text-xs text-gray-600 mt-1">
-                Student: {item.students?.[0]?.name || 'N/A'}
-              </p>
-              <p className="text-xs text-gray-500 mt-1">
-                Archived: {new Date(item.updatedAt).toLocaleDateString()}
-              </p>
-            </div>
-          ))}
+const ArchiveProjects = ({ research, onRefresh }) => {
+  const [searchQuery, setSearchQuery] = useState('');
+  const [filteredResearch, setFilteredResearch] = useState(research);
+  const [selectedResearch, setSelectedResearch] = useState(null);
+  const [showDetailsModal, setShowDetailsModal] = useState(false);
+
+  useEffect(() => {
+    let filtered = research;
+    
+    if (searchQuery) {
+      filtered = filtered.filter(item => 
+        item.title?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        item.adviser?.name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        item.students?.some(student => 
+          student.name?.toLowerCase().includes(searchQuery.toLowerCase())
+        )
+      );
+    }
+    
+    setFilteredResearch(filtered);
+  }, [research, searchQuery]);
+
+  const handleUnarchive = async (id) => {
+    if (!window.confirm('Are you sure you want to unarchive this research?')) return;
+    
+    try {
+      const token = localStorage.getItem('token');
+      await axios.put(`/api/dean/archive/${id}`, {}, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      
+      if (onRefresh) onRefresh();
+      alert('Research unarchived successfully!');
+    } catch (error) {
+      console.error('Error unarchiving research:', error);
+      alert('Error unarchiving research');
+    }
+  };
+
+  const handleViewDetails = (researchItem) => {
+    setSelectedResearch(researchItem);
+    setShowDetailsModal(true);
+  };
+
+  const handleDownloadDocument = async (researchId, documentId) => {
+    try {
+      const token = localStorage.getItem('token');
+      const response = await axios.get(`/api/dean/research/${researchId}/download/${documentId}`, {
+        headers: { Authorization: `Bearer ${token}` },
+        responseType: 'blob'
+      });
+      
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', `research_document_${documentId}.pdf`);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error('Error downloading document:', error);
+      alert('Error downloading document');
+    }
+  };
+
+  return (
+    <div className="space-y-5">
+      <div className="flex justify-between items-center">
+        <h2 className="text-xl font-bold text-gray-800">Archived Projects</h2>
+        <span className="text-sm text-gray-600">{filteredResearch.length} archived project(s)</span>
+      </div>
+
+      {/* Search Bar */}
+      <div className="bg-white rounded-lg border border-gray-200 p-4">
+        <div className="relative">
+          <FaSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search archived projects..."
+            className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-[#7C1D23] text-sm"
+          />
         </div>
+      </div>
+
+      {/* Archived Projects Table */}
+      <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+        {filteredResearch.length === 0 ? (
+          <div className="p-8 text-center">
+            <FaArchive className="mx-auto h-12 w-12 text-gray-400" />
+            <p className="mt-2 text-gray-500">No archived projects yet.</p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-gray-200">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Research Title
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Author/Faculty
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Department
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Archived Date
+                  </th>
+                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Actions
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="bg-white divide-y divide-gray-200">
+                {filteredResearch.map((item) => (
+                  <tr key={item._id} className="hover:bg-gray-50 transition-colors">
+                    <td className="px-6 py-4">
+                      <div className="text-sm font-medium text-gray-900">{item.title}</div>
+                      <div className="text-xs text-gray-500">
+                        Student: {item.students?.[0]?.name || 'N/A'}
+                      </div>
+                    </td>
+                    <td className="px-6 py-4">
+                      <div className="text-sm text-gray-900">{item.adviser?.name || 'N/A'}</div>
+                      <div className="text-xs text-gray-500">{item.adviser?.email || ''}</div>
+                    </td>
+                    <td className="px-6 py-4">
+                      <div className="text-sm text-gray-900">{item.adviser?.department || 'N/A'}</div>
+                    </td>
+                    <td className="px-6 py-4 text-sm text-gray-500">
+                      {item.archivedAt ? new Date(item.archivedAt).toLocaleDateString() : new Date(item.updatedAt).toLocaleDateString()}
+                    </td>
+                    <td className="px-6 py-4 text-right text-sm font-medium">
+                      <div className="flex items-center justify-end space-x-2">
+                        <button
+                          onClick={() => handleViewDetails(item)}
+                          className="text-[#7C1D23] hover:text-[#5a1519] transition-colors"
+                          title="View Details"
+                        >
+                          <FaEye className="h-4 w-4" />
+                        </button>
+                        <button
+                          onClick={() => handleUnarchive(item._id)}
+                          className="text-green-600 hover:text-green-800 transition-colors"
+                          title="Unarchive"
+                        >
+                          <FaArchive className="h-4 w-4" />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* Research Details Modal */}
+      {showDetailsModal && selectedResearch && (
+        <ResearchRecordDetailsModal
+          research={selectedResearch}
+          isOpen={showDetailsModal}
+          onClose={() => {
+            setShowDetailsModal(false);
+            setSelectedResearch(null);
+          }}
+          onDownload={handleDownloadDocument}
+        />
       )}
     </div>
-  </div>
-);
-
+  );
+};
 
 const MonitoringEvaluation = ({ research }) => {
   const [searchQuery, setSearchQuery] = useState('');
