@@ -3,7 +3,7 @@ import React, { useState, useEffect } from "react";
 import { useNavigate, useSearchParams, Link } from "react-router-dom";
 import { GoogleLogin } from '@react-oauth/google';
 import ReCAPTCHA from 'react-google-recaptcha';
-import { FaEye, FaEyeSlash, FaUserTie, FaUserGraduate, FaChalkboardTeacher, FaUserShield, FaArrowLeft } from 'react-icons/fa';
+import { FaEye, FaEyeSlash, FaUserGraduate, FaUserShield, FaArrowLeft } from 'react-icons/fa';
 
 const Register = ({ setUser }) => {
   const [searchParams] = useSearchParams();
@@ -26,8 +26,6 @@ const Register = ({ setUser }) => {
 
   const roles = [
     { value: "dean", label: "Dean", icon: FaUserShield },
-    { value: "program head", label: "Program Head", icon: FaUserTie },
-    { value: "faculty adviser", label: "Faculty Adviser", icon: FaChalkboardTeacher },
     { value: "graduate student", label: "Student", icon: FaUserGraduate }
   ];
 
