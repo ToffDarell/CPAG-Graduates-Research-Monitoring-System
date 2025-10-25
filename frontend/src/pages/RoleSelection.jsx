@@ -1,14 +1,12 @@
 import React from "react";
 import { useNavigate } from "react-router-dom";
-import { FaUserTie, FaUserGraduate, FaChalkboardTeacher, FaUserShield } from 'react-icons/fa';
+import { FaUserGraduate, FaUserShield } from 'react-icons/fa';
 
 const RoleSelection = () => {
   const navigate = useNavigate();
 
   const roles = [
     { value: "dean", label: "Dean", icon: FaUserShield },
-    { value: "program head", label: "Program Head", icon: FaUserTie },
-    { value: "faculty adviser", label: "Faculty Adviser", icon: FaChalkboardTeacher },
     { value: "graduate student", label: "Student", icon: FaUserGraduate }
   ];
 
@@ -44,7 +42,7 @@ const RoleSelection = () => {
           </p>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-2xl mx-auto">
           {roles.map((role) => {
             const Icon = role.icon;
             return (
@@ -76,6 +74,9 @@ const RoleSelection = () => {
             >
               Login here
             </button>
+          </p>
+          <p className="text-xs text-gray-500 mt-4 p-3 bg-blue-50 rounded-lg">
+            <strong>Note:</strong> Faculty Advisers and Program Heads can only register through invitation links sent by the Dean.
           </p>
         </div>
       </div>
