@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { FaUsers, FaFolder, FaArchive, FaChartBar, FaUsersCog, FaFileAlt, FaPlus, FaSearch, FaEdit, FaTrash, FaTimes, FaSignOutAlt, FaBars, FaTimes as FaClose, FaDownload, FaEye, FaToggleOn, FaToggleOff, FaExclamationTriangle  } from 'react-icons/fa';
+import { FaUsers, FaFolder, FaArchive, FaChartBar, FaUsersCog, FaFileAlt, FaPlus, FaSearch, FaEdit, FaTrash, FaTimes, FaSignOutAlt, FaBars, FaTimes as FaClose, FaDownload, FaEye, FaToggleOn, FaToggleOff, FaExclamationTriangle, FaHistory, FaCheck  } from 'react-icons/fa';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 
@@ -216,7 +216,8 @@ const DeanDashboard = () => {
     { id: 'monitoring', label: 'Monitoring & Evaluation', icon: <FaChartBar /> },
     { id: 'panels', label: 'Panel Assignment', icon: <FaUsersCog /> },
     { id: 'documents', label: 'Documents', icon: <FaFileAlt /> },
-    { id: 'archived-documents', label: 'Archived Documents', icon: <FaArchive /> } 
+    { id: 'archived-documents', label: 'Archived Documents', icon: <FaArchive /> },
+    { id: 'activity-logs', label: 'Activity Logs', icon: <FaHistory /> }
   ];
 
   const renderContent = () => {
@@ -256,6 +257,8 @@ const DeanDashboard = () => {
         return <DocumentManagement onArchive={fetchArchivedDocuments} />;
       case 'archived-documents':
         return <ArchivedDocuments />;
+      case 'activity-logs':
+        return <ActivityLogs />;
       default:
         return null;
     }
@@ -1740,7 +1743,7 @@ const MonitoringEvaluation = ({ research }) => {
         ) : (
           <div className="space-y-3">
             {filteredResearch.map((item) => (
-              <ResearchMonitoringCard key={item._id} research={item} />
+              <ResearchMonitoringCard key={item._id} research={item} onViewDetails={handleViewDetails} />
             ))}
           </div>
         )}
@@ -2234,7 +2237,7 @@ const handleDeleteDocument = async (doc) => {
         ) : filteredDocuments.length === 0 ? (
           <div className="p-8 text-center">
             <FaFileAlt className="mx-auto h-12 w-12 text-gray-400" />
-            <p className="mt-2 text-gray-500">No documents found.</p>
+            <p className="mt-2 text-gray-500">No documents uploaded yet.</p>
           </div>
         ) : (
           <div className="divide-y divide-gray-200">
@@ -2481,6 +2484,323 @@ const handleDeleteDocument = async (doc) => {
           </div>
         </div>
       )}
+    </div>
+  );
+};
+
+// Activity Logs Component
+const ActivityLogs = () => {
+  const [activities, setActivities] = useState([]);
+  const [stats, setStats] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [actionFilter, setActionFilter] = useState('all');
+  const [entityFilter, setEntityFilter] = useState('all');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pagination, setPagination] = useState(null);
+
+  useEffect(() => {
+    fetchActivityLogs();
+    fetchActivityStats();
+  }, [actionFilter, entityFilter, currentPage]);
+
+  const fetchActivityLogs = async () => {
+    try {
+      setLoading(true);
+      const token = localStorage.getItem('token');
+      const params = new URLSearchParams({
+        page: currentPage,
+        limit: 50,
+        ...(actionFilter !== 'all' && { action: actionFilter }),
+        ...(entityFilter !== 'all' && { entityType: entityFilter })
+      });
+
+      const res = await axios.get(`/api/dean/activity-logs?${params}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      setActivities(res.data.activities);
+      setPagination(res.data.pagination);
+    } catch (error) {
+      console.error('Error fetching activity logs:', error);
+      alert('Error fetching activity logs');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const fetchActivityStats = async () => {
+    try {
+      const token = localStorage.getItem('token');
+      const res = await axios.get('/api/dean/activity-stats', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      setStats(res.data);
+    } catch (error) {
+      console.error('Error fetching activity stats:', error);
+    }
+  };
+
+  const getActionColor = (action) => {
+    const colors = {
+      create: 'bg-green-100 text-green-700',
+      update: 'bg-blue-100 text-blue-700',
+      delete: 'bg-red-100 text-red-700',
+      upload: 'bg-purple-100 text-purple-700',
+      download: 'bg-indigo-100 text-indigo-700',
+      view: 'bg-gray-100 text-gray-700',
+      approve: 'bg-green-100 text-green-700',
+      reject: 'bg-red-100 text-red-700',
+      archive: 'bg-yellow-100 text-yellow-700',
+      restore: 'bg-blue-100 text-blue-700',
+      activate: 'bg-green-100 text-green-700',
+      deactivate: 'bg-orange-100 text-orange-700',
+      invite: 'bg-purple-100 text-purple-700',
+      assign: 'bg-blue-100 text-blue-700',
+      send_email: 'bg-cyan-100 text-cyan-700',
+      add_remark: 'bg-indigo-100 text-indigo-700',
+    };
+    return colors[action] || 'bg-gray-100 text-gray-700';
+  };
+
+  const getEntityIcon = (entityType) => {
+    const icons = {
+      document: <FaFileAlt />,
+      research: <FaFolder />,
+      user: <FaUsers />,
+      panel: <FaUsersCog />,
+      email: <FaFileAlt />,
+      settings: <FaEdit />,
+    };
+    return icons[entityType] || <FaFileAlt />;
+  };
+
+  const filteredActivities = activities.filter(activity => {
+    if (!searchQuery) return true;
+    const searchLower = searchQuery.toLowerCase();
+    return (
+      activity.description?.toLowerCase().includes(searchLower) ||
+      activity.entityName?.toLowerCase().includes(searchLower) ||
+      activity.user?.name?.toLowerCase().includes(searchLower)
+    );
+  });
+
+  return (
+    <div className="space-y-5">
+      <div className="flex justify-between items-center">
+        <h2 className="text-xl font-bold text-gray-800">Activity Logs</h2>
+        <button 
+          onClick={fetchActivityLogs}
+          className="flex items-center px-4 py-2 bg-[#7C1D23] text-white rounded-md hover:bg-[#5a1519] transition-colors text-sm font-medium"
+        >
+          <FaDownload className="mr-2 text-sm" />
+          Refresh
+        </button>
+      </div>
+
+      {/* Statistics Cards */}
+      {stats && (
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <div className="bg-white rounded-lg border border-gray-200 p-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-xs font-semibold text-gray-500 uppercase">Total Activities</p>
+                <p className="text-2xl font-bold text-gray-800 mt-1">{stats.total}</p>
+              </div>
+              <div className="h-12 w-12 bg-blue-100 rounded-lg flex items-center justify-center">
+                <FaHistory className="h-6 w-6 text-blue-600" />
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-lg border border-gray-200 p-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-xs font-semibold text-gray-500 uppercase">Today</p>
+                <p className="text-2xl font-bold text-gray-800 mt-1">{stats.today}</p>
+              </div>
+              <div className="h-12 w-12 bg-green-100 rounded-lg flex items-center justify-center">
+                <FaCheck className="h-6 w-6 text-green-600" />
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-lg border border-gray-200 p-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-xs font-semibold text-gray-500 uppercase">This Week</p>
+                <p className="text-2xl font-bold text-gray-800 mt-1">{stats.thisWeek}</p>
+              </div>
+              <div className="h-12 w-12 bg-purple-100 rounded-lg flex items-center justify-center">
+                <FaChartBar className="h-6 w-6 text-purple-600" />
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-lg border border-gray-200 p-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-xs font-semibold text-gray-500 uppercase">Most Active</p>
+                <p className="text-sm font-bold text-gray-800 mt-1">
+                  {stats.recentUsers?.[0]?.user || 'N/A'}
+                </p>
+              </div>
+              <div className="h-12 w-12 bg-orange-100 rounded-lg flex items-center justify-center">
+                <FaUsers className="h-6 w-6 text-orange-600" />
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Filters */}
+      <div className="bg-white rounded-lg border border-gray-200 p-4">
+        <div className="flex flex-col sm:flex-row gap-4">
+          <div className="flex-1">
+            <div className="relative">
+              <FaSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search activities..."
+                className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-[#7C1D23] text-sm"
+              />
+            </div>
+          </div>
+          
+          <div className="sm:w-48">
+            <select
+              value={actionFilter}
+              onChange={(e) => {
+                setActionFilter(e.target.value);
+                setCurrentPage(1);
+              }}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-[#7C1D23] text-sm"
+            >
+              <option value="all">All Actions</option>
+              <option value="create">Create</option>
+              <option value="update">Update</option>
+              <option value="delete">Delete</option>
+              <option value="upload">Upload</option>
+              <option value="download">Download</option>
+              <option value="view">View</option>
+              <option value="approve">Approve</option>
+              <option value="archive">Archive</option>
+              <option value="restore">Restore</option>
+              <option value="invite">Invite</option>
+            </select>
+          </div>
+          
+          <div className="sm:w-48">
+            <select
+              value={entityFilter}
+              onChange={(e) => {
+                setEntityFilter(e.target.value);
+                setCurrentPage(1);
+              }}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-[#7C1D23] text-sm"
+            >
+              <option value="all">All Types</option>
+              <option value="document">Documents</option>
+              <option value="research">Research</option>
+              <option value="user">Users</option>
+              <option value="panel">Panels</option>
+              <option value="email">Emails</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      {/* Activity List */}
+      <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+        {loading ? (
+          <div className="p-8 text-center">
+            <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-[#7C1D23]"></div>
+            <p className="mt-2 text-gray-500">Loading activities...</p>
+          </div>
+        ) : filteredActivities.length === 0 ? (
+          <div className="p-8 text-center">
+            <FaHistory className="mx-auto h-12 w-12 text-gray-400" />
+            <p className="mt-2 text-gray-500">No activities found.</p>
+          </div>
+        ) : (
+          <div className="divide-y divide-gray-200">
+            {filteredActivities.map((activity) => (
+              <div key={activity._id} className="p-4 hover:bg-gray-50 transition-colors">
+                <div className="flex items-start space-x-3">
+                  <div className="flex-shrink-0 mt-1">
+                    <div className="h-10 w-10 rounded-lg bg-[#7C1D23]/10 flex items-center justify-center text-[#7C1D23]">
+                      {getEntityIcon(activity.entityType)}
+                    </div>
+                  </div>
+                  
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center space-x-2 mb-1">
+                      <span className={`inline-block px-2 py-1 rounded-full text-xs font-medium ${getActionColor(activity.action)}`}>
+                        {activity.action.replace('_', ' ').toUpperCase()}
+                      </span>
+                      <span className="text-xs text-gray-500">
+                        {activity.entityType}
+                      </span>
+                    </div>
+                    
+                    <p className="text-sm font-medium text-gray-800">
+                      {activity.description}
+                    </p>
+                    
+                    {activity.entityName && (
+                      <p className="text-sm text-gray-600 mt-1">
+                        <span className="font-medium">Entity:</span> {activity.entityName}
+                      </p>
+                    )}
+                    
+                    <div className="flex items-center space-x-4 mt-2 text-xs text-gray-500">
+                      <span>
+                        <FaUsers className="inline mr-1" />
+                        {activity.user?.name || 'Unknown'}
+                      </span>
+                      <span>
+                        {new Date(activity.createdAt).toLocaleString()}
+                      </span>
+                      {activity.ipAddress && (
+                        <span>IP: {activity.ipAddress}</span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Pagination */}
+        {pagination && pagination.pages > 1 && (
+          <div className="bg-gray-50 px-4 py-3 border-t border-gray-200 sm:px-6">
+            <div className="flex items-center justify-between">
+              <div className="text-sm text-gray-700">
+                Showing page <span className="font-medium">{pagination.page}</span> of{' '}
+                <span className="font-medium">{pagination.pages}</span>
+              </div>
+              <div className="flex space-x-2">
+                <button
+                  onClick={() => setCurrentPage(Math.max(1, currentPage - 1))}
+                  disabled={currentPage === 1}
+                  className="px-3 py-1 bg-white border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Previous
+                </button>
+                <button
+                  onClick={() => setCurrentPage(Math.min(pagination.pages, currentPage + 1))}
+                  disabled={currentPage === pagination.pages}
+                  className="px-3 py-1 bg-white border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Next
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 };
