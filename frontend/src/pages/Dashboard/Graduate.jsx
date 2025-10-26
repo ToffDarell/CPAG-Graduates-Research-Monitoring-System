@@ -3,7 +3,7 @@ import { FaUpload, FaCalendar, FaBook, FaCheckCircle, FaClock, FaFileAlt, FaChar
 import { useNavigate } from "react-router-dom";
 import axios from "axios";
 
-const GraduateDashboard = () => {
+const GraduateDashboard = ({setUser}) => {
   const navigate = useNavigate();
   const [selectedTab, setSelectedTab] = useState("chapters");
   const [uploadProgress, setUploadProgress] = useState({
@@ -142,9 +142,18 @@ const GraduateDashboard = () => {
   };
 
   const handleLogout = () => {
-    localStorage.removeItem('token');
-    sessionStorage.removeItem('selectedRole');
-    navigate('/');
+    // Show confirmation dialog
+    if (window.confirm('Are you sure you want to log out?')) {
+      // Clear session data
+      localStorage.removeItem('token');
+      sessionStorage.removeItem('selectedRole');
+      setUser(null);
+      // Navigate to login with state message
+      navigate('/login', { 
+        state: { message: 'You have been logged out successfully.' },
+        replace: true  
+      });
+    }
   };
 
   const tabs = [
