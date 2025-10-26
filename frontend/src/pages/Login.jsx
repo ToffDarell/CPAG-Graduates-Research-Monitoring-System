@@ -3,10 +3,12 @@ import React, { useState, useEffect } from "react";
 import { useNavigate, useSearchParams, Link } from "react-router-dom";
 import { GoogleLogin } from '@react-oauth/google';
 import ReCAPTCHA from 'react-google-recaptcha';
-import { FaEye, FaEyeSlash, FaUserTie, FaUserGraduate, FaChalkboardTeacher, FaUserShield, FaArrowLeft } from 'react-icons/fa';
+import { FaEye, FaEyeSlash } from 'react-icons/fa';
+import { useLocation } from "react-router-dom";
 
 const Login = ({ setUser }) => {
-  const [searchParams] = useSearchParams();
+  const location = useLocation();
+  const  [successMessage, setSuccessMessage] = useState("");
   const [formData, setFormData] = useState({
     email: "",
     password: "",
@@ -18,7 +20,12 @@ const Login = ({ setUser }) => {
   const navigate = useNavigate();
   const siteKey = import.meta.env.VITE_RECAPTCHA_SITE_KEY;
 
- 
+  useEffect(() => {
+    if (location.state?.message) {
+      setSuccessMessage(location.state.message);
+    }
+  }, [location.state?.message]);
+
   const handleChange = (e) => {
     setFormData({ ...formData, [e.target.name]: e.target.value });
   };
@@ -95,6 +102,11 @@ const Login = ({ setUser }) => {
         <h2 className="text-3xl font-bold mb-8 text-center text-gray-800">
           Welcome Back
         </h2>
+        {successMessage && (
+          <div className="mb-4 p-3 bg-green-50 border-l-4 border-green-500 text-green-700 rounded">
+            <p className="text-sm">{successMessage}</p>
+          </div>
+        )}
         {error && (
           <div className="mb-4 p-3 bg-red-50 border-l-4 border-red-500 text-red-700 rounded">
             <p className="text-sm">{error}</p>
