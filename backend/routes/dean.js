@@ -32,6 +32,8 @@ import {
   addResearchRemarks,
   getResearchFeedback,
   getArchivedDocuments,
+  getActivityLogs,
+  getActivityStats,
     } from "../controllers/deanController.js";
 
 
@@ -139,5 +141,9 @@ router.post("/send-email", sendEmail);
 // Search research
 router.post("/research/:researchId/remarks", addResearchRemarks);
 router.get("/research/:researchId/feedback", getResearchFeedback);
+
+// Activity logs
+router.get("/activity-logs", getActivityLogs);
+router.get("/activity-stats", getActivityStats);
 
 export default router;
