@@ -3,7 +3,7 @@ import { FaUsers, FaFolder, FaArchive, FaChartBar, FaUsersCog, FaFileAlt, FaPlus
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 
-const DeanDashboard = () => {
+const DeanDashboard = ({ setUser }) => {
   const navigate = useNavigate();
   const [facultyList, setFacultyList] = useState([]);
   const [researchList, setResearchList] = useState([]);
@@ -184,9 +184,18 @@ const DeanDashboard = () => {
   };
 
   const handleLogout = () => {
-    localStorage.removeItem('token');
-    sessionStorage.removeItem('selectedRole');
-    navigate('/');
+    // Show confirmation dialog
+    if (window.confirm('Are you sure you want to log out?')) {
+      // Clear session data
+      localStorage.removeItem('token');
+      sessionStorage.removeItem('selectedRole');
+      setUser(null);
+      // Navigate to login with state message
+      navigate('/login', { 
+        state: { message: 'You have been logged out successfully.' },
+        replace: true  
+      });
+    }
   };
 
   const filteredFaculty = facultyList.filter(faculty =>
@@ -730,9 +739,6 @@ const ResearchMonitoringCard = ({ research, onViewDetails }) => {
               <span className="font-medium">Faculty Adviser:</span> {research.adviser?.name || 'N/A'}
             </p>
             <p className="text-xs text-gray-600">
-              <span className="font-medium">Department:</span> {research.adviser?.department || 'N/A'}
-            </p>
-            <p className="text-xs text-gray-600">
               <span className="font-medium">Student:</span> {research.students?.[0]?.name || 'N/A'}
             </p>
           </div>
@@ -811,7 +817,7 @@ const ResearchDetailsModal = ({ research, isOpen, onClose }) => {
       const token = localStorage.getItem('token');
       await axios.post(`/api/dean/research/${research._id}/remarks`, {
         message: remarks,
-        type: 'dean_feedback'
+        type: 'feedback'
       }, {
         headers: { Authorization: `Bearer ${token}` }
       });
@@ -820,7 +826,9 @@ const ResearchDetailsModal = ({ research, isOpen, onClose }) => {
       fetchResearchFeedback(research._id);
       alert('Remarks submitted successfully!');
     } catch (error) {
-      alert('Error submitting remarks');
+      console.error('Error submitting remarks:', error);
+      console.error('Error response:', error.response?.data);
+      alert('Error submitting remarks: ' + (error.response?.data?.message || error.message));
     }
   };
   
@@ -851,7 +859,6 @@ const ResearchDetailsModal = ({ research, isOpen, onClose }) => {
               <div className="space-y-2 text-sm">
                 <p><span className="font-medium">Student:</span> {research.students?.[0]?.name}</p>
                 <p><span className="font-medium">Adviser:</span> {research.adviser?.name}</p>
-                <p><span className="font-medium">Department:</span> {research.adviser?.department}</p>
                 <p><span className="font-medium">Status:</span> {research.status}</p>
                 <p><span className="font-medium">Stage:</span> {research.stage}</p>
               </div>
@@ -1048,7 +1055,6 @@ const ResearchRecordDetailsModal = ({ research, isOpen, onClose, onDownload }) =
                 <div className="bg-gray-50 p-4 rounded-lg space-y-2">
                   <p className="text-sm"><span className="font-medium">Name:</span> {research.students?.[0]?.name || 'N/A'}</p>
                   <p className="text-sm"><span className="font-medium">Email:</span> {research.students?.[0]?.email || 'N/A'}</p>
-                  <p className="text-sm"><span className="font-medium">Department:</span> {research.students?.[0]?.department || 'N/A'}</p>
                 </div>
               </div>
 
@@ -1057,7 +1063,6 @@ const ResearchRecordDetailsModal = ({ research, isOpen, onClose, onDownload }) =
                 <div className="bg-gray-50 p-4 rounded-lg space-y-2">
                   <p className="text-sm"><span className="font-medium">Name:</span> {research.adviser?.name || 'N/A'}</p>
                   <p className="text-sm"><span className="font-medium">Email:</span> {research.adviser?.email || 'N/A'}</p>
-                  <p className="text-sm"><span className="font-medium">Department:</span> {research.adviser?.department || 'N/A'}</p>
                 </div>
               </div>
             </div>
@@ -1205,8 +1210,7 @@ const ResearchRecords = ({ stats, research, onRefresh }) => {
         item.adviser?.name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
         item.students?.some(student => 
           student.name?.toLowerCase().includes(searchQuery.toLowerCase())
-        ) ||
-        item.adviser?.department?.toLowerCase().includes(searchQuery.toLowerCase())
+        )
       );
     }
     
@@ -1325,7 +1329,7 @@ const ResearchRecords = ({ stats, research, onRefresh }) => {
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search by title, faculty name, or department..."
+                placeholder="Search by title, faculty name, or student..."
                 className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-[#7C1D23] text-sm"
               />
             </div>
@@ -1380,10 +1384,7 @@ const ResearchRecords = ({ stats, research, onRefresh }) => {
                     Research Title
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Author/Faculty
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Department
+                    Adviser
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Submission Date
@@ -1408,9 +1409,6 @@ const ResearchRecords = ({ stats, research, onRefresh }) => {
                     <td className="px-6 py-4">
                       <div className="text-sm text-gray-900">{item.adviser?.name || 'N/A'}</div>
                       <div className="text-xs text-gray-500">{item.adviser?.email || ''}</div>
-                    </td>
-                    <td className="px-6 py-4">
-                      <div className="text-sm text-gray-900">{item.adviser?.department || 'N/A'}</div>
                     </td>
                     <td className="px-6 py-4 text-sm text-gray-500">
                       {new Date(item.createdAt).toLocaleDateString()}
@@ -1467,6 +1465,7 @@ const ArchiveProjects = ({ research, onRefresh }) => {
   const [filteredResearch, setFilteredResearch] = useState(research);
   const [selectedResearch, setSelectedResearch] = useState(null);
   const [showDetailsModal, setShowDetailsModal] = useState(false);
+  const [dateFilter, setDateFilter] = useState('all');
 
   useEffect(() => {
     let filtered = research;
@@ -1480,9 +1479,30 @@ const ArchiveProjects = ({ research, onRefresh }) => {
         )
       );
     }
+
+    //Date filter
+    if (dateFilter !== 'all') {
+        const now = new Date();
+        filtered = filtered.filter(item => {
+        const archivedDate = new Date(item.archivedAt || item.updatedAt);
+
+        switch (dateFilter) {
+          case 'last-30':
+            return (now - archivedDate) / (1000 * 60 * 60 * 24) <= 30;
+          case 'last-90':
+            return (now - archivedDate) / (1000 * 60 * 60 * 24) <= 90;
+          case 'this-year':
+            return archivedDate.getFullYear() === now.getFullYear();
+          case 'last-year':
+            return archivedDate.getFullYear() === now.getFullYear() - 1;
+          default:
+            return true;
+        }
+      });
+    }
     
     setFilteredResearch(filtered);
-  }, [research, searchQuery]);
+  }, [research, searchQuery, dateFilter]);
 
   const handleUnarchive = async (id) => {
     if (!window.confirm('Are you sure you want to unarchive this research?')) return;
@@ -1498,6 +1518,23 @@ const ArchiveProjects = ({ research, onRefresh }) => {
     } catch (error) {
       console.error('Error unarchiving research:', error);
       alert('Error unarchiving research');
+    }
+  };
+
+  const handlePermanentDeleteResearch = async (id) => {
+    if (!window.confirm('Are you sure you want to permanently delete this project?')) return;
+    
+    try {
+      const token = localStorage.getItem('token');
+      await axios.delete(`/api/dean/research/${id}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      
+      if (onRefresh) onRefresh();
+      alert('Research permanently deleted!');
+    } catch (error) {
+      console.error('Error deleting research:', error);
+      alert(error.response?.data?.message || 'Error deleting research');
     }
   };
 
@@ -1535,17 +1572,37 @@ const ArchiveProjects = ({ research, onRefresh }) => {
         <span className="text-sm text-gray-600">{filteredResearch.length} archived project(s)</span>
       </div>
 
-      {/* Search Bar */}
+      {/* Search and Filters */}
       <div className="bg-white rounded-lg border border-gray-200 p-4">
-        <div className="relative">
-          <FaSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search archived projects..."
-            className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-[#7C1D23] text-sm"
-          />
+        <div className="flex flex-col md:flex-row gap-4">
+          {/* Search */}
+          <div className="flex-1">
+            <div className="relative">
+              <FaSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search archived projects..."
+                className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-[#7C1D23] text-sm"
+              />
+            </div>
+          </div>
+          
+          {/* Date Filter */}
+          <div className="md:w-48">
+            <select
+              value={dateFilter}
+              onChange={(e) => setDateFilter(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-[#7C1D23] text-sm"
+            >
+              <option value="all">All Dates</option>
+              <option value="last-30">Last 30 Days</option>
+              <option value="last-90">Last 90 Days</option>
+              <option value="this-year">This Year</option>
+              <option value="last-year">Last Year</option>
+            </select>
+          </div>
         </div>
       </div>
 
@@ -1568,9 +1625,6 @@ const ArchiveProjects = ({ research, onRefresh }) => {
                     Author/Faculty
                   </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Department
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Archived Date
                   </th>
                   <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
@@ -1591,9 +1645,6 @@ const ArchiveProjects = ({ research, onRefresh }) => {
                       <div className="text-sm text-gray-900">{item.adviser?.name || 'N/A'}</div>
                       <div className="text-xs text-gray-500">{item.adviser?.email || ''}</div>
                     </td>
-                    <td className="px-6 py-4">
-                      <div className="text-sm text-gray-900">{item.adviser?.department || 'N/A'}</div>
-                    </td>
                     <td className="px-6 py-4 text-sm text-gray-500">
                       {item.archivedAt ? new Date(item.archivedAt).toLocaleDateString() : new Date(item.updatedAt).toLocaleDateString()}
                     </td>
@@ -1612,6 +1663,13 @@ const ArchiveProjects = ({ research, onRefresh }) => {
                           title="Unarchive"
                         >
                           <FaArchive className="h-4 w-4" />
+                        </button>
+                        <button
+                          onClick={() => handlePermanentDeleteResearch(item._id)}
+                          className="text-red-600 hover:text-red-800 transition-colors"
+                          title="Permanently Delete"
+                        >
+                          <FaTrash className="h-4 w-4" />
                         </button>
                       </div>
                     </td>
@@ -1642,7 +1700,6 @@ const ArchiveProjects = ({ research, onRefresh }) => {
 const MonitoringEvaluation = ({ research }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
-  const [departmentFilter, setDepartmentFilter] = useState('all');
   const [filteredResearch, setFilteredResearch] = useState(research);
   const [selectedResearch, setSelectedResearch] = useState(null);
   const [showDetailsModal, setShowDetailsModal] = useState(false);
@@ -1666,16 +1723,8 @@ const MonitoringEvaluation = ({ research }) => {
       filtered = filtered.filter(item => item.status === statusFilter);
     }
     
-    // Department filter
-    if (departmentFilter !== 'all') {
-      filtered = filtered.filter(item => 
-        item.adviser?.department === departmentFilter ||
-        item.students?.some(student => student.department === departmentFilter)
-      );
-    }
-    
     setFilteredResearch(filtered);
-  }, [research, searchQuery, statusFilter, departmentFilter]);
+  }, [research, searchQuery, statusFilter]);
 
 
   const handleViewDetails = (researchItem) => {
@@ -1698,7 +1747,7 @@ const MonitoringEvaluation = ({ research }) => {
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search by title, author, or department..."
+                placeholder="Search by title, author, or student..."
                 className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-[#7C1D23] text-sm"
               />
             </div>
@@ -1717,20 +1766,6 @@ const MonitoringEvaluation = ({ research }) => {
               <option value="in-progress">In Progress</option>
               <option value="completed">Completed</option>
               <option value="delayed">Delayed</option>
-            </select>
-          </div>
-          
-          {/* Department Filter */}
-          <div className="sm:w-48">
-            <select
-              value={departmentFilter}
-              onChange={(e) => setDepartmentFilter(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-[#7C1D23] text-sm"
-            >
-              <option value="all">All Departments</option>
-              <option value="Computer Science">Computer Science</option>
-              <option value="Information Technology">Information Technology</option>
-              <option value="Business Administration">Business Administration</option>
             </select>
           </div>
         </div>
@@ -1996,7 +2031,8 @@ const DocumentManagement = ({ onArchive }) => {
   
   // Add these state variables for document viewer
   const [viewingDocument, setViewingDocument] = useState(null);
-  const [showDocumentViewer, setShowDocumentViewer] = useState(false); 
+  const [showDocumentViewer, setShowDocumentViewer] = useState(false);
+  const [documentBlobUrl, setDocumentBlobUrl] = useState(null); 
 
   useEffect(() => {
     fetchDocuments();
@@ -2149,9 +2185,35 @@ const handleDeleteDocument = async (doc) => {
   };
 
   //  function to handle viewing documents
-  const handleViewDocument = (document) => {
-    setViewingDocument(document);
-    setShowDocumentViewer(true); 
+  const handleViewDocument = async (document) => {
+    try {
+      const token = localStorage.getItem('token');
+      const response = await axios.get(`/api/dean/documents/${document._id}`, {
+        headers: { Authorization: `Bearer ${token}` },
+        responseType: 'blob' // Important: get the response as a blob
+      });
+      
+      // Create a blob URL from the response
+      const blob = new Blob([response.data], { type: document.mimeType });
+      const url = URL.createObjectURL(blob);
+      
+      setDocumentBlobUrl(url);
+      setViewingDocument(document);
+      setShowDocumentViewer(true);
+    } catch (error) {
+      console.error('Error viewing document:', error);
+      alert('Error loading document preview');
+    }
+  };
+  
+  // Cleanup blob URL when modal closes
+  const handleCloseViewer = () => {
+    if (documentBlobUrl) {
+      URL.revokeObjectURL(documentBlobUrl);
+      setDocumentBlobUrl(null);
+    }
+    setShowDocumentViewer(false);
+    setViewingDocument(null);
   };
 
   const filteredDocuments = documents.filter(doc => {
@@ -2445,14 +2507,14 @@ const handleDeleteDocument = async (doc) => {
       )}
 
       {/* Document Viewer Modal */}
-      {showDocumentViewer && viewingDocument && (
+      {showDocumentViewer && viewingDocument && documentBlobUrl && (
         <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-lg shadow-xl max-w-6xl w-full h-full flex flex-col">
             {/* Modal Header */}
             <div className="bg-gradient-to-r from-[#7C1D23] to-[#5a1519] text-white p-4 rounded-t-lg flex justify-between items-center">
               <h3 className="text-lg font-bold">{viewingDocument.title}</h3>
               <button 
-                onClick={() => setShowDocumentViewer(false)} 
+                onClick={handleCloseViewer}
                 className="text-white hover:text-gray-200 transition-colors"
               >
                 <FaTimes className="h-5 w-5" />
@@ -2463,10 +2525,18 @@ const handleDeleteDocument = async (doc) => {
             <div className="flex-1 p-4">
               {viewingDocument.mimeType === 'application/pdf' ? (
                 <iframe
-                  src={`/api/dean/documents/${viewingDocument._id}`}
+                  src={documentBlobUrl}
                   className="w-full h-full border-0"
                   title={viewingDocument.title}
                 />
+              ) : viewingDocument.mimeType?.startsWith('image/') ? (
+                <div className="flex items-center justify-center h-full">
+                  <img 
+                    src={documentBlobUrl} 
+                    alt={viewingDocument.title}
+                    className="max-w-full max-h-full object-contain"
+                  />
+                </div>
               ) : (
                 <div className="flex items-center justify-center h-full">
                   <p className="text-gray-500">
