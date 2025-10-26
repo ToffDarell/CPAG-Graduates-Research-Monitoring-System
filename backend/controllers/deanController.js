@@ -3,8 +3,41 @@ import User from "../models/User.js";
 import Document from "../models/Document.js";
 import Panel from "../models/Panel.js";
 import Feedback from "../models/Feedback.js";
+import Activity from "../models/Activity.js";
 import mongoose from "mongoose";
 import nodemailer from "nodemailer";
+
+//Helper function to log activity
+const logActivity = async (userId, action, entityType, entityId, entityName, description, metadata = {}, req = null) => {
+  try {
+    console.log('📝 Logging activity:', { action, entityType, entityName, userId });
+    
+    const activity = await Activity.create({
+      user: userId,
+      action,
+      entityType,
+      entityId: entityId || null,
+      entityName,
+      description,
+      metadata,
+      ipAddress: req?.ip || null,
+      userAgent: req?.headers?.['user-agent'] || null
+    });
+    
+    console.log('✅ Activity logged successfully:', activity._id);
+  } catch (error) {
+    console.error('❌ Error logging activity:', error);
+    console.error('Error details:', {
+      userId,
+      action,
+      entityType,
+      entityId,
+      entityName,
+      errorMessage: error.message,
+      errorStack: error.stack
+    });
+  }
+};
 
 // Get faculty list
 export const getFaculty = async (req, res) => {
@@ -46,6 +79,9 @@ export const addResearchRemarks = async (req, res) => {
     research.sharedAt = new Date();
     research.sharedBy = req.user.id;
     await research.save();
+
+    await logActivity(req.user.id, 'add_research_remarks', 'feedback', feedback._id, feedback.title, 
+    `Added remarks for research: ${research.title}`, { researchId: researchId }, req);
     
     res.json({ message: "Remarks added successfully", feedback });
   } catch (error) {
@@ -63,6 +99,7 @@ export const getResearchFeedback = async (req, res) => {
       .populate("adviser", "name")
       .sort({ createdAt: -1 });
     
+    await logActivity(req.user.id, 'get_research_feedback', 'feedback', researchId, research.title, `Fetched feedback for research: ${research.title}`, { researchId: researchId }, req);
     res.json(feedback);
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -80,6 +117,17 @@ export const toggleFacultyActivation = async (req, res) => {
 
     faculty.isActive = !faculty.isActive;
     await faculty.save();
+
+    await logActivity(
+      req.user.id,
+      faculty.isActive ? 'activate' : 'deactivate',
+      'user',
+      id,
+      faculty.name,
+      `${faculty.isActive ? 'Activated' : 'Deactivated'} faculty: ${faculty.name}`,
+      { role: faculty.role, email: faculty.email },
+      req
+    );
 
     res.json({ message: `Faculty member status updated ${faculty.isActive ? 'activated' : 'deactivated'} sucessfully`,
     faculty: {
@@ -99,8 +147,27 @@ export const toggleFacultyActivation = async (req, res) => {
 export const deleteFaculty = async (req, res) => {
   try {
     const { id } = req.params;
+    const faculty = await User.findById(id);
+    
+    if (!faculty) {
+      return res.status(404).json({ message: "Faculty not found" });
+    }
+
+    const facultyName = faculty.name;
     await User.findByIdAndDelete(id);
-    res.json({ message: "Faculty member removed successfully" });
+
+    await logActivity(
+      req.user.id,
+      'delete',
+      'user',
+      id,
+      facultyName,
+      `Deleted faculty: ${facultyName}`,
+      { role: faculty.role, email: faculty.email },
+      req
+    );
+
+    res.json({ message: "Faculty deleted successfully" });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -134,11 +201,17 @@ export const getResearchRecords = async (req, res) => {
 // Archive or Unarchive research project
 export const archiveResearch = async (req, res) => {
   try {
+    console.log(' Archive research called:', req.params.id);
+    console.log('User:', req.user?.id, req.user?.name);
+    
     const research = await Research.findById(req.params.id);
     
     if (!research) {
+      console.log(' Research not found');
       return res.status(404).json({ message: "Research not found" });
     }
+
+    console.log('📊 Research found:', research.title, 'Current status:', research.status);
 
     // Toggle archive status
     const newStatus = research.status === 'archived' ? 'approved' : 'archived';
@@ -161,11 +234,27 @@ export const archiveResearch = async (req, res) => {
       { new: true }
     );
 
+    console.log('💾 Research updated, now logging activity...');
+    
+    await logActivity(
+      req.user.id,
+      newStatus === 'archived' ? 'archive' : 'restore',
+      'research',
+      req.params.id,
+      research.title,
+      `${newStatus === 'archived' ? 'Archived' : 'Restored'} research: ${research.title}`,
+      { previousStatus: research.status },
+      req
+    );
+
+    console.log('✅ Archive research completed');
+
     res.json({ 
       message: `Research ${newStatus === 'archived' ? 'archived' : 'unarchived'} successfully`, 
       research: updatedResearch 
     });
   } catch (error) {
+    console.error('❌ Error in archiveResearch:', error);
     res.status(500).json({ message: error.message });
   }
 };
@@ -269,6 +358,17 @@ export const restoreDocument = async (req, res) => {
     document.isActive = true;
     await document.save();
 
+    await logActivity(
+      req.user.id,
+      'restore',
+      'document',
+      document._id,
+      document.title,
+      `Restored document: ${document.title}`,
+      { category: document.category },
+      req
+    );
+
     res.json({ message: "Document restored successfully", document });
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -314,6 +414,19 @@ export const uploadDocument = async (req, res) => {
 
     await document.save();
     console.log('Document saved successfully:', document._id);
+    
+    // Log activity
+    await logActivity(
+      req.user.id,
+      'upload',
+      'document',
+      document._id,
+      document.title,
+      `Uploaded document: ${document.title}`,
+      { category: document.category, fileSize: document.fileSize },
+      req
+    );
+    
     res.json({ message: "Document uploaded successfully", document });
   } catch (error) {
     console.error('Document upload error:', error);
@@ -358,6 +471,18 @@ export const downloadDocument = async (req, res) => {
     console.log('Looking for file at:', filePath); // Debug log
     console.log('Original filepath:', document.filepath); // Debug log
 
+    // Log activity before sending file
+    await logActivity(
+      req.user.id,
+      'download',
+      'document',
+      document._id,
+      document.title,
+      `Downloaded document: ${document.title}`,
+      { category: document.category, filename: document.filename },
+      req
+    );
+
     if (!fs.existsSync(filePath)) {
       // Try alternative path
       const altPath = path.join(process.cwd(), document.filepath);
@@ -400,6 +525,16 @@ export const deleteDocument = async (req, res) => {
       return res.status(403).json({ message: "Access denied" });
     }
 
+    // Before deletion
+await Activity.create({
+  user: req.user.id,
+  action: 'delete',
+  entityType: 'document',
+  entityId: document._id,
+  entityName: document.title,
+  description: `Permanently deleted document: ${document.title}`
+});
+
     // Delete file from filesystem
     const fs = await import('fs');
     if (fs.existsSync(document.filepath)) {
@@ -411,12 +546,13 @@ export const deleteDocument = async (req, res) => {
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
+  
 };
 
 // Archive document (soft delete)
 export const archiveDocument = async (req, res) => {
   try {
-    console.log('Archive document request:', req.params.id);
+    console.log(' Archive document request:', req.params.id);
     console.log('User role:', req.user?.role);
     console.log('User ID:', req.user?.id);
     
@@ -424,30 +560,53 @@ export const archiveDocument = async (req, res) => {
     const document = await Document.findById(req.params.id);
     
     if (!document) {
-      console.log('Document not found:', req.params.id);
+      console.log(' Document not found:', req.params.id);
       return res.status(404).json({ message: "Document not found" });
     }
 
-    console.log('Document found:', document._id);
+    console.log(' Document found:', document.title);
     console.log('Document uploadedBy:', document.uploadedBy);
 
     // Check if user is the uploader or dean
     if (document.uploadedBy.toString() !== req.user.id && req.user.role !== 'dean') {
-      console.log('Access denied - not uploader or dean');
+      console.log(' Access denied - not uploader or dean');
       return res.status(403).json({ message: "Access denied" });
     }
 
     // Archive the document by setting isActive to false
     document.isActive = false;
     await document.save();
+    
+    console.log(' Document archived, now logging activity...');
 
-    console.log('Document archived successfully:', document._id);
+    await logActivity(
+      req.user.id,
+      'archive',
+      'document',
+      document._id,
+      document.title,
+      `Archived document: ${document.title}`,
+      { category: document.category },
+      req
+    );
+
+    console.log(' Document archived successfully:', document._id);
     res.json({ message: "Document archived successfully" });
   } catch (error) {
     console.error('Archive document error:', error);
     console.error('Error stack:', error.stack);
     res.status(500).json({ message: error.message });
   }
+
+  // After archive
+await Activity.create({
+  user: req.user.id,
+  action: 'archive',
+  entityType: 'document',
+  entityId: document._id,
+  entityName: document.title,
+  description: `Archived document: ${document.title}`
+});
 };
 
 
@@ -494,6 +653,18 @@ export const viewDocument = async (req, res) => {
     }
     
     console.log('Looking for file at:', filePath);
+
+    // Log activity before viewing
+    await logActivity(
+      req.user.id,
+      'view',
+      'document',
+      document._id,
+      document.title,
+      `Viewed document: ${document.title}`,
+      { category: document.category },
+      req
+    );
 
     if (!fs.existsSync(filePath)) {
       // Try alternative path
@@ -575,6 +746,17 @@ export const updateFaculty = async (req, res) => {
       return res.status(404).json({ message: "Faculty member not found" });
     }
     
+    await logActivity(
+      req.user.id,
+      'update',
+      'user',
+      id,
+      updated.name,
+      `Updated faculty profile: ${updated.name}`,
+      { updatedFields: Object.keys(updateData) },
+      req
+    );
+    
     res.json({ message: "Faculty account updated successfully", updated });
   } catch (error) {
     console.error('Update faculty error:', error);
@@ -610,6 +792,18 @@ export const createFaculty = async (req, res) => {
   try {
     const user = new User({ name, email, role, password });
     await user.save();
+    
+    await logActivity(
+      req.user.id,
+      'create',
+      'user',
+      user._id,
+      user.name,
+      `Created faculty account: ${user.name}`,
+      { role: user.role, email: user.email },
+      req
+    );
+    
     res.json({ message: "Faculty account created", user });
   } catch (error) {
     res.status(400).json({ message: error.message });
@@ -624,6 +818,18 @@ export const approveResearch = async (req, res) => {
       { status: "approved" },
       { new: true }
     );
+    
+    await logActivity(
+      req.user.id,
+      'approve',
+      'research',
+      req.params.id,
+      research.title,
+      `Approved research: ${research.title}`,
+      { previousStatus: 'pending' },
+      req
+    );
+    
     res.json({ message: "Research approved", research });
   } catch (error) {
     res.status(400).json({ message: error.message });
@@ -639,6 +845,18 @@ export const assignPanel = async (req, res) => {
       { panel: panelIds },
       { new: true }
     ).populate("panel");
+    
+    await logActivity(
+      req.user.id,
+      'assign',
+      'panel',
+      req.params.id,
+      research.title,
+      `Assigned panel to research: ${research.title}`,
+      { panelCount: panelIds.length },
+      req
+    );
+    
     res.json({ message: "Panel assigned", research });
   } catch (error) {
     res.status(400).json({ message: error.message });
@@ -785,9 +1003,100 @@ export const inviteFaculty = async (req, res) => {
     });
 
     console.log(`Email sent successfully:`, emailResult.messageId);
+    
+    await logActivity(
+      req.user.id,
+      'invite',
+      'user',
+      user._id,
+      name,
+      `Invited faculty: ${name} (${role})`,
+      { email, role },
+      req
+    );
+    
     res.json({ message: `Invitation sent successfully to ${email}!`, user: { name, email, role } });
   } catch (error) {
     console.error("Invitation error:", error);
     res.status(400).json({ message: error.message || "Error sending invitation" });
+  }
+};
+
+// Get activity logs
+export const getActivityLogs = async (req, res) => {
+  try {
+    const { action, entityType, limit = 100, page = 1 } = req.query;
+    
+    let query = {};
+    
+    // Filter by action if provided
+    if (action && action !== 'all') {
+      query.action = action;
+    }
+    
+    // Filter by entity type if provided
+    if (entityType && entityType !== 'all') {
+      query.entityType = entityType;
+    }
+    
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+    
+    const activities = await Activity.find(query)
+      .populate("user", "name email role")
+      .sort({ createdAt: -1 })
+      .limit(parseInt(limit))
+      .skip(skip);
+    
+    const total = await Activity.countDocuments(query);
+    
+    res.json({
+      activities,
+      pagination: {
+        total,
+        page: parseInt(page),
+        limit: parseInt(limit),
+        pages: Math.ceil(total / parseInt(limit))
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Get activity statistics
+export const getActivityStats = async (req, res) => {
+  try {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    
+    const thisWeek = new Date();
+    thisWeek.setDate(thisWeek.getDate() - 7);
+    
+    const stats = {
+      total: await Activity.countDocuments(),
+      today: await Activity.countDocuments({ createdAt: { $gte: today } }),
+      thisWeek: await Activity.countDocuments({ createdAt: { $gte: thisWeek } }),
+      byAction: await Activity.aggregate([
+        { $group: { _id: "$action", count: { $sum: 1 } } },
+        { $sort: { count: -1 } }
+      ]),
+      byEntityType: await Activity.aggregate([
+        { $group: { _id: "$entityType", count: { $sum: 1 } } },
+        { $sort: { count: -1 } }
+      ]),
+      recentUsers: await Activity.aggregate([
+        { $match: { createdAt: { $gte: thisWeek } } },
+        { $group: { _id: "$user", count: { $sum: 1 } } },
+        { $sort: { count: -1 } },
+        { $limit: 10 },
+        { $lookup: { from: "users", localField: "_id", foreignField: "_id", as: "userInfo" } },
+        { $unwind: "$userInfo" },
+        { $project: { user: "$userInfo.name", count: 1 } }
+      ])
+    };
+    
+    res.json(stats);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
   }
 };
