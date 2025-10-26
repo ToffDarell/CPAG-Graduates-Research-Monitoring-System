@@ -22,6 +22,7 @@ import {
   inviteFaculty,
   createFaculty,
   approveResearch,
+  deleteResearch,
   assignPanel,
   legacyUpload,
   updateSettings,
@@ -101,6 +102,7 @@ router.get("/analytics", getAnalytics);
 
 // Archive projects
 router.put("/archive/:id", archiveResearch);
+router.delete("/research/:id", deleteResearch);
 
 // Monitoring and evaluation
 router.get("/monitoring", getMonitoringData);
