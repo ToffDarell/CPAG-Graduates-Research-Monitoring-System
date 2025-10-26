@@ -10,7 +10,7 @@ import nodemailer from "nodemailer";
 //Helper function to log activity
 const logActivity = async (userId, action, entityType, entityId, entityName, description, metadata = {}, req = null) => {
   try {
-    console.log('📝 Logging activity:', { action, entityType, entityName, userId });
+    console.log(' Logging activity:', { action, entityType, entityName, userId });
     
     const activity = await Activity.create({
       user: userId,
@@ -24,9 +24,9 @@ const logActivity = async (userId, action, entityType, entityId, entityName, des
       userAgent: req?.headers?.['user-agent'] || null
     });
     
-    console.log('✅ Activity logged successfully:', activity._id);
+    console.log(' Activity logged successfully:', activity._id);
   } catch (error) {
-    console.error('❌ Error logging activity:', error);
+    console.error('Error logging activity:', error);
     console.error('Error details:', {
       userId,
       action,
@@ -55,7 +55,7 @@ export const getFaculty = async (req, res) => {
 export const addResearchRemarks = async (req, res) => {
   try {
     const { researchId } = req.params;
-    const { message, type = 'dean_feedback' } = req.body;
+    const { message, type = 'feedback' } = req.body;
     
     const research = await Research.findById(researchId);
     if (!research) {
@@ -80,7 +80,7 @@ export const addResearchRemarks = async (req, res) => {
     research.sharedBy = req.user.id;
     await research.save();
 
-    await logActivity(req.user.id, 'add_research_remarks', 'feedback', feedback._id, feedback.title, 
+    await logActivity(req.user.id, 'add_remark', 'research', researchId, research.title, 
     `Added remarks for research: ${research.title}`, { researchId: researchId }, req);
     
     res.json({ message: "Remarks added successfully", feedback });
@@ -211,7 +211,7 @@ export const archiveResearch = async (req, res) => {
       return res.status(404).json({ message: "Research not found" });
     }
 
-    console.log('📊 Research found:', research.title, 'Current status:', research.status);
+    console.log(' Research found:', research.title, 'Current status:', research.status);
 
     // Toggle archive status
     const newStatus = research.status === 'archived' ? 'approved' : 'archived';
@@ -234,7 +234,7 @@ export const archiveResearch = async (req, res) => {
       { new: true }
     );
 
-    console.log('💾 Research updated, now logging activity...');
+    console.log(' Research updated, now logging activity...');
     
     await logActivity(
       req.user.id,
@@ -247,14 +247,14 @@ export const archiveResearch = async (req, res) => {
       req
     );
 
-    console.log('✅ Archive research completed');
+    console.log(' Archive research completed');
 
     res.json({ 
       message: `Research ${newStatus === 'archived' ? 'archived' : 'unarchived'} successfully`, 
       research: updatedResearch 
     });
   } catch (error) {
-    console.error('❌ Error in archiveResearch:', error);
+    console.error('Error in archiveResearch:', error);
     res.status(500).json({ message: error.message });
   }
 };
@@ -262,7 +262,7 @@ export const archiveResearch = async (req, res) => {
 // Get monitoring and evaluation data
 export const getMonitoringData = async (req, res) => {
   try {
-    const { search, status, department } = req.query;
+    const { search, status } = req.query;
     
     // Build query object
     let query = {};
@@ -280,15 +280,10 @@ export const getMonitoringData = async (req, res) => {
     if (status && status !== 'all') {
       query.status = status;
     }
-    
-    // Department filter (if you have department field)
-    if (department && department !== 'all') {
-      query.department = department;
-    }
 
     const research = await Research.find(query)
-      .populate("students", "name email department")
-      .populate("adviser", "name email department")
+      .populate("students", "name email")
+      .populate("adviser", "name email")
       .sort({ updatedAt: -1 });
 
     // Include feedback
@@ -547,6 +542,48 @@ await Activity.create({
     res.status(500).json({ message: error.message });
   }
   
+};
+
+// Permanently delete archived research
+export const deleteResearch = async (req, res) => {
+  try {
+    const research = await Research.findById(req.params.id);
+    
+    if (!research) {
+      return res.status(404).json({ message: "Research not found" });
+    }
+    
+    // Only allow deletion if archived
+    if (research.status !== 'archived') {
+      return res.status(400).json({ 
+        message: "Only archived research can be permanently deleted. Please archive it first." 
+      });
+    }
+    
+    // Log activity before deletion
+    await logActivity(
+      req.user.id,
+      'delete',
+      'research',
+      req.params.id,
+      research.title,
+      `Permanently deleted research: ${research.title}`,
+      { 
+        title: research.title,
+        adviser: research.adviser?.name,
+        archivedAt: research.archivedAt 
+      },
+      req
+    );
+    
+    // Delete the research
+    await Research.findByIdAndDelete(req.params.id);
+    
+    res.json({ message: "Research permanently deleted" });
+  } catch (error) {
+    console.error('Error deleting research:', error);
+    res.status(500).json({ message: error.message });
+  }
 };
 
 // Archive document (soft delete)

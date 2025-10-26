@@ -3,7 +3,7 @@ import { FaCheckCircle, FaTimesCircle, FaUsers, FaClipboardList, FaCalendar, FaF
 import { useNavigate } from "react-router-dom";
 import axios from "axios";
 
-const FacultyAdviserDashboard = () => {
+const FacultyAdviserDashboard = ({setUser}) => {
   const navigate = useNavigate();
   const [selectedTab, setSelectedTab] = useState("submissions");
   const [students, setStudents] = useState([]);
@@ -128,9 +128,18 @@ const FacultyAdviserDashboard = () => {
   };
 
   const handleLogout = () => {
-    localStorage.removeItem('token');
-    sessionStorage.removeItem('selectedRole');
-    navigate('/');
+    // Show confirmation dialog
+    if (window.confirm('Are you sure you want to log out?')) {
+      // Clear session data
+      localStorage.removeItem('token');
+      sessionStorage.removeItem('selectedRole');
+      setUser(null);
+      // Navigate to login with state message
+      navigate('/login', { 
+        state: { message: 'You have been logged out successfully.' },
+        replace: true  
+      });
+    }
   };
 
   const tabs = [
