@@ -119,7 +119,7 @@ function App() {
           path="/dashboard/dean"
           element={
             user?.role === "dean" ? (
-              <DeanDashboard />
+              <DeanDashboard setUser={setUser} />
             ) : (
               <Navigate to="/login" />
             )
@@ -129,7 +129,7 @@ function App() {
           path="/dashboard/faculty"
           element={
             user?.role === "faculty adviser" ? (
-              <FacultyAdviserDashboard />
+              <FacultyAdviserDashboard setUser={setUser} />
             ) : (
               <Navigate to="/login" />
             )
@@ -139,7 +139,7 @@ function App() {
           path="/dashboard/program-head"
           element={
             user?.role === "program head" ? (
-              <ProgramHeadDashboard />
+              <ProgramHeadDashboard setUser={setUser} />
             ) : (
               <Navigate to="/login" />
             )
@@ -149,7 +149,7 @@ function App() {
           path="/dashboard/graduate"
           element={
             user?.role === "graduate student" ? (
-              <GraduateDashboard />
+              <GraduateDashboard setUser={setUser} />
             ) : (
               <Navigate to="/login" />
             )
