@@ -11,7 +11,7 @@ const researchSchema = new mongoose.Schema(
     // Status & Stage
     status: {
       type: String,
-      enum: ["pending", "approved", "rejected", "in-progress", "completed", "archived"],
+      enum: ["pending", "approved", "rejected", "in-progress", "for-revision", "completed", "archived"],
       default: "pending",
     },
     stage: { 
