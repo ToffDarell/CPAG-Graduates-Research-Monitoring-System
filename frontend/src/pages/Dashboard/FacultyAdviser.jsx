@@ -1,22 +1,42 @@
-import React, { useState, useEffect } from "react";
-import { FaCheckCircle, FaTimesCircle, FaUsers, FaClipboardList, FaCalendar, FaFileAlt, FaClock, FaSignOutAlt, FaBars, FaTimes as FaClose } from "react-icons/fa";
-import { useNavigate } from "react-router-dom";
+import React, { useState, useEffect, useCallback } from "react";
+import { FaCheckCircle, FaTimesCircle, FaUsers, FaClipboardList, FaCalendar, FaFileAlt, FaClock, FaSignOutAlt, FaBars, FaTimes as FaClose, FaUpload, FaGoogle, FaVideo } from "react-icons/fa";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import axios from "axios";
+import { Calendar, momentLocalizer } from 'react-big-calendar';
+import moment from 'moment';
+import 'react-big-calendar/lib/css/react-big-calendar.css';
+
+const localizer = momentLocalizer(moment);
 
 const FacultyAdviserDashboard = ({setUser}) => {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [selectedTab, setSelectedTab] = useState("submissions");
   const [students, setStudents] = useState([]);
   const [submissions, setSubmissions] = useState([]);
   const [schedules, setSchedules] = useState([]);
   const [loading, setLoading] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  
+  // Google Calendar state
+  const [calendarConnected, setCalendarConnected] = useState(false);
+  const [calendarLoading, setCalendarLoading] = useState(false);
 
   // Fetch data on component mount
   useEffect(() => {
     fetchStudentSubmissions();
     fetchMyStudents();
     fetchSchedules();
+    checkCalendarStatus();
+    
+    // Check for calendar connection callback
+    const calendarParam = searchParams.get('calendar');
+    if (calendarParam === 'connected') {
+      setCalendarConnected(true);
+      navigate('/dashboard/faculty', { replace: true });
+    } else if (calendarParam === 'error') {
+      navigate('/dashboard/faculty', { replace: true });
+    }
   }, []);
 
   const fetchStudentSubmissions = async () => {
@@ -56,6 +76,52 @@ const FacultyAdviserDashboard = ({setUser}) => {
     }
   };
 
+  // Google Calendar functions
+  const checkCalendarStatus = async () => {
+    try {
+      const token = localStorage.getItem('token');
+      const res = await axios.get('/api/google-calendar/status', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      setCalendarConnected(res.data.connected);
+    } catch (error) {
+      console.error('Error checking calendar status:', error);
+      setCalendarConnected(false);
+    }
+  };
+
+  const connectGoogleCalendar = async () => {
+    try {
+      setCalendarLoading(true);
+      const token = localStorage.getItem('token');
+      const res = await axios.get('/api/google-calendar/auth-url', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      window.location.href = res.data.authUrl;
+    } catch (error) {
+      console.error('Error getting auth URL:', error);
+    } finally {
+      setCalendarLoading(false);
+    }
+  };
+
+  const disconnectGoogleCalendar = async () => {
+    if (!window.confirm('Are you sure you want to disconnect Google Calendar?')) return;
+    
+    try {
+      setCalendarLoading(true);
+      const token = localStorage.getItem('token');
+      await axios.post('/api/google-calendar/disconnect', {}, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      setCalendarConnected(false);
+    } catch (error) {
+      console.error('Error disconnecting calendar:', error);
+    } finally {
+      setCalendarLoading(false);
+    }
+  };
+
   const handleApproveSubmission = async (researchId, fileId) => {
     setLoading(true);
     try {
@@ -70,7 +136,6 @@ const FacultyAdviserDashboard = ({setUser}) => {
       });
       
       fetchStudentSubmissions();
-      alert('Submission approved successfully!');
     } catch (error) {
       console.error('Error approving submission:', error);
       alert('Error approving submission');
@@ -79,10 +144,7 @@ const FacultyAdviserDashboard = ({setUser}) => {
     }
   };
 
-  const handleRejectSubmission = async (researchId, fileId) => {
-    const message = prompt('Please provide feedback for rejection:');
-    if (!message) return;
-    
+  const handleRejectSubmission = async (researchId, fileId, rejectionReason) => {
     setLoading(true);
     try {
       const token = localStorage.getItem('token');
@@ -90,13 +152,12 @@ const FacultyAdviserDashboard = ({setUser}) => {
         researchId,
         fileId,
         action: 'rejected',
-        message
+        message: rejectionReason
       }, {
         headers: { Authorization: `Bearer ${token}` }
       });
       
       fetchStudentSubmissions();
-      alert('Submission rejected with feedback.');
     } catch (error) {
       console.error('Error rejecting submission:', error);
       alert('Error rejecting submission');
@@ -161,7 +222,14 @@ const FacultyAdviserDashboard = ({setUser}) => {
       case "feedback":
         return <FeedbackManagement />;
       case "schedule":
-        return <ConsultationSchedule schedules={schedules} />;
+        return <ConsultationSchedule 
+          schedules={schedules} 
+          onRefresh={fetchSchedules}
+          calendarConnected={calendarConnected}
+          onConnectCalendar={connectGoogleCalendar}
+          onDisconnectCalendar={disconnectGoogleCalendar}
+          calendarLoading={calendarLoading}
+        />;
       case "students":
         return <StudentList 
           students={students} 
@@ -346,12 +414,65 @@ const StatCard = ({ title, value, icon, color }) => {
 };
 
 // Student Submissions Component
-const StudentSubmissions = ({ submissions, onApprove, onReject, loading }) => (
+const StudentSubmissions = ({ submissions, onApprove, onReject, loading }) => {
+  const [selectedSubmission, setSelectedSubmission] = useState(null);
+  const [showRejectModal, setShowRejectModal] = useState(false);
+  const [showApproveModal, setShowApproveModal] = useState(false);
+  const [rejectionReason, setRejectionReason] = useState("");
+  const [showSuccessMessage, setShowSuccessMessage] = useState(false);
+  const [successMessage, setSuccessMessage] = useState("");
+  const [selectedForm, setSelectedForm] = useState(null);
+
+  const handleApproveClick = (research, form) => {
+    setSelectedSubmission(research);
+    setSelectedForm(form);
+    setShowApproveModal(true);
+  };
+
+  const handleRejectClick = (research, form) => {
+    setSelectedSubmission(research);
+    setSelectedForm(form);
+    setShowRejectModal(true);
+    setRejectionReason("");
+  };
+
+  const confirmApprove = async () => {
+    await onApprove(selectedSubmission._id, selectedForm._id);
+    setShowApproveModal(false);
+    setSuccessMessage("Submission has been approved successfully.");
+    setShowSuccessMessage(true);
+    setTimeout(() => setShowSuccessMessage(false), 4000);
+  };
+
+  const confirmReject = async () => {
+    if (!rejectionReason.trim()) {
+      alert("Please provide a rejection reason.");
+      return;
+    }
+    await onReject(selectedSubmission._id, selectedForm._id, rejectionReason);
+    setShowRejectModal(false);
+    setSuccessMessage("Submission has been rejected. Reason recorded.");
+    setShowSuccessMessage(true);
+    setTimeout(() => setShowSuccessMessage(false), 4000);
+    setRejectionReason("");
+  };
+
+  return (
   <div className="space-y-5">
+      {/* Success Message */}
+      {showSuccessMessage && (
+        <div className="bg-green-50 border-l-4 border-green-500 p-4 rounded-md shadow-md animate-fade-in">
+          <div className="flex items-center">
+            <FaCheckCircle className="h-5 w-5 text-green-500 mr-3" />
+            <p className="text-green-700 font-medium">{successMessage}</p>
+          </div>
+        </div>
+      )}
+
     <div className="flex justify-between items-center">
       <h2 className="text-xl font-bold text-gray-800">Student Submissions</h2>
       <span className="px-3 py-1 bg-yellow-100 text-yellow-700 rounded-full text-xs font-medium">
-        {submissions.filter(s => s.forms?.some(f => f.status === 'pending')).length} Pending Reviews
+          {submissions.reduce((count, s) => count + (s.forms?.filter(f => f.status === 'pending').length || 0), 0)} Pending Reviews
       </span>
     </div>
 
@@ -363,8 +484,7 @@ const StudentSubmissions = ({ submissions, onApprove, onReject, loading }) => (
       ) : (
         submissions.map((research) => (
           <div key={research._id} className="bg-white border border-gray-200 rounded-lg p-5 hover:shadow-md transition-shadow">
-            <div className="flex items-center justify-between">
-              <div className="flex-1">
+              <div className="mb-4 pb-4 border-b border-gray-200">
                 <div className="flex items-center space-x-3">
                   <div className="h-12 w-12 rounded-full bg-[#7C1D23] flex items-center justify-center text-white font-semibold text-lg">
                     {research.students?.[0]?.name?.charAt(0) || 'S'}
@@ -374,26 +494,45 @@ const StudentSubmissions = ({ submissions, onApprove, onReject, loading }) => (
                     <p className="text-sm text-gray-600 mt-1">
                       {research.title} • Stage: {research.stage}
                     </p>
-                    <p className="text-xs text-gray-500 mt-1">
-                      Last updated: {new Date(research.updatedAt).toLocaleDateString()}
-                    </p>
                   </div>
                 </div>
-                <div className="mt-3">
-                  <span className={`px-3 py-1 rounded-full text-xs font-medium ${
-                    research.status === "in-progress" 
-                      ? "bg-blue-100 text-blue-700" 
-                      : research.status === "pending"
-                      ? "bg-yellow-100 text-yellow-700"
-                      : "bg-green-100 text-green-700"
-                  }`}>
-                    {research.status}
+              </div>
+
+              {/* All Submitted Forms */}
+              <div className="space-y-3">
+                {research.forms?.filter(f => f.status === 'pending' || f.status === 'approved' || f.status === 'rejected').map((form, idx) => (
+                  <div key={form._id} className="bg-gray-50 rounded-lg p-4 border border-gray-200">
+                    <div className="flex items-start justify-between">
+                      <div className="flex-1">
+                        <div className="flex items-center space-x-2">
+                          <FaFileAlt className="text-gray-600" />
+                          <h4 className="font-medium text-gray-800">{form.filename || `Document ${idx + 1}`}</h4>
+                        </div>
+                        <div className="mt-2 space-y-1">
+                          <p className="text-xs text-gray-500">
+                            <span className="font-medium">Type:</span> {form.type || 'N/A'}
+                          </p>
+                          <p className="text-xs text-gray-500">
+                            <span className="font-medium">Date of Submission:</span>{" "}
+                            {form.uploadedAt ? new Date(form.uploadedAt).toLocaleString() : 'N/A'}
+                          </p>
+                          <p className="text-xs text-gray-500">
+                            <span className="font-medium">Current Status:</span>{" "}
+                            <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
+                              form.status === "pending" ? "bg-yellow-100 text-yellow-700" :
+                              form.status === "approved" ? "bg-green-100 text-green-700" :
+                              form.status === "rejected" ? "bg-red-100 text-red-700" :
+                              "bg-gray-100 text-gray-700"
+                            }`}>
+                              {form.status}
                   </span>
+                          </p>
                 </div>
               </div>
-              <div className="flex space-x-2">
+                      {form.status === 'pending' && (
+                        <div className="flex space-x-2 ml-4">
                 <button 
-                  onClick={() => onApprove(research._id, research.forms?.[0]?._id)}
+                            onClick={() => handleApproveClick(research, form)}
                   disabled={loading}
                   className="flex items-center px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors text-sm font-medium disabled:opacity-50"
                 >
@@ -401,7 +540,7 @@ const StudentSubmissions = ({ submissions, onApprove, onReject, loading }) => (
                   Approve
                 </button>
                 <button 
-                  onClick={() => onReject(research._id, research.forms?.[0]?._id)}
+                            onClick={() => handleRejectClick(research, form)}
                   disabled={loading}
                   className="flex items-center px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 transition-colors text-sm font-medium disabled:opacity-50"
                 >
@@ -409,73 +548,1580 @@ const StudentSubmissions = ({ submissions, onApprove, onReject, loading }) => (
                   Reject
                 </button>
               </div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+                {!research.forms || research.forms.length === 0 && (
+                  <p className="text-sm text-gray-500 italic">No documents submitted yet.</p>
+                )}
             </div>
           </div>
         ))
       )}
     </div>
+
+      {/* Approve Confirmation Modal */}
+      {showApproveModal && selectedSubmission && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
+          <div className="bg-white rounded-lg shadow-lg max-w-md w-full p-6">
+            <div className="flex items-center mb-4">
+              <div className="h-12 w-12 rounded-full bg-green-100 flex items-center justify-center mr-4">
+                <FaCheckCircle className="h-6 w-6 text-green-600" />
+              </div>
+              <h3 className="text-lg font-semibold text-gray-800">Approve Submission</h3>
+            </div>
+            <p className="text-gray-600 mb-6">
+              Are you sure you want to approve this submission from{" "}
+              <span className="font-semibold">{selectedSubmission.students?.[0]?.name}</span>?
+            </p>
+            <div className="bg-gray-50 rounded-lg p-3 mb-6">
+              <p className="text-sm text-gray-700">
+                <span className="font-medium">Document:</span> {selectedForm?.filename}
+              </p>
+              <p className="text-sm text-gray-700">
+                <span className="font-medium">Research:</span> {selectedSubmission.title}
+              </p>
+            </div>
+            <div className="flex justify-end space-x-3">
+              <button
+                onClick={() => setShowApproveModal(false)}
+                className="px-4 py-2 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300 transition-colors text-sm font-medium"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmApprove}
+                disabled={loading}
+                className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors text-sm font-medium disabled:opacity-50"
+              >
+                {loading ? "Approving..." : "Confirm Approval"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Reject Modal with Reason Input */}
+      {showRejectModal && selectedSubmission && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
+          <div className="bg-white rounded-lg shadow-lg max-w-md w-full p-6">
+            <div className="flex items-center mb-4">
+              <div className="h-12 w-12 rounded-full bg-red-100 flex items-center justify-center mr-4">
+                <FaTimesCircle className="h-6 w-6 text-red-600" />
+              </div>
+              <h3 className="text-lg font-semibold text-gray-800">Reject Submission</h3>
+            </div>
+            <p className="text-gray-600 mb-4">
+              Provide a reason for rejecting the submission from{" "}
+              <span className="font-semibold">{selectedSubmission.students?.[0]?.name}</span>:
+            </p>
+            <div className="bg-gray-50 rounded-lg p-3 mb-4">
+              <p className="text-sm text-gray-700">
+                <span className="font-medium">Document:</span> {selectedForm?.filename}
+              </p>
+              <p className="text-sm text-gray-700">
+                <span className="font-medium">Research:</span> {selectedSubmission.title}
+              </p>
+            </div>
+            <textarea
+              value={rejectionReason}
+              onChange={(e) => setRejectionReason(e.target.value)}
+              placeholder="Enter rejection reason (required)..."
+              rows="4"
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-transparent resize-none"
+              required
+            />
+            <div className="flex justify-end space-x-3 mt-4">
+              <button
+                onClick={() => {
+                  setShowRejectModal(false);
+                  setRejectionReason("");
+                }}
+                className="px-4 py-2 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300 transition-colors text-sm font-medium"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmReject}
+                disabled={loading || !rejectionReason.trim()}
+                className="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 transition-colors text-sm font-medium disabled:opacity-50"
+              >
+                {loading ? "Rejecting..." : "Confirm Rejection"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
   </div>
 );
+};
 
 // Feedback Management Component
-const FeedbackManagement = () => (
+const FeedbackManagement = () => {
+  const [students, setStudents] = useState([]);
+  const [feedbackList, setFeedbackList] = useState([]);
+  const [selectedStudent, setSelectedStudent] = useState("");
+  const [selectedResearch, setSelectedResearch] = useState("");
+  const [category, setCategory] = useState("general");
+  const [message, setMessage] = useState("");
+  const [file, setFile] = useState(null);
+  const [dragActive, setDragActive] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [loading, setLoading] = useState(false);
+  const [successMessage, setSuccessMessage] = useState("");
+  const [errorMessage, setErrorMessage] = useState("");
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+  const [selectedFeedback, setSelectedFeedback] = useState(null);
+
+  useEffect(() => {
+    fetchStudents();
+    fetchAllFeedback();
+  }, []);
+
+  const fetchStudents = async () => {
+    try {
+      const token = localStorage.getItem('token');
+      const res = await axios.get('/api/faculty/students', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      setStudents(res.data);
+    } catch (error) {
+      console.error('Error fetching students:', error);
+    }
+  };
+
+  const fetchAllFeedback = async () => {
+    try {
+      const token = localStorage.getItem('token');
+      const res = await axios.get('/api/faculty/feedback', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      setFeedbackList(res.data);
+    } catch (error) {
+      console.error('Error fetching feedback:', error);
+    }
+  };
+
+  const handleDrag = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.type === "dragenter" || e.type === "dragover") {
+      setDragActive(true);
+    } else if (e.type === "dragleave") {
+      setDragActive(false);
+    }
+  };
+
+  const handleDrop = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragActive(false);
+
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+      handleFileSelect(e.dataTransfer.files[0]);
+    }
+  };
+
+  const handleFileSelect = (selectedFile) => {
+    const MAX_SIZE = 10 * 1024 * 1024; // 10MB
+    const ALLOWED_TYPES = ['application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'image/jpeg', 'image/jpg', 'image/png'];
+
+    if (selectedFile.size > MAX_SIZE) {
+      setErrorMessage("File size exceeds 10MB limit");
+      setTimeout(() => setErrorMessage(""), 4000);
+      return;
+    }
+
+    if (!ALLOWED_TYPES.includes(selectedFile.type)) {
+      setErrorMessage("Unsupported file format. Allowed: PDF, Word documents, Images (JPG, PNG)");
+      setTimeout(() => setErrorMessage(""), 4000);
+      return;
+    }
+
+    setFile(selectedFile);
+    setErrorMessage("");
+  };
+
+  const handleFileChange = (e) => {
+    if (e.target.files && e.target.files[0]) {
+      handleFileSelect(e.target.files[0]);
+    }
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+
+    if (!selectedResearch) {
+      setErrorMessage("Please select a student/research");
+      return;
+    }
+
+    if (!message.trim()) {
+      setErrorMessage("Please provide feedback message");
+      return;
+    }
+
+    setLoading(true);
+    setUploadProgress(0);
+    setErrorMessage("");
+
+    try {
+      const token = localStorage.getItem('token');
+      const formData = new FormData();
+      formData.append('researchId', selectedResearch);
+      formData.append('studentId', selectedStudent);
+      formData.append('category', category);
+      formData.append('message', message);
+      if (file) {
+        formData.append('file', file);
+      }
+
+      const config = {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'multipart/form-data'
+        },
+        onUploadProgress: (progressEvent) => {
+          const progress = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+          setUploadProgress(progress);
+        }
+      };
+
+      const response = await axios.post('/api/faculty/feedback', formData, config);
+
+      setSuccessMessage(response.data.message || "Feedback uploaded successfully!");
+      setSelectedStudent("");
+      setSelectedResearch("");
+      setCategory("general");
+      setMessage("");
+      setFile(null);
+      setUploadProgress(0);
+
+      fetchAllFeedback(); // Refresh feedback list
+      setTimeout(() => setSuccessMessage(""), 4000);
+    } catch (error) {
+      console.error('Error uploading feedback:', error);
+      setErrorMessage(error.response?.data?.message || "Failed to upload feedback");
+      setTimeout(() => setErrorMessage(""), 4000);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDownload = async (feedbackId, filename) => {
+    try {
+      const token = localStorage.getItem('token');
+      const response = await axios.get(`/api/faculty/feedback/download/${feedbackId}`, {
+        headers: { Authorization: `Bearer ${token}` },
+        responseType: 'blob'
+      });
+
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', filename);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+    } catch (error) {
+      console.error('Error downloading file:', error);
+      setErrorMessage("Failed to download file");
+      setTimeout(() => setErrorMessage(""), 4000);
+    }
+  };
+
+  const handleDeleteClick = (feedback) => {
+    setSelectedFeedback(feedback);
+    setShowDeleteDialog(true);
+  };
+
+  const confirmDelete = async () => {
+    if (!selectedFeedback) return;
+
+    setLoading(true);
+    try {
+      const token = localStorage.getItem('token');
+      await axios.delete(`/api/faculty/feedback/${selectedFeedback._id}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+
+      setSuccessMessage("Feedback deleted successfully");
+      setShowDeleteDialog(false);
+      setSelectedFeedback(null);
+      fetchAllFeedback();
+      setTimeout(() => setSuccessMessage(""), 4000);
+    } catch (error) {
+      console.error('Error deleting feedback:', error);
+      setErrorMessage(error.response?.data?.message || "Failed to delete feedback");
+      setShowDeleteDialog(false);
+      setTimeout(() => setErrorMessage(""), 4000);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const formatFileSize = (bytes) => {
+    if (!bytes) return 'N/A';
+    const kb = bytes / 1024;
+    if (kb < 1024) return `${kb.toFixed(2)} KB`;
+    return `${(kb / 1024).toFixed(2)} MB`;
+  };
+
+  return (
   <div className="space-y-5">
+      {/* Success/Error Messages */}
+      {successMessage && (
+        <div className="bg-green-50 border-l-4 border-green-500 p-4 rounded-md">
+          <div className="flex items-center">
+            <FaCheckCircle className="h-5 w-5 text-green-500 mr-3" />
+            <p className="text-green-700 font-medium">{successMessage}</p>
+          </div>
+        </div>
+      )}
+
+      {errorMessage && (
+        <div className="bg-red-50 border-l-4 border-red-500 p-4 rounded-md">
+          <div className="flex items-center">
+            <FaTimesCircle className="h-5 w-5 text-red-500 mr-3" />
+            <p className="text-red-700 font-medium">{errorMessage}</p>
+          </div>
+        </div>
+      )}
+
     <h2 className="text-xl font-bold text-gray-800">Feedback Management</h2>
-    <div className="bg-gray-50 rounded-lg border border-gray-200 p-8">
-      <p className="text-gray-500 text-center text-sm">Feedback management interface coming soon.</p>
+
+      {/* Upload Feedback Form */}
+      <div className="bg-white rounded-lg border border-gray-200 p-6">
+        <h3 className="text-lg font-semibold text-gray-800 mb-4">Upload New Feedback</h3>
+        
+        <form onSubmit={handleSubmit} className="space-y-4">
+          {/* Student Selection */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Select Student/Research <span className="text-red-500">*</span>
+            </label>
+            <select
+              value={selectedResearch}
+              onChange={(e) => {
+                const research = students.find(s => s._id === e.target.value);
+                setSelectedResearch(e.target.value);
+                setSelectedStudent(research?.students[0]?._id || "");
+              }}
+              className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-transparent"
+              required
+            >
+              <option value="">-- Select Student --</option>
+              {students.map((research) => (
+                <option key={research._id} value={research._id}>
+                  {research.students.map(s => s.name).join(", ")} - {research.title}
+                </option>
+              ))}
+            </select>
     </div>
+
+          {/* Category Selection */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Feedback Category <span className="text-red-500">*</span>
+            </label>
+            <select
+              value={category}
+              onChange={(e) => setCategory(e.target.value)}
+              className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-transparent"
+              required
+            >
+              <option value="general">General Feedback</option>
+              <option value="chapter_review">Chapter Review</option>
+              <option value="progress_update">Progress Update</option>
+              <option value="revision_request">Revision Request</option>
+              <option value="approval">Approval</option>
+              <option value="other">Other</option>
+            </select>
+          </div>
+
+          {/* Message */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Feedback Message <span className="text-red-500">*</span>
+            </label>
+            <textarea
+              value={message}
+              onChange={(e) => setMessage(e.target.value)}
+              placeholder="Provide detailed feedback for the student..."
+              rows="4"
+              className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-transparent resize-none"
+              required
+            />
+          </div>
+
+          {/* File Upload - Drag & Drop */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Attach File (Optional)
+            </label>
+            <div
+              className={`border-2 border-dashed rounded-lg p-6 text-center transition-colors ${
+                dragActive ? 'border-[#7C1D23] bg-red-50' : 'border-gray-300 bg-gray-50'
+              }`}
+              onDragEnter={handleDrag}
+              onDragLeave={handleDrag}
+              onDragOver={handleDrag}
+              onDrop={handleDrop}
+            >
+              {file ? (
+                <div className="space-y-2">
+                  <FaFileAlt className="mx-auto h-12 w-12 text-[#7C1D23]" />
+                  <p className="text-sm font-medium text-gray-800">{file.name}</p>
+                  <p className="text-xs text-gray-500">{formatFileSize(file.size)}</p>
+                  <button
+                    type="button"
+                    onClick={() => setFile(null)}
+                    className="text-sm text-red-600 hover:text-red-700"
+                  >
+                    Remove File
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <FaUpload className="mx-auto h-12 w-12 text-gray-400" />
+                  <p className="text-sm text-gray-600">
+                    Drag and drop a file here, or{" "}
+                    <label className="text-[#7C1D23] hover:text-[#5a1519] cursor-pointer font-medium">
+                      browse
+                      <input
+                        type="file"
+                        className="hidden"
+                        onChange={handleFileChange}
+                        accept=".pdf,.doc,.docx,.jpg,.jpeg,.png"
+                      />
+                    </label>
+                  </p>
+                  <p className="text-xs text-gray-500">
+                    Supported: PDF, Word (.doc, .docx), Images (.jpg, .png) • Max 10MB
+                  </p>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Upload Progress */}
+          {uploadProgress > 0 && uploadProgress < 100 && (
+            <div>
+              <div className="flex justify-between text-sm text-gray-600 mb-1">
+                <span>Uploading...</span>
+                <span>{uploadProgress}%</span>
+              </div>
+              <div className="w-full bg-gray-200 rounded-full h-2">
+                <div
+                  className="bg-[#7C1D23] h-2 rounded-full transition-all duration-300"
+                  style={{ width: `${uploadProgress}%` }}
+                ></div>
+              </div>
+            </div>
+          )}
+
+          {/* Submit Button */}
+          <div className="flex justify-end">
+            <button
+              type="submit"
+              disabled={loading}
+              className="px-6 py-2 bg-[#7C1D23] text-white rounded-md hover:bg-[#5a1519] transition-colors text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {loading ? "Uploading..." : "Upload Feedback"}
+            </button>
+          </div>
+        </form>
+      </div>
+
+      {/* Uploaded Feedback List */}
+      <div className="bg-white rounded-lg border border-gray-200 p-6">
+        <h3 className="text-lg font-semibold text-gray-800 mb-4">Previously Uploaded Feedback</h3>
+        
+        {feedbackList.length === 0 ? (
+          <div className="text-center py-8">
+            <FaFileAlt className="mx-auto h-12 w-12 text-gray-400 mb-3" />
+            <p className="text-gray-500 text-sm">No feedback uploaded yet.</p>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {feedbackList.map((feedback) => (
+              <div key={feedback._id} className="border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow">
+                <div className="flex items-start justify-between">
+                  <div className="flex-1">
+                    <div className="flex items-center space-x-2 mb-2">
+                      <span className={`px-2 py-1 rounded-full text-xs font-medium ${
+                        feedback.category === 'approval' ? 'bg-green-100 text-green-700' :
+                        feedback.category === 'revision_request' ? 'bg-orange-100 text-orange-700' :
+                        feedback.category === 'chapter_review' ? 'bg-blue-100 text-blue-700' :
+                        'bg-gray-100 text-gray-700'
+                      }`}>
+                        {feedback.category.replace('_', ' ').toUpperCase()}
+                      </span>
+                      <span className="text-xs text-gray-500">Version {feedback.version}</span>
+                    </div>
+                    <h4 className="font-semibold text-gray-800">
+                      To: {feedback.student?.name}
+                    </h4>
+                    <p className="text-sm text-gray-600 mt-1">
+                      Research: {feedback.research?.title}
+                    </p>
+                    <p className="text-sm text-gray-700 mt-2">{feedback.message}</p>
+                    {feedback.file && (
+                      <div className="mt-2 flex items-center space-x-2 text-sm text-gray-600">
+                        <FaFileAlt className="text-[#7C1D23]" />
+                        <span>{feedback.file.filename}</span>
+                        <span className="text-xs">({formatFileSize(feedback.file.filesize)})</span>
+                      </div>
+                    )}
+                    <p className="text-xs text-gray-500 mt-2">
+                      {new Date(feedback.createdAt).toLocaleString()}
+                    </p>
+                  </div>
+                  <div className="flex flex-col space-y-1 ml-4">
+                    {feedback.file && (
+                      <button
+                        onClick={() => handleDownload(feedback._id, feedback.file.filename)}
+                        className="px-3 py-1 bg-blue-100 text-blue-700 rounded-md hover:bg-blue-200 text-xs font-medium"
+                      >
+                        Download
+                      </button>
+                    )}
+                    <button
+                      onClick={() => handleDeleteClick(feedback)}
+                      className="px-3 py-1 bg-red-100 text-red-700 rounded-md hover:bg-red-200 text-xs font-medium"
+                    >
+                      Delete
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Delete Confirmation Dialog */}
+      {showDeleteDialog && selectedFeedback && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
+          <div className="bg-white rounded-lg shadow-lg max-w-md w-full p-6">
+            <div className="flex items-center mb-4">
+              <div className="h-12 w-12 rounded-full bg-red-100 flex items-center justify-center mr-4">
+                <FaTimesCircle className="h-6 w-6 text-red-600" />
+              </div>
+              <h3 className="text-lg font-semibold text-gray-800">Delete Feedback</h3>
+            </div>
+
+            <p className="text-gray-600 mb-4">
+              Are you sure you want to delete this feedback?
+            </p>
+
+            <div className="bg-gray-50 rounded-lg p-3 mb-4">
+              <p className="text-sm text-gray-700">
+                <span className="font-medium">Student:</span> {selectedFeedback.student?.name}
+              </p>
+              <p className="text-sm text-gray-700">
+                <span className="font-medium">Category:</span> {selectedFeedback.category}
+              </p>
+              {selectedFeedback.file && (
+                <p className="text-sm text-gray-700">
+                  <span className="font-medium">File:</span> {selectedFeedback.file.filename}
+                </p>
+              )}
+            </div>
+
+            <p className="text-sm text-gray-500 mb-6">
+              This action cannot be undone.
+            </p>
+
+            <div className="flex justify-end space-x-3">
+              <button
+                onClick={() => setShowDeleteDialog(false)}
+                className="px-4 py-2 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300 transition-colors text-sm font-medium"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmDelete}
+                disabled={loading}
+                className="px-6 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 transition-colors text-sm font-medium disabled:opacity-50"
+              >
+                {loading ? "Deleting..." : "Delete"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
   </div>
 );
+};
 
 // Consultation Schedule Component
-const ConsultationSchedule = ({ schedules }) => (
+const ConsultationSchedule = ({ schedules, onRefresh, calendarConnected, onConnectCalendar, onDisconnectCalendar, calendarLoading }) => {
+  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+  const [selectedSchedule, setSelectedSchedule] = useState(null);
+  const [viewMode, setViewMode] = useState("list"); // "list" or "calendar"
+  const [selectedDate, setSelectedDate] = useState(new Date());
+  const [selectedEvent, setSelectedEvent] = useState(null);
+  const [calendarView, setCalendarView] = useState("week"); // "month", "week", "day", "agenda"
+  const [formData, setFormData] = useState({
+    title: "",
+    description: "",
+    datetime: "",
+    duration: 60,
+    location: "",
+    syncToCalendar: true
+  });
+  const [loading, setLoading] = useState(false);
+  const [successMessage, setSuccessMessage] = useState("");
+  const [errorMessage, setErrorMessage] = useState("");
+  const [refreshTrigger, setRefreshTrigger] = useState(0);
+
+  // Convert schedules to calendar events format
+  const calendarEvents = schedules.map(schedule => ({
+    id: schedule._id,
+    title: schedule.title,
+    start: new Date(schedule.datetime),
+    end: new Date(new Date(schedule.datetime).getTime() + (schedule.duration || 60) * 60000),
+    resource: schedule,
+  }));
+
+  const handleCreateSlot = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+    setErrorMessage("");
+
+    // Validate datetime before submission
+    if (!formData.datetime) {
+      setErrorMessage("Please select a date and time for the consultation");
+      setLoading(false);
+      return;
+    }
+
+    // Validate that datetime is not in the past
+    const selectedDate = new Date(formData.datetime);
+    if (selectedDate < new Date()) {
+      setErrorMessage("Cannot schedule consultations in the past");
+      setLoading(false);
+      return;
+    }
+
+    try {
+      const token = localStorage.getItem('token');
+      const response = await axios.post('/api/faculty/schedules', formData, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+
+      setSuccessMessage(response.data.message || "Consultation slot created successfully.");
+      setShowCreateModal(false);
+      setFormData({
+        title: "",
+        description: "",
+        datetime: "",
+        duration: 60,
+        location: "",
+        syncToCalendar: true
+      });
+      
+      // Refresh schedules
+      if (onRefresh) onRefresh();
+      
+      setTimeout(() => setSuccessMessage(""), 4000);
+    } catch (error) {
+      console.error("Error creating consultation slot:", error);
+      setErrorMessage(error.response?.data?.message || "Failed to create consultation slot. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Calendar event handlers
+  const handleSelectSlot = ({start, end}) => {
+    setFormData({
+      ...formData,
+      datetime: moment(start).format('YYYY-MM-DDTHH:mm'),
+      duration: Math.round((end - start) / 60000)
+    });
+    setShowCreateModal(true);
+  };
+
+  const handleSelectEvent = (event) => {
+    setSelectedEvent(event.resource);
+    setShowEditModal(true);
+  };
+
+  const handleEventDrop = async ({ event, start, end }) => {
+    try {
+      const token = localStorage.getItem('token');
+      await axios.put('/api/faculty/schedules/update', {
+        scheduleId: event.id,
+        datetime: start.toISOString(),
+        duration: Math.round((end - start) / 60000)
+      }, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (onRefresh) onRefresh();
+      setSuccessMessage("Schedule updated successfully!");
+      setTimeout(() => setSuccessMessage(""), 3000);
+    } catch (error) {
+      setErrorMessage("Failed to update schedule");
+      setTimeout(() => setErrorMessage(""), 3000);
+    }
+  };
+
+  const handleApproveRequest = async (scheduleId, participantId) => {
+    setLoading(true);
+    try {
+      const token = localStorage.getItem('token');
+      await axios.put('/api/faculty/schedules/status', {
+        scheduleId,
+        participantId,
+        action: "approve"
+      }, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+
+      setSuccessMessage("Consultation request approved successfully.");
+      window.location.reload();
+      setTimeout(() => setSuccessMessage(""), 4000);
+    } catch (error) {
+      console.error("Error approving request:", error);
+      setErrorMessage(error.response?.data?.message || "Failed to approve request.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDeclineRequest = async (scheduleId, participantId) => {
+    if (!window.confirm("Are you sure you want to decline this consultation request?")) return;
+
+    setLoading(true);
+    try {
+      const token = localStorage.getItem('token');
+      await axios.put('/api/faculty/schedules/status', {
+        scheduleId,
+        participantId,
+        action: "decline"
+      }, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+
+      setSuccessMessage("Consultation request declined.");
+      window.location.reload();
+      setTimeout(() => setSuccessMessage(""), 4000);
+    } catch (error) {
+      console.error("Error declining request:", error);
+      setErrorMessage(error.response?.data?.message || "Failed to decline request.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleCancelConsultation = async (scheduleId) => {
+    const reason = prompt("Please provide a reason for cancellation:");
+    if (!reason) return;
+
+    setLoading(true);
+    try {
+      const token = localStorage.getItem('token');
+      await axios.put('/api/faculty/schedules/cancel', {
+        scheduleId,
+        reason
+      }, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+
+      setSuccessMessage("Consultation cancelled successfully.");
+      window.location.reload();
+      setTimeout(() => setSuccessMessage(""), 4000);
+    } catch (error) {
+      console.error("Error cancelling consultation:", error);
+      setErrorMessage(error.response?.data?.message || "Failed to cancel consultation.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleEditClick = (schedule) => {
+    setSelectedSchedule(schedule);
+    const datetimeLocal = new Date(schedule.datetime).toISOString().slice(0, 16);
+    setFormData({
+      title: schedule.title,
+      description: schedule.description || "",
+      datetime: datetimeLocal,
+      duration: schedule.duration,
+      location: schedule.location
+    });
+    setShowEditModal(true);
+  };
+
+  const handleEditSubmit = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+    setErrorMessage("");
+
+    try {
+      const token = localStorage.getItem('token');
+      const response = await axios.put('/api/faculty/schedules/update', {
+        scheduleId: selectedSchedule._id,
+        ...formData
+      }, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+
+      setSuccessMessage(response.data.message || "Consultation slot updated successfully.");
+      setShowEditModal(false);
+      setSelectedSchedule(null);
+      setFormData({
+        title: "",
+        description: "",
+        datetime: "",
+        duration: 60,
+        location: ""
+      });
+      
+      window.location.reload(); // Refresh to get updated schedules
+      setTimeout(() => setSuccessMessage(""), 4000);
+    } catch (error) {
+      console.error("Error updating consultation slot:", error);
+      setErrorMessage(error.response?.data?.message || "Failed to update consultation slot. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDeleteClick = (schedule) => {
+    setSelectedSchedule(schedule);
+    setShowDeleteDialog(true);
+  };
+
+  const confirmDelete = async () => {
+    if (!selectedSchedule) return;
+
+    setLoading(true);
+    try {
+      const token = localStorage.getItem('token');
+      const response = await axios.delete(`/api/faculty/schedules/${selectedSchedule._id}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+
+      setSuccessMessage(response.data.message || "Consultation slot deleted successfully.");
+      setShowDeleteDialog(false);
+      setSelectedSchedule(null);
+      
+      window.location.reload(); // Refresh to remove deleted schedule
+      setTimeout(() => setSuccessMessage(""), 4000);
+    } catch (error) {
+      console.error("Error deleting consultation slot:", error);
+      setErrorMessage(error.response?.data?.message || "Failed to delete consultation slot.");
+      setShowDeleteDialog(false);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Filter schedules by date
+  const upcomingSchedules = schedules.filter(s => 
+    new Date(s.datetime) > new Date() && s.status !== 'cancelled'
+  ).sort((a, b) => new Date(a.datetime) - new Date(b.datetime));
+
+  const pendingRequests = schedules.filter(s => 
+    s.participants?.some(p => p.role === 'student' && p.status === 'invited')
+  );
+
+  const confirmedSchedules = schedules.filter(s => s.status === 'confirmed');
+
+  // Check if a time slot is available
+  const isTimeSlotAvailable = (datetime) => {
+    const targetDate = new Date(datetime);
+    return !schedules.some(s => {
+      const scheduleDate = new Date(s.datetime);
+      const timeDiff = Math.abs(scheduleDate - targetDate) / 60000; // in minutes
+      return timeDiff < 60 && s.status !== 'cancelled';
+    });
+  };
+
+  return (
   <div className="space-y-5">
-    <h2 className="text-xl font-bold text-gray-800">Consultation Schedule</h2>
-    
-    <div className="space-y-4">
-      {schedules.length === 0 ? (
-        <div className="bg-gray-50 rounded-lg border border-gray-200 p-8">
-          <p className="text-gray-500 text-center text-sm">No consultation schedules yet.</p>
+      {/* Success/Error Messages */}
+      {successMessage && (
+        <div className="bg-green-50 border-l-4 border-green-500 p-4 rounded-md">
+          <div className="flex items-center">
+            <FaCheckCircle className="h-5 w-5 text-green-500 mr-3" />
+            <p className="text-green-700 font-medium">{successMessage}</p>
+          </div>
+        </div>
+      )}
+
+      {errorMessage && (
+        <div className="bg-red-50 border-l-4 border-red-500 p-4 rounded-md">
+          <div className="flex items-center">
+            <FaTimesCircle className="h-5 w-5 text-red-500 mr-3" />
+            <p className="text-red-700 font-medium">{errorMessage}</p>
+          </div>
+        </div>
+      )}
+
+      {/* Header */}
+      <div className="flex justify-between items-center">
+        <h2 className="text-xl font-bold text-gray-800">Consultation Schedule Management</h2>
+        <div className="flex space-x-2">
+          <button
+            onClick={() => setViewMode(viewMode === "list" ? "calendar" : "list")}
+            className="px-4 py-2 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300 transition-colors text-sm font-medium"
+          >
+            <FaCalendar className="inline mr-2" />
+            {viewMode === "list" ? "Calendar View" : "List View"}
+          </button>
+          <button
+            onClick={() => setShowCreateModal(true)}
+            className="px-4 py-2 bg-[#7C1D23] text-white rounded-md hover:bg-[#5a1519] transition-colors text-sm font-medium"
+          >
+            + Add Consultation Slot
+          </button>
+        </div>
+      </div>
+
+      {/* Quick Stats */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="bg-yellow-50 rounded-lg p-4 border border-yellow-200">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-2xl font-bold text-yellow-700">{pendingRequests.length}</p>
+              <p className="text-xs text-yellow-600 font-medium uppercase">Pending Requests</p>
+            </div>
+            <FaClock className="h-8 w-8 text-yellow-600" />
+          </div>
+        </div>
+        <div className="bg-green-50 rounded-lg p-4 border border-green-200">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-2xl font-bold text-green-700">{confirmedSchedules.length}</p>
+              <p className="text-xs text-green-600 font-medium uppercase">Confirmed</p>
+            </div>
+            <FaCheckCircle className="h-8 w-8 text-green-600" />
+          </div>
+        </div>
+        <div className="bg-blue-50 rounded-lg p-4 border border-blue-200">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-2xl font-bold text-blue-700">{upcomingSchedules.length}</p>
+              <p className="text-xs text-blue-600 font-medium uppercase">Upcoming</p>
+            </div>
+            <FaCalendar className="h-8 w-8 text-blue-600" />
+          </div>
+        </div>
+      </div>
+
+      {/* Pending Requests Section */}
+      {pendingRequests.length > 0 && (
+        <div className="bg-yellow-50 rounded-lg border border-yellow-200 p-5">
+          <h3 className="text-lg font-semibold text-gray-800 mb-4 flex items-center">
+            <FaClock className="mr-2 text-yellow-600" />
+            Pending Consultation Requests ({pendingRequests.length})
+          </h3>
+          <div className="space-y-3">
+            {pendingRequests.map((schedule) => {
+              const studentParticipant = schedule.participants?.find(p => p.role === 'student');
+              return (
+                <div key={schedule._id} className="bg-white rounded-lg p-4 border border-yellow-300">
+                  <div className="flex items-start justify-between">
+                    <div className="flex-1">
+                      <h4 className="font-semibold text-gray-800">{schedule.title}</h4>
+                      <p className="text-sm text-gray-600 mt-1">
+                        Student: {studentParticipant?.user?.name || 'N/A'}
+                      </p>
+                      <p className="text-sm text-gray-500">
+                        <FaCalendar className="inline mr-1" />
+                        {new Date(schedule.datetime).toLocaleString()}
+                      </p>
+                      <p className="text-sm text-gray-500">
+                        Location: {schedule.location}
+                      </p>
+                    </div>
+                    <div className="flex space-x-2 ml-4">
+                      <button
+                        onClick={() => handleApproveRequest(schedule._id, studentParticipant?.user?._id)}
+                        disabled={loading}
+                        className="px-3 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 text-sm font-medium disabled:opacity-50"
+                      >
+                        <FaCheckCircle className="inline mr-1" />
+                        Approve
+                      </button>
+                      <button
+                        onClick={() => handleDeclineRequest(schedule._id, studentParticipant?.user?._id)}
+                        disabled={loading}
+                        className="px-3 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 text-sm font-medium disabled:opacity-50"
+                      >
+                        <FaTimesCircle className="inline mr-1" />
+                        Decline
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Google Calendar Connection */}
+      <div className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm mb-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center space-x-3">
+            <FaGoogle className={`text-2xl ${calendarConnected ? 'text-green-600' : 'text-gray-400'}`} />
+            <div>
+              <h3 className="font-semibold text-gray-800">Google Calendar Integration</h3>
+              <p className="text-sm text-gray-600">
+                {calendarConnected 
+                  ? '✅ Connected - Schedules sync automatically' 
+                  : '❌ Not connected - Connect to enable sync'}
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={calendarConnected ? onDisconnectCalendar : onConnectCalendar}
+            disabled={calendarLoading}
+            className={`px-4 py-2 rounded-md font-medium text-sm transition-colors ${
+              calendarConnected
+                ? 'bg-red-500 hover:bg-red-600 text-white'
+                : 'bg-blue-600 hover:bg-blue-700 text-white'
+            } ${calendarLoading ? 'opacity-50 cursor-not-allowed' : ''}`}
+          >
+            {calendarLoading ? 'Loading...' : calendarConnected ? 'Disconnect' : 'Connect Calendar'}
+          </button>
+        </div>
+      </div>
+
+      {/* Calendar View */}
+      {viewMode === "calendar" ? (
+        <div className="bg-white rounded-lg border border-gray-200 p-4 shadow-sm" style={{ height: '700px' }}>
+          <style>{`
+            .rbc-toolbar {
+              display: flex !important;
+              flex-wrap: wrap !important;
+              justify-content: space-between !important;
+              align-items: center !important;
+              margin-bottom: 15px !important;
+              padding: 10px 0 !important;
+            }
+            .rbc-toolbar button {
+              color: #333 !important;
+              border: 1px solid #ccc !important;
+              background-color: #fff !important;
+              padding: 8px 16px !important;
+              border-radius: 6px !important;
+              cursor: pointer !important;
+              font-size: 14px !important;
+              font-weight: 500 !important;
+              margin: 2px !important;
+              transition: all 0.2s !important;
+              pointer-events: auto !important;
+              user-select: none !important;
+            }
+            .rbc-toolbar button:hover {
+              background-color: #f3f4f6 !important;
+              border-color: #9ca3af !important;
+            }
+            .rbc-toolbar button:active,
+            .rbc-toolbar button.rbc-active {
+              background-color: #7C1D23 !important;
+              color: #fff !important;
+              border-color: #7C1D23 !important;
+            }
+            .rbc-toolbar button:focus {
+              outline: 2px solid #7C1D23 !important;
+              outline-offset: 2px !important;
+            }
+            .rbc-btn-group {
+              display: inline-flex !important;
+              gap: 4px !important;
+            }
+            .rbc-toolbar-label {
+              font-size: 18px !important;
+              font-weight: 600 !important;
+              color: #1f2937 !important;
+              padding: 0 12px !important;
+            }
+            .rbc-month-view,
+            .rbc-time-view,
+            .rbc-agenda-view {
+              min-height: 500px !important;
+            }
+            .rbc-event {
+              padding: 4px 8px !important;
+              border-radius: 4px !important;
+              font-size: 13px !important;
+              cursor: pointer !important;
+            }
+            .rbc-agenda-view table {
+              width: 100% !important;
+            }
+            .rbc-agenda-view .rbc-agenda-date-cell,
+            .rbc-agenda-view .rbc-agenda-time-cell {
+              white-space: nowrap !important;
+              padding: 8px 12px !important;
+            }
+            .rbc-agenda-view .rbc-agenda-event-cell {
+              padding: 8px 12px !important;
+            }
+            .rbc-agenda-empty {
+              text-align: center !important;
+              padding: 40px !important;
+              color: #6b7280 !important;
+              font-size: 14px !important;
+            }
+          `}</style>
+          <Calendar
+            localizer={localizer}
+            events={calendarEvents}
+            startAccessor="start"
+            endAccessor="end"
+            date={selectedDate}
+            view={calendarView}
+            onNavigate={(newDate) => setSelectedDate(newDate)}
+            onView={(newView) => setCalendarView(newView)}
+            style={{ height: '100%' }}
+            onSelectSlot={handleSelectSlot}
+            onSelectEvent={handleSelectEvent}
+            onEventDrop={handleEventDrop}
+            selectable
+            resizable
+            views={['month', 'week', 'day', 'agenda']}
+            step={30}
+            showMultiDayTimes
+            popup
+            messages={{
+              date: 'Date',
+              time: 'Time',
+              event: 'Consultation',
+              allDay: 'All Day',
+              week: 'Week',
+              work_week: 'Work Week',
+              day: 'Day',
+              month: 'Month',
+              previous: 'Back',
+              next: 'Next',
+              yesterday: 'Yesterday',
+              tomorrow: 'Tomorrow',
+              today: 'Today',
+              agenda: 'Agenda',
+              noEventsInRange: 'No consultations scheduled in this range.',
+              showMore: total => `+${total} more`
+            }}
+            eventPropGetter={(event) => ({
+              style: {
+                backgroundColor: event.resource.calendarSynced ? '#10b981' : '#7C1D23',
+                borderColor: event.resource.calendarSynced ? '#059669' : '#5a1519',
+              }
+            })}
+            tooltipAccessor={(event) => `${event.title} - ${event.resource.location}`}
+          />
         </div>
       ) : (
-        schedules.map((schedule) => (
-          <div key={schedule._id} className="bg-white border border-gray-200 rounded-lg p-5 hover:shadow-md transition-shadow">
-            <div className="flex items-center justify-between">
-              <div>
+        /* Schedules List */
+        <div className="space-y-4">
+          {schedules.length === 0 ? (
+            <div className="bg-gray-50 rounded-lg border border-gray-200 p-8">
+              <FaCalendar className="mx-auto h-12 w-12 text-gray-400 mb-3" />
+              <p className="text-gray-500 text-center text-sm">No consultation schedules yet.</p>
+              <p className="text-gray-400 text-center text-xs mt-1">Click "Add Consultation Slot" to create your first slot.</p>
+            </div>
+          ) : (
+            upcomingSchedules.map((schedule) => {
+            const studentParticipant = schedule.participants?.find(p => p.role === 'student');
+            const isApproaching = new Date(schedule.datetime) - new Date() < 24 * 60 * 60 * 1000; // Within 24 hours
+
+            return (
+              <div 
+                key={schedule._id} 
+                className={`bg-white border rounded-lg p-5 hover:shadow-md transition-shadow ${
+                  isApproaching ? 'border-orange-300 bg-orange-50' : 'border-gray-200'
+                }`}
+              >
+                <div className="flex items-start justify-between">
+                  <div className="flex-1">
+                    {isApproaching && (
+                      <div className="mb-2">
+                        <span className="px-2 py-1 bg-orange-100 text-orange-700 rounded-full text-xs font-medium">
+                          <FaClock className="inline mr-1" />
+                          Approaching Soon
+                        </span>
+                      </div>
+                    )}
                 <h3 className="text-base font-semibold text-gray-800">{schedule.title}</h3>
                 <p className="text-sm text-gray-600 mt-1">
-                  with {schedule.participants?.find(p => p.role === 'student')?.user?.name || 'Student'}
-                </p>
-                <p className="text-sm text-gray-500 mt-1">{schedule.location}</p>
-              </div>
-              <div className="text-right">
-                <p className="text-lg font-bold text-[#7C1D23]">
-                  {new Date(schedule.datetime).toLocaleDateString()}
-                </p>
-                <p className="text-sm text-gray-600 mt-1">
-                  {new Date(schedule.datetime).toLocaleTimeString()}
-                </p>
-                <span className={`mt-2 px-2 py-1 rounded-full text-xs font-medium ${
+                      {studentParticipant ? `with ${studentParticipant.user?.name}` : 'Available Slot'}
+                    </p>
+                    <p className="text-sm text-gray-500 mt-1">
+                      <FaCalendar className="inline mr-1" />
+                      {new Date(schedule.datetime).toLocaleDateString()} at {new Date(schedule.datetime).toLocaleTimeString()}
+                    </p>
+                    <p className="text-sm text-gray-500">Location: {schedule.location}</p>
+                    <p className="text-sm text-gray-500">Duration: {schedule.duration} minutes</p>
+                  </div>
+                  <div className="text-right ml-4 space-y-2">
+                    <span className={`px-3 py-1 rounded-full text-xs font-medium block ${
                   schedule.status === 'confirmed' ? 'bg-green-100 text-green-700' :
                   schedule.status === 'scheduled' ? 'bg-blue-100 text-blue-700' :
-                  'bg-gray-100 text-gray-700'
+                      schedule.status === 'cancelled' ? 'bg-gray-100 text-gray-700' :
+                      'bg-yellow-100 text-yellow-700'
                 }`}>
                   {schedule.status}
                 </span>
+                    {schedule.status !== 'cancelled' && (
+                      <div className="flex flex-col space-y-1">
+                        <button
+                          onClick={() => handleEditClick(schedule)}
+                          className="px-3 py-1 bg-blue-100 text-blue-700 rounded-md hover:bg-blue-200 text-xs font-medium"
+                        >
+                          Edit
+                        </button>
+                        <button
+                          onClick={() => handleDeleteClick(schedule)}
+                          className="px-3 py-1 bg-red-100 text-red-700 rounded-md hover:bg-red-200 text-xs font-medium"
+                        >
+                          Delete
+                        </button>
               </div>
+                    )}
             </div>
           </div>
-        ))
+              </div>
+            );
+          })
+        )}
+        </div>
       )}
-    </div>
+
+      {/* Create Consultation Slot Modal */}
+      {showCreateModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
+          <div className="bg-white rounded-lg shadow-lg max-w-2xl w-full p-6 max-h-[90vh] overflow-y-auto">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-semibold text-gray-800">Create Consultation Slot</h3>
+              <button
+                onClick={() => setShowCreateModal(false)}
+                className="text-gray-500 hover:text-gray-700"
+              >
+                <FaClose className="h-6 w-6" />
+              </button>
+            </div>
+
+            <form onSubmit={handleCreateSlot} className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Title <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  value={formData.title}
+                  onChange={(e) => setFormData({...formData, title: e.target.value})}
+                  placeholder="e.g., Weekly Consultation"
+                  className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-transparent"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Description
+                </label>
+                <textarea
+                  value={formData.description}
+                  onChange={(e) => setFormData({...formData, description: e.target.value})}
+                  placeholder="Brief description of the consultation"
+                  rows="3"
+                  className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-transparent"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Date & Time <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="datetime-local"
+                  value={formData.datetime}
+                  onChange={(e) => setFormData({...formData, datetime: e.target.value})}
+                  min={new Date().toISOString().slice(0, 16)}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-transparent"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Duration (minutes) <span className="text-red-500">*</span>
+                </label>
+                <select
+                  value={formData.duration}
+                  onChange={(e) => setFormData({...formData, duration: parseInt(e.target.value)})}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-transparent"
+                  required
+                >
+                  <option value="30">30 minutes</option>
+                  <option value="60">1 hour</option>
+                  <option value="90">1.5 hours</option>
+                  <option value="120">2 hours</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Location <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  value={formData.location}
+                  onChange={(e) => setFormData({...formData, location: e.target.value})}
+                  placeholder="e.g., Faculty Office, Room 301"
+                  className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-transparent"
+                  required
+                />
+              </div>
+
+              {/* Google Calendar Sync Toggle */}
+              {calendarConnected && (
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                  <div className="flex items-center space-x-3">
+                    <input
+                      type="checkbox"
+                      id="syncToCalendar"
+                      checked={formData.syncToCalendar}
+                      onChange={(e) => setFormData({...formData, syncToCalendar: e.target.checked})}
+                      className="w-5 h-5 text-blue-600 rounded focus:ring-blue-500"
+                    />
+                    <label htmlFor="syncToCalendar" className="flex-1 cursor-pointer">
+                      <div className="flex items-center space-x-2">
+                        <FaGoogle className="text-blue-600" />
+                        <span className="font-medium text-gray-800">Sync to Google Calendar</span>
+                      </div>
+                      <p className="text-sm text-gray-600 mt-1">
+                        Automatically add to Google Calendar and generate a Meet link
+                      </p>
+                    </label>
+                  </div>
+                </div>
+              )}
+
+              {!calendarConnected && (
+                <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3">
+                  <p className="text-sm text-yellow-800">
+                    💡 Connect Google Calendar above to enable automatic sync
+                  </p>
+                </div>
+              )}
+
+              <div className="flex justify-end space-x-3 pt-4">
+                <button
+                  type="button"
+                  onClick={() => setShowCreateModal(false)}
+                  className="px-4 py-2 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300 transition-colors text-sm font-medium"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={loading}
+                  className="px-6 py-2 bg-[#7C1D23] text-white rounded-md hover:bg-[#5a1519] transition-colors text-sm font-medium disabled:opacity-50"
+                >
+                  {loading ? "Creating..." : "Create Slot"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Consultation Slot Modal */}
+      {showEditModal && selectedSchedule && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
+          <div className="bg-white rounded-lg shadow-lg max-w-2xl w-full p-6 max-h-[90vh] overflow-y-auto">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-semibold text-gray-800">Edit Consultation Slot</h3>
+              <button
+                onClick={() => setShowEditModal(false)}
+                className="text-gray-500 hover:text-gray-700"
+              >
+                <FaClose className="h-6 w-6" />
+              </button>
+            </div>
+
+            {selectedSchedule.participants?.some(p => p.role === 'student') && (
+              <div className="mb-4 p-3 bg-yellow-50 border-l-4 border-yellow-400 rounded">
+                <p className="text-sm text-yellow-800">
+                  <strong>Note:</strong> This slot has students booked. They will be notified of any changes.
+                </p>
+              </div>
+            )}
+
+            <form onSubmit={handleEditSubmit} className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Title <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  value={formData.title}
+                  onChange={(e) => setFormData({...formData, title: e.target.value})}
+                  placeholder="e.g., Weekly Consultation"
+                  className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-transparent"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Description
+                </label>
+                <textarea
+                  value={formData.description}
+                  onChange={(e) => setFormData({...formData, description: e.target.value})}
+                  placeholder="Brief description of the consultation"
+                  rows="3"
+                  className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-transparent"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Date & Time <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="datetime-local"
+                  value={formData.datetime}
+                  onChange={(e) => setFormData({...formData, datetime: e.target.value})}
+                  min={new Date().toISOString().slice(0, 16)}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-transparent"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Duration (minutes) <span className="text-red-500">*</span>
+                </label>
+                <select
+                  value={formData.duration}
+                  onChange={(e) => setFormData({...formData, duration: parseInt(e.target.value)})}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-transparent"
+                  required
+                >
+                  <option value="30">30 minutes</option>
+                  <option value="60">1 hour</option>
+                  <option value="90">1.5 hours</option>
+                  <option value="120">2 hours</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Location <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  value={formData.location}
+                  onChange={(e) => setFormData({...formData, location: e.target.value})}
+                  placeholder="e.g., Faculty Office, Room 301"
+                  className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-transparent"
+                  required
+                />
+              </div>
+
+              <div className="flex justify-end space-x-3 pt-4">
+                <button
+                  type="button"
+                  onClick={() => setShowEditModal(false)}
+                  className="px-4 py-2 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300 transition-colors text-sm font-medium"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={loading}
+                  className="px-6 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors text-sm font-medium disabled:opacity-50"
+                >
+                  {loading ? "Updating..." : "Update Slot"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Dialog */}
+      {showDeleteDialog && selectedSchedule && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
+          <div className="bg-white rounded-lg shadow-lg max-w-md w-full p-6">
+            <div className="flex items-center mb-4">
+              <div className="h-12 w-12 rounded-full bg-red-100 flex items-center justify-center mr-4">
+                <FaTimesCircle className="h-6 w-6 text-red-600" />
+              </div>
+              <h3 className="text-lg font-semibold text-gray-800">Delete Consultation Slot</h3>
+            </div>
+
+            <p className="text-gray-600 mb-4">
+              Are you sure you want to delete this consultation slot?
+            </p>
+
+            <div className="bg-gray-50 rounded-lg p-3 mb-4">
+              <p className="text-sm text-gray-700">
+                <span className="font-medium">Title:</span> {selectedSchedule.title}
+              </p>
+              <p className="text-sm text-gray-700">
+                <span className="font-medium">Date/Time:</span> {new Date(selectedSchedule.datetime).toLocaleString()}
+              </p>
+              <p className="text-sm text-gray-700">
+                <span className="font-medium">Location:</span> {selectedSchedule.location}
+              </p>
+            </div>
+
+            {selectedSchedule.participants?.some(p => p.role === 'student') && (
+              <div className="mb-4 p-3 bg-red-50 border-l-4 border-red-400 rounded">
+                <p className="text-sm text-red-800">
+                  <strong>Warning:</strong> Students with booked appointments will receive automatic cancellation notifications.
+                </p>
+              </div>
+            )}
+
+            <p className="text-sm text-gray-500 mb-6">
+              This action cannot be undone. The slot will be permanently removed from the calendar.
+            </p>
+
+            <div className="flex justify-end space-x-3">
+              <button
+                onClick={() => setShowDeleteDialog(false)}
+                className="px-4 py-2 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300 transition-colors text-sm font-medium"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmDelete}
+                disabled={loading}
+                className="px-6 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 transition-colors text-sm font-medium disabled:opacity-50"
+              >
+                {loading ? "Deleting..." : "Delete Slot"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
   </div>
 );
+};
 
 // Student List Component
 const StudentList = ({ students, onUpdateStatus, loading }) => {
   const [assignedResearch, setAssignedResearch] = useState([]);
   const [detailedView, setDetailedView] = useState(false);
   const [selectedStudent, setSelectedStudent] = useState(null);
+  const [selectedStatus, setSelectedStatus] = useState("");
+  const [selectedStage, setSelectedStage] = useState("");
+  const [selectedProgress, setSelectedProgress] = useState(0);
+  const [showConfirmation, setShowConfirmation] = useState(false);
 
   useEffect(() => {
     fetchAssignedResearch();
@@ -496,15 +2142,60 @@ const StudentList = ({ students, onUpdateStatus, loading }) => {
 
   const handleViewDetails = (research) => {
     setSelectedStudent(research);
+    setSelectedStatus(research.status);
+    setSelectedStage(research.stage);
+    setSelectedProgress(research.progress || 0);
     setDetailedView(true);
   };
+
+  const handleUpdateStatus = async () => {
+    try {
+      await onUpdateStatus(selectedStudent._id, selectedStatus, selectedStage, selectedProgress);
+      setShowConfirmation(true);
+      setTimeout(() => {
+        setShowConfirmation(false);
+        setDetailedView(false);
+      }, 2000);
+      fetchAssignedResearch();
+    } catch (error) {
+      console.error('Error updating status:', error);
+    }
+  };
+
+  const statusOptions = [
+    { value: "pending", label: "Pending", color: "yellow" },
+    { value: "in-progress", label: "In Progress", color: "blue" },
+    { value: "for-revision", label: "For Revision", color: "orange" },
+    { value: "completed", label: "Completed", color: "green" },
+  ];
+
+  const stageOptions = [
+    { value: "proposal", label: "Proposal" },
+    { value: "chapter1", label: "Chapter 1" },
+    { value: "chapter2", label: "Chapter 2" },
+    { value: "chapter3", label: "Chapter 3" },
+    { value: "defense", label: "Defense" },
+    { value: "final", label: "Final" },
+  ];
 
   if (detailedView && selectedStudent) {
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-75">
-        <div className="bg-white rounded-lg shadow-lg max-w-3xl w-full p-6">
+        <div className="bg-white rounded-lg shadow-lg max-w-3xl w-full p-6 max-h-[90vh] overflow-y-auto">
+          {/* Success Confirmation Message */}
+          {showConfirmation && (
+            <div className="mb-4 p-4 bg-green-50 border-l-4 border-green-500 rounded-md">
+              <div className="flex items-center">
+                <FaCheckCircle className="h-5 w-5 text-green-500 mr-3" />
+                <p className="text-green-700 font-medium">
+                  Research status has been successfully updated.
+                </p>
+              </div>
+            </div>
+          )}
+
           <div className="flex justify-between items-center mb-4">
-            <h3 className="text-lg font-semibold text-gray-800">Research Details</h3>
+            <h3 className="text-lg font-semibold text-gray-800">Research Details & Status Update</h3>
             <button
               onClick={() => setDetailedView(false)}
               className="text-gray-500 hover:text-gray-700"
@@ -514,52 +2205,141 @@ const StudentList = ({ students, onUpdateStatus, loading }) => {
           </div>
 
           <div className="space-y-4">
+            {/* Research Title */}
             <div className="p-4 bg-gray-50 rounded-lg border border-gray-200">
-              <h4 className="text-md font-semibold text-gray-800">Research Title</h4>
+              <h4 className="text-md font-semibold text-gray-800 mb-2">Research Title</h4>
               <p className="text-gray-700">{selectedStudent.title}</p>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {/* Student Information */}
               <div className="p-4 bg-gray-50 rounded-lg border border-gray-200">
-                <h4 className="text-md font-semibold text-gray-800">Student Information</h4>
+              <h4 className="text-md font-semibold text-gray-800 mb-2">Student Information</h4>
                 {selectedStudent.students.map((student, index) => (
                   <div key={student._id} className="mt-2">
                     <p className="text-gray-700">
-                      {student.name} ({student.email})
+                    <span className="font-medium">Student {index + 1}:</span> {student.name}
                     </p>
+                  <p className="text-sm text-gray-600">{student.email}</p>
                   </div>
                 ))}
               </div>
 
-              <div className="p-4 bg-gray-50 rounded-lg border border-gray-200">
-                <h4 className="text-md font-semibold text-gray-800">Status & Progress</h4>
-                <div className="mt-2">
+            {/* Current Status Display */}
+            <div className="p-4 bg-blue-50 rounded-lg border border-blue-200">
+              <h4 className="text-md font-semibold text-gray-800 mb-2">Current Status</h4>
+              <div className="space-y-2">
                   <p className="text-gray-700">
-                    Status:{" "}
-                    <span className={`font-semibold ${
-                      selectedStudent.status === 'in-progress' ? 'text-blue-600' :
-                      selectedStudent.status === 'pending' ? 'text-yellow-600' :
-                      'text-green-600'
+                  <span className="font-medium">Status:</span>{" "}
+                  <span className={`px-2 py-1 rounded-full text-xs font-medium ${
+                    selectedStudent.status === 'pending' ? 'bg-yellow-100 text-yellow-700' :
+                    selectedStudent.status === 'in-progress' ? 'bg-blue-100 text-blue-700' :
+                    selectedStudent.status === 'for-revision' ? 'bg-orange-100 text-orange-700' :
+                    selectedStudent.status === 'completed' ? 'bg-green-100 text-green-700' :
+                    'bg-gray-100 text-gray-700'
                     }`}>
                       {selectedStudent.status}
                     </span>
                   </p>
                   <p className="text-gray-700">
-                    Progress: {selectedStudent.progress || 0}%
+                  <span className="font-medium">Stage:</span> {selectedStudent.stage}
+                </p>
+                <p className="text-gray-700">
+                  <span className="font-medium">Progress:</span> {selectedStudent.progress || 0}%
+                </p>
+                <p className="text-sm text-gray-500">
+                  Last updated: {new Date(selectedStudent.updatedAt).toLocaleString()}
                   </p>
+                </div>
+              </div>
+
+            {/* Status Update Form */}
+            <div className="p-4 bg-white rounded-lg border-2 border-[#7C1D23]">
+              <h4 className="text-md font-semibold text-gray-800 mb-4">Update Research Status</h4>
+              
+              <div className="space-y-4">
+                {/* Status Dropdown */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Status <span className="text-red-500">*</span>
+                  </label>
+                  <select
+                    value={selectedStatus}
+                    onChange={(e) => setSelectedStatus(e.target.value)}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-transparent"
+                  >
+                    {statusOptions.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+            </div>
+
+                {/* Stage Dropdown */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Stage <span className="text-red-500">*</span>
+                  </label>
+                  <select
+                    value={selectedStage}
+                    onChange={(e) => setSelectedStage(e.target.value)}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-transparent"
+                  >
+                    {stageOptions.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Progress Slider */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Progress: {selectedProgress}%
+                  </label>
+                  <input
+                    type="range"
+                    min="0"
+                    max="100"
+                    step="5"
+                    value={selectedProgress}
+                    onChange={(e) => setSelectedProgress(parseInt(e.target.value))}
+                    className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-[#7C1D23]"
+                  />
+                  <div className="flex justify-between text-xs text-gray-500 mt-1">
+                    <span>0%</span>
+                    <span>50%</span>
+                    <span>100%</span>
+                  </div>
                 </div>
               </div>
             </div>
 
-            <div className="flex justify-end space-x-2">
+            {/* Action Buttons */}
+            <div className="flex justify-end space-x-2 pt-4">
               <button
-                onClick={() => {
-                  onUpdateStatus(selectedStudent._id, 'in-progress', selectedStudent.stage, selectedStudent.progress);
-                  setDetailedView(false);
-                }}
-                className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors text-sm font-medium"
+                onClick={() => setDetailedView(false)}
+                className="px-4 py-2 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300 transition-colors text-sm font-medium"
               >
+                Cancel
+              </button>
+              <button
+                onClick={handleUpdateStatus}
+                disabled={loading}
+                className="flex items-center px-6 py-2 bg-[#7C1D23] text-white rounded-md hover:bg-[#5a1519] transition-colors text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {loading ? (
+                  <>
+                    <FaClock className="mr-2 text-sm animate-spin" />
+                    Updating...
+                  </>
+                ) : (
+                  <>
+                    <FaCheckCircle className="mr-2 text-sm" />
                 Update Status
+                  </>
+                )}
               </button>
             </div>
           </div>
@@ -604,9 +2384,14 @@ const StudentList = ({ students, onUpdateStatus, loading }) => {
                       <span className={`px-3 py-1 rounded-full text-xs font-medium ${
                         research.status === 'pending' ? 'bg-yellow-100 text-yellow-700' :
                         research.status === 'in-progress' ? 'bg-blue-100 text-blue-700' :
-                        'bg-green-100 text-green-700'
+                        research.status === 'for-revision' ? 'bg-orange-100 text-orange-700' :
+                        research.status === 'completed' ? 'bg-green-100 text-green-700' :
+                        'bg-gray-100 text-gray-700'
                       }`}>
-                        {research.status}
+                        {research.status === 'for-revision' ? 'For Revision' : research.status}
+                      </span>
+                      <span className="text-sm text-gray-500">
+                        Stage: {research.stage}
                       </span>
                       <span className="text-sm text-gray-500">
                         Progress: {research.progress || 0}%
@@ -626,7 +2411,7 @@ const StudentList = ({ students, onUpdateStatus, loading }) => {
                   onClick={() => handleViewDetails(research)}
                   className="px-4 py-2 bg-[#7C1D23] text-white rounded-md text-sm font-medium hover:bg-[#5a1519] transition-colors"
                 >
-                  View Details
+                  View & Update Status
                 </button>
               </div>
             </div>
