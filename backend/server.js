@@ -4,6 +4,7 @@ import studentRoutes from "./routes/student.js";
 import scheduleRoutes from "./routes/schedule.js";
 import deanRoutes from "./routes/dean.js";
 import facultyRoutes from "./routes/faculty.js";
+import googleCalendarRoutes from "./routes/googleCalendar.js";
 
 
 import express from 'express';
@@ -35,6 +36,7 @@ app.use("/api/student", studentRoutes);
 app.use("/api/schedules", scheduleRoutes);
 app.use("/api/dean", deanRoutes);
 app.use("/api/faculty", facultyRoutes);
+app.use("/api/google-calendar", googleCalendarRoutes);
 
 // Error handling middleware
 app.use((err, req, res, next) => {
