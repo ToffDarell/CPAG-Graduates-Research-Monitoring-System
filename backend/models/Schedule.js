@@ -5,7 +5,7 @@ const scheduleSchema = new mongoose.Schema(
     research: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Research",
-      required: true,
+      required: false, // Optional - consultation slots may not be tied to specific research
     },
     type: {
       type: String,
@@ -57,6 +57,20 @@ const scheduleSchema = new mongoose.Schema(
       type: String,
       enum: ["scheduled", "confirmed", "completed", "cancelled"],
       default: "scheduled",
+    },
+    // Google Calendar integration
+    googleCalendarEventId: {
+      type: String,
+    },
+    googleCalendarLink: {
+      type: String,
+    },
+    googleMeetLink: {
+      type: String,
+    },
+    calendarSynced: {
+      type: Boolean,
+      default: false,
     },
   },
   { timestamps: true }
