@@ -54,6 +54,20 @@ const userSchema = new mongoose.Schema(
       },
       unique: true,
       sparse: true
+    },
+    // Google Calendar integration
+    googleAccessToken: {
+      type: String,
+    },
+    googleRefreshToken: {
+      type: String,
+    },
+    googleTokenExpiry: {
+      type: Date,
+    },
+    calendarConnected: {
+      type: Boolean,
+      default: false,
     }
   },
   { timestamps: true }
