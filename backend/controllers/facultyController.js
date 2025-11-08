@@ -3,6 +3,7 @@ import Feedback from "../models/Feedback.js";
 import Schedule from "../models/Schedule.js";
 import User from "../models/User.js";
 import Activity from "../models/Activity.js";
+import Panel from "../models/Panel.js";
 import { 
   createConsultationEvent, 
   updateCalendarEvent,
@@ -887,6 +888,150 @@ export const getDetailedStudentInfo = async (req, res) => {
 
     res.json(Object.values(studentDetails));
   } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Get panels assigned to the faculty member
+export const getMyPanels = async (req, res) => {
+  try {
+    const userId = req.user.id.toString();
+    
+    // Find all panels first, then filter in code
+    const allPanels = await Panel.find()
+      .populate("research", "title students abstract")
+      .populate("members.faculty", "name email")
+      .populate("reviews.panelist", "name email")
+      .populate("assignedBy", "name")
+      .sort({ createdAt: -1 });
+
+    // Filter to only show panels where user is selected as active panelist
+    const myPanels = allPanels.filter(panel => {
+      const myMember = panel.members.find(m => {
+        const facultyId = m.faculty?._id || m.faculty;
+        const facultyIdStr = facultyId?.toString() || facultyId;
+        return facultyIdStr === userId && m.isSelected === true;
+      });
+      return myMember !== undefined;
+    });
+
+    // Calculate review status for each panel
+    const panelsWithReviewStatus = myPanels.map(panel => {
+      const myReview = panel.reviews.find(r => {
+        const panelistId = r.panelist?._id || r.panelist;
+        return (panelistId?.toString() || panelistId) === userId;
+      });
+
+      return {
+        ...panel.toObject(),
+        myReview: myReview || null,
+        hasSubmittedReview: myReview?.status === 'submitted' || false,
+        reviewStatus: myReview?.status || 'pending',
+        reviewDueDate: myReview?.dueDate || panel.reviewDeadline,
+      };
+    });
+
+    res.json(panelsWithReviewStatus);
+  } catch (error) {
+    console.error('Error fetching panels:', error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Submit panel review
+export const submitPanelReview = async (req, res) => {
+  try {
+    const { panelId, comments, recommendation } = req.body;
+    const userId = req.user.id.toString();
+
+    if (!comments || !recommendation) {
+      return res.status(400).json({ message: "Comments and recommendation are required" });
+    }
+
+    const panel = await Panel.findById(panelId);
+
+    if (!panel) {
+      return res.status(404).json({ message: "Panel not found" });
+    }
+
+    // Verify user is an active panelist
+    const myMember = panel.members.find(m => {
+      const facultyId = m.faculty?._id || m.faculty;
+      return (facultyId?.toString() || facultyId) === userId && m.isSelected;
+    });
+
+    if (!myMember) {
+      return res.status(403).json({ message: "You are not an active panelist for this panel" });
+    }
+
+    // Find existing review or create new one
+    const existingReviewIndex = panel.reviews.findIndex(r => {
+      const panelistId = r.panelist?._id || r.panelist;
+      return (panelistId?.toString() || panelistId) === userId;
+    });
+
+    const reviewData = {
+      panelist: req.user.id,
+      comments: comments.trim(),
+      recommendation: recommendation,
+      status: 'submitted',
+      submittedAt: new Date(),
+      dueDate: panel.reviewDeadline || null,
+    };
+
+    if (existingReviewIndex >= 0) {
+      // Update existing review
+      panel.reviews[existingReviewIndex] = {
+        ...panel.reviews[existingReviewIndex].toObject(),
+        ...reviewData,
+      };
+    } else {
+      // Create new review
+      panel.reviews.push(reviewData);
+    }
+
+    // Update panel progress
+    const activeMembers = panel.members.filter(m => m.isSelected);
+    const submittedReviews = panel.reviews.filter(r => r.status === 'submitted');
+    panel.progress = activeMembers.length > 0
+      ? Math.round((submittedReviews.length / activeMembers.length) * 100)
+      : 0;
+
+    // Update panel status if all reviews are submitted
+    if (panel.progress === 100 && panel.status !== 'completed') {
+      panel.status = 'in_progress';
+    }
+
+    await panel.save();
+
+    const populated = await Panel.findById(panel._id)
+      .populate("research", "title students")
+      .populate("members.faculty", "name email")
+      .populate("reviews.panelist", "name email");
+
+    // Log activity
+    await Activity.create({
+      user: req.user.id,
+      action: "update",
+      entityType: "panel",
+      entityId: panel._id,
+      entityName: panel.name,
+      description: `Submitted panel review for ${panel.name}`,
+      metadata: {
+        panelId: panel._id,
+        recommendation,
+        commentsLength: comments.length,
+        panelProgress: panel.progress,
+      }
+    });
+
+    res.json({
+      message: "Panel review submitted successfully",
+      panel: populated,
+      review: reviewData,
+    });
+  } catch (error) {
+    console.error('Error submitting panel review:', error);
     res.status(500).json({ message: error.message });
   }
 };
