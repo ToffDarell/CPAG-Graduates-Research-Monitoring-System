@@ -206,6 +206,7 @@ const FacultyAdviserDashboard = ({setUser}) => {
   const tabs = [
     { id: "submissions", label: "Student Submissions", icon: <FaClipboardList /> },
     { id: "feedback", label: "Feedback Management", icon: <FaFileAlt /> },
+    { id: "panels", label: "Panel Reviews", icon: <FaUsers /> },
     { id: "schedule", label: "Consultation Schedule", icon: <FaCalendar /> },
     { id: "students", label: "My Students", icon: <FaUsers /> },
   ];
@@ -221,6 +222,8 @@ const FacultyAdviserDashboard = ({setUser}) => {
         />;
       case "feedback":
         return <FeedbackManagement />;
+      case "panels":
+        return <PanelReviews />;
       case "schedule":
         return <ConsultationSchedule 
           schedules={schedules} 
@@ -2418,6 +2421,304 @@ const StudentList = ({ students, onUpdateStatus, loading }) => {
           ))
         )}
       </div>
+    </div>
+  );
+};
+
+// Panel Reviews Component
+const PanelReviews = () => {
+  const [panels, setPanels] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [selectedPanel, setSelectedPanel] = useState(null);
+  const [showReviewModal, setShowReviewModal] = useState(false);
+  const [reviewForm, setReviewForm] = useState({
+    comments: '',
+    recommendation: 'pending',
+  });
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    fetchPanels();
+  }, []);
+
+  const fetchPanels = async () => {
+    setLoading(true);
+    try {
+      const token = localStorage.getItem('token');
+      const res = await axios.get('/api/faculty/panels', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      setPanels(res.data || []);
+    } catch (error) {
+      console.error('Error fetching panels:', error);
+      alert('Error loading panel assignments');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleOpenReviewModal = (panel) => {
+    setSelectedPanel(panel);
+    setReviewForm({
+      comments: panel.myReview?.comments || '',
+      recommendation: panel.myReview?.recommendation || 'pending',
+    });
+    setShowReviewModal(true);
+  };
+
+  const handleCloseReviewModal = () => {
+    setShowReviewModal(false);
+    setSelectedPanel(null);
+    setReviewForm({ comments: '', recommendation: 'pending' });
+  };
+
+  const handleSubmitReview = async (e) => {
+    e.preventDefault();
+    if (!reviewForm.comments.trim()) {
+      alert('Please provide review comments');
+      return;
+    }
+    if (reviewForm.recommendation === 'pending') {
+      alert('Please select a recommendation');
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      const token = localStorage.getItem('token');
+      await axios.post(
+        `/api/faculty/panels/${selectedPanel._id}/review`,
+        {
+          comments: reviewForm.comments,
+          recommendation: reviewForm.recommendation,
+        },
+        {
+          headers: { Authorization: `Bearer ${token}` }
+        }
+      );
+
+      alert('Review submitted successfully!');
+      handleCloseReviewModal();
+      fetchPanels();
+    } catch (error) {
+      console.error('Error submitting review:', error);
+      alert(error?.response?.data?.message || 'Error submitting review');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const getStatusColor = (status) => {
+    const colors = {
+      pending: 'bg-yellow-100 text-yellow-800 border-yellow-300',
+      submitted: 'bg-green-100 text-green-800 border-green-300',
+      overdue: 'bg-red-100 text-red-800 border-red-300',
+      in_progress: 'bg-blue-100 text-blue-800 border-blue-300',
+    };
+    return colors[status] || 'bg-gray-100 text-gray-800 border-gray-300';
+  };
+
+  const getRecommendationColor = (recommendation) => {
+    const colors = {
+      approve: 'bg-green-100 text-green-800',
+      reject: 'bg-red-100 text-red-800',
+      revision: 'bg-yellow-100 text-yellow-800',
+      pending: 'bg-gray-100 text-gray-800',
+    };
+    return colors[recommendation] || colors.pending;
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="bg-white border border-gray-200 rounded-lg p-5">
+        <h2 className="text-xl font-bold text-gray-800 mb-2">Panel Reviews</h2>
+        <p className="text-sm text-gray-600">Review and provide feedback on research panels you're assigned to</p>
+      </div>
+
+      {loading ? (
+        <div className="text-center py-12">
+          <p className="text-gray-500">Loading panels...</p>
+        </div>
+      ) : panels.length === 0 ? (
+        <div className="bg-white border border-gray-200 rounded-lg p-12 text-center">
+          <FaUsers className="mx-auto h-12 w-12 text-gray-400 mb-4" />
+          <p className="text-gray-600 mb-2">No panel assignments found</p>
+          <p className="text-sm text-gray-500">You haven't been assigned to any panels yet</p>
+        </div>
+      ) : (
+        <div className="space-y-4">
+          {panels.map(panel => (
+            <div
+              key={panel._id}
+              className={`bg-white border rounded-lg p-5 hover:shadow-md transition-shadow ${
+                panel.hasSubmittedReview ? 'border-green-300' : 'border-gray-200'
+              }`}
+            >
+              <div className="flex items-start justify-between mb-4">
+                <div className="flex-1">
+                  <div className="flex items-center gap-3 mb-2">
+                    <h3 className="text-lg font-semibold text-gray-900">{panel.name}</h3>
+                    <span className={`px-2 py-1 text-xs font-medium rounded border ${getStatusColor(panel.status)}`}>
+                      {panel.status.replace(/_/g, ' ')}
+                    </span>
+                    {panel.hasSubmittedReview && (
+                      <span className="px-2 py-1 text-xs font-medium rounded bg-green-100 text-green-800 border border-green-300">
+                        Review Submitted
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-sm text-gray-700 mb-1">
+                    <span className="font-medium">Research:</span> {panel.research?.title || 'N/A'}
+                  </p>
+                  <p className="text-sm text-gray-600 mb-1">
+                    <span className="font-medium">Type:</span> {panel.type?.replace(/_/g, ' ')}
+                  </p>
+                  {panel.description && (
+                    <p className="text-sm text-gray-600 mb-2">{panel.description}</p>
+                  )}
+                  {panel.reviewDueDate && (
+                    <p className="text-xs text-gray-500">
+                      Review Due: {new Date(panel.reviewDueDate).toLocaleDateString()}
+                      {new Date(panel.reviewDueDate) < new Date() && !panel.hasSubmittedReview && (
+                        <span className="ml-2 text-red-600 font-medium">(Overdue)</span>
+                      )}
+                    </p>
+                  )}
+                </div>
+                <button
+                  onClick={() => handleOpenReviewModal(panel)}
+                  className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+                    panel.hasSubmittedReview
+                      ? 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                      : 'bg-[#7C1D23] text-white hover:bg-[#5a1519]'
+                  }`}
+                >
+                  {panel.hasSubmittedReview ? 'Update Review' : 'Submit Review'}
+                </button>
+              </div>
+
+              {/* My Review Status */}
+              {panel.myReview && (
+                <div className="mt-4 pt-4 border-t border-gray-200">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-medium text-gray-700">Your Review</p>
+                      <p className="text-xs text-gray-500 mt-1">
+                        Status: <span className={`font-medium ${getStatusColor(panel.reviewStatus).split(' ')[1]}`}>
+                          {panel.reviewStatus.replace(/_/g, ' ')}
+                        </span>
+                      </p>
+                      {panel.myReview.recommendation !== 'pending' && (
+                        <span className={`inline-block mt-2 px-2 py-1 text-xs rounded ${getRecommendationColor(panel.myReview.recommendation)}`}>
+                          Recommendation: {panel.myReview.recommendation.replace(/_/g, ' ')}
+                        </span>
+                      )}
+                    </div>
+                    {panel.myReview.submittedAt && (
+                      <p className="text-xs text-gray-500">
+                        Submitted: {new Date(panel.myReview.submittedAt).toLocaleDateString()}
+                      </p>
+                    )}
+                  </div>
+                  {panel.myReview.comments && (
+                    <p className="text-sm text-gray-700 mt-2 p-3 bg-gray-50 rounded border border-gray-200">
+                      {panel.myReview.comments}
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Review Submission Modal */}
+      {showReviewModal && selectedPanel && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[90vh] overflow-hidden flex flex-col">
+            <div className="p-5 border-b border-gray-200">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-lg font-semibold text-gray-900">Submit Panel Review</h3>
+                  <p className="text-sm text-gray-600 mt-1">{selectedPanel.name}</p>
+                  <p className="text-xs text-gray-500 mt-1">Research: {selectedPanel.research?.title}</p>
+                </div>
+                <button
+                  onClick={handleCloseReviewModal}
+                  className="text-gray-400 hover:text-gray-600"
+                >
+                  <FaClose className="h-5 w-5" />
+                </button>
+              </div>
+            </div>
+
+            <form onSubmit={handleSubmitReview} className="flex-1 flex flex-col overflow-hidden">
+              <div className="flex-1 overflow-y-auto p-5 space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Review Comments <span className="text-red-500">*</span>
+                  </label>
+                  <textarea
+                    value={reviewForm.comments}
+                    onChange={(e) => setReviewForm({ ...reviewForm, comments: e.target.value })}
+                    rows={6}
+                    className="w-full px-4 py-2 rounded-md border border-gray-300 focus:border-[#7C1D23] focus:ring-2 focus:ring-[#7C1D23]/20 text-sm"
+                    placeholder="Provide your detailed review comments, feedback, and evaluation..."
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Recommendation <span className="text-red-500">*</span>
+                  </label>
+                  <select
+                    value={reviewForm.recommendation}
+                    onChange={(e) => setReviewForm({ ...reviewForm, recommendation: e.target.value })}
+                    className="w-full px-4 py-2 rounded-md border border-gray-300 focus:border-[#7C1D23] focus:ring-2 focus:ring-[#7C1D23]/20 text-sm"
+                    required
+                  >
+                    <option value="pending">Select Recommendation</option>
+                    <option value="approve">Approve</option>
+                    <option value="revision">Require Revision</option>
+                    <option value="reject">Reject</option>
+                  </select>
+                </div>
+
+                {selectedPanel.reviewDueDate && (
+                  <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3">
+                    <p className="text-sm text-yellow-800">
+                      <span className="font-medium">Review Deadline:</span> {new Date(selectedPanel.reviewDueDate).toLocaleDateString()}
+                      {new Date(selectedPanel.reviewDueDate) < new Date() && (
+                        <span className="ml-2 font-medium">(Overdue)</span>
+                      )}
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              <div className="p-5 border-t border-gray-200 bg-gray-50">
+                <div className="flex justify-end gap-3">
+                  <button
+                    type="button"
+                    onClick={handleCloseReviewModal}
+                    className="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={submitting}
+                    className="px-4 py-2 bg-[#7C1D23] text-white rounded-md text-sm font-medium hover:bg-[#5a1519] transition-colors disabled:opacity-60"
+                  >
+                    {submitting ? 'Submitting...' : 'Submit Review'}
+                  </button>
+                </div>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
