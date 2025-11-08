@@ -146,9 +146,16 @@ const Register = ({ setUser }) => {
 
   const handleGoogleLogin = async (credentialResponse) => {
     try {
+      // Validate studentId is provided for graduate students
+      if (formData.role === "graduate student" && !formData.studentId) {
+        setError("Please enter your Student ID before signing in with Google");
+        return;
+      }
+
       const res = await axios.post("/api/users/google", { 
         credential: credentialResponse.credential,
-        selectedRole: formData.role  // Pass the selected role
+        selectedRole: formData.role,
+        ...(formData.role === "graduate student" && { studentId: formData.studentId })  // Include studentId for students
       });
       localStorage.setItem("token", res.data.token);
       setUser(res.data);
