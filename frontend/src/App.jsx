@@ -16,6 +16,7 @@ import DeanDashboard from "./pages/Dashboard/Dean";
 import FacultyAdviserDashboard from "./pages/Dashboard/FacultyAdviser";
 import GraduateDashboard from "./pages/Dashboard/Graduate";
 import ProgramHeadDashboard from "./pages/Dashboard/ProgramHead";
+import PanelReview from "./pages/PanelReview";
 
 function App() {
   const [user, setUser] = useState(null);
@@ -155,6 +156,13 @@ function App() {
             )
           }
         />
+        
+        {/* Public Panel Review Route (Token-based, no authentication required) */}
+        <Route
+          path="/panel-review/:token"
+          element={<PanelReview />}
+        />
+        
         <Route path="*" element={<NotFound />} />
       </Routes>
     </Router>
