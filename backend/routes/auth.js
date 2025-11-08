@@ -265,7 +265,7 @@ router.get('/me', protect, async (req, res) => {
 // ========== Google OAuth ==========
 router.post('/google', async (req, res) => {
     try {
-        const { credential, selectedRole } = req.body;  
+        const { credential, selectedRole, studentId } = req.body;  
         if (!credential) {
             return res.status(400).json({ message: 'Missing Google credential' });
         }
@@ -323,13 +323,22 @@ router.post('/google', async (req, res) => {
 
           // Create new user with selected role
           const role = isStudentEmail ? 'graduate student' : selectedRole;
+          
+        
+          
           const userData = { 
               name,
               email,
               password: `google-oauth-${Date.now()}`,
               role,
-              isActive: true
+              isActive: true,
+              
           };
+            // Validate studentId is required for graduate students
+            if (role === 'graduate student') {
+                userData.studentId = studentId;
+            }
+
           user = await User.create(userData);
   
           const token = generateToken(user.id);
