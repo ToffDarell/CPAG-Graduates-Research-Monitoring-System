@@ -1045,7 +1045,7 @@ export const inviteFaculty = async (req, res) => {
       req.user.id,
       'invite',
       'user',
-      user._id,
+      newUser._id,
       name,
       `Invited faculty: ${name} (${role})`,
       { email, role },
