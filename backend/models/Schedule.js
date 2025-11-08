@@ -55,8 +55,22 @@ const scheduleSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ["scheduled", "confirmed", "completed", "cancelled"],
+      enum: ["scheduled", "confirmed", "finalized", "completed", "cancelled"],
       default: "scheduled",
+    },
+    // Panel reference (for defense schedules)
+    panel: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Panel",
+      required: false,
+    },
+    // Finalization tracking
+    finalizedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+    },
+    finalizedAt: {
+      type: Date,
     },
     // Google Calendar integration
     googleCalendarEventId: {
