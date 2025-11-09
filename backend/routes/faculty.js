@@ -20,6 +20,9 @@ import {
   getMyStudents,
   getMyPanels,
   submitPanelReview,
+  getAvailableDocuments,
+  downloadDocument,
+  viewDocument,
 } from "../controllers/facultyController.js";
 
 const router = express.Router();
@@ -69,6 +72,11 @@ router.get("/students", getMyStudents);
 // Panel reviews
 router.get("/panels", getMyPanels);
 router.post("/panels/:panelId/review", submitPanelReview);
+
+// Document routes
+router.get("/documents", getAvailableDocuments);
+router.get("/documents/:id", viewDocument);
+router.get("/documents/:id/download", downloadDocument);
 
 export default router;
 
