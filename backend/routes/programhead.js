@@ -53,6 +53,9 @@ import {
   checkScheduleConflicts,
   getPanelDefenseSchedules,
   archiveSchedule,
+  getAvailableDocuments,
+  downloadDocument,
+  viewDocument,
 } from "../controllers/programHeadController.js";
 
 const router = express.Router();
@@ -162,5 +165,10 @@ router.get("/activity-stats", getActivityStats);
 router.get("/panel-records", getPanelRecords);
 router.get("/panel-records/:id", getPanelRecordDetails);
 router.get("/panel-records/export/csv", exportPanelRecords);
+
+// Document routes
+router.get("/documents", getAvailableDocuments);
+router.get("/documents/:id", viewDocument);
+router.get("/documents/:id/download", downloadDocument);
 
 export default router;
