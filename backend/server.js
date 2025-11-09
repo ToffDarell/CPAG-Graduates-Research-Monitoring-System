@@ -5,6 +5,7 @@ import scheduleRoutes from "./routes/schedule.js";
 import deanRoutes from "./routes/dean.js";
 import facultyRoutes from "./routes/faculty.js";
 import googleCalendarRoutes from "./routes/googleCalendar.js";
+import panelReviewRoutes from "./routes/panelReview.js";
 
 
 import express from 'express';
@@ -28,6 +29,8 @@ app.use(express.json());
 //Routes
 app.use("/api/users", authRoutes)
 
+// Public routes (no authentication required)
+app.use("/api/panel-review", panelReviewRoutes);
 
 //Routes
 app.use("/api/adviser", adviserRoutes);
