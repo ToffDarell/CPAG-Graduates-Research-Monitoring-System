@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { FaUpload, FaCalendar, FaBook, FaCheckCircle, FaClock, FaFileAlt, FaChartLine, FaSignOutAlt, FaBars, FaTimes as FaClose } from "react-icons/fa";
+import { FaUpload, FaCalendar, FaBook, FaCheckCircle, FaClock, FaFileAlt, FaChartLine, FaSignOutAlt, FaBars, FaTimes as FaClose, FaTimesCircle, FaDownload } from "react-icons/fa";
 import { useNavigate } from "react-router-dom";
 import axios from "axios";
 
@@ -161,6 +161,7 @@ const GraduateDashboard = ({setUser}) => {
     { id: "compliance", label: "Compliance Forms", icon: <FaFileAlt /> },
     { id: "schedule", label: "My Schedule", icon: <FaCalendar /> },
     { id: "progress", label: "Progress Tracking", icon: <FaChartLine /> },
+    { id: "documents", label: "Documents", icon: <FaFileAlt /> },
   ];
 
   const renderContent = () => {
@@ -187,6 +188,8 @@ const GraduateDashboard = ({setUser}) => {
           myResearch={myResearch}
           feedback={adviserFeedback}
         />;
+      case "documents":
+        return <DocumentsView />;
       default:
         return null;
     }
@@ -485,47 +488,289 @@ const ComplianceForms = ({ onFormUpload, loading }) => {
 };
 
 // My Schedule Component
-const MySchedule = ({ schedules }) => (
-  <div className="space-y-5">
-    <div className="flex justify-between items-center">
-      <h2 className="text-xl font-bold text-gray-800">My Schedule</h2>
-      <span className="px-3 py-1 bg-blue-100 text-blue-700 rounded-full text-xs font-medium">
-        {schedules.length} Upcoming
-      </span>
-    </div>
+const MySchedule = ({ schedules }) => {
+  const [showRequestModal, setShowRequestModal] = useState(false);
+  const [availableSlots, setAvailableSlots] = useState([]);
+  const [adviserInfo, setAdviserInfo] = useState(null);
+  const [selectedSlot, setSelectedSlot] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState("");
+  const [successMessage, setSuccessMessage] = useState("");
+  const [errorMessage, setErrorMessage] = useState("");
 
-    <div className="space-y-4">
-      {schedules.length > 0 ? (
-        schedules.map((schedule) => (
-          <div key={schedule._id} className="bg-white border border-gray-200 rounded-lg p-5 hover:shadow-md transition-shadow">
-            <div className="flex items-center justify-between">
-              <div>
-                <h3 className="text-base font-semibold text-gray-800">{schedule.title}</h3>
-                <p className="text-sm text-gray-600 mt-1">{schedule.description}</p>
-                <p className="text-sm text-gray-500 mt-1">{schedule.location}</p>
-              </div>
-              <div className="text-right">
-                <p className="text-lg font-bold text-[#7C1D23]">
-                  {new Date(schedule.datetime).toLocaleDateString()}
-                </p>
-                <p className="text-sm text-gray-600 mt-1">
-                  {new Date(schedule.datetime).toLocaleTimeString()}
-                </p>
-                <button className="mt-3 px-4 py-2 bg-[#7C1D23] text-white rounded-md text-sm font-medium hover:bg-[#5a1519] transition-colors">
-                  View Details
-                </button>
-              </div>
-            </div>
+  const fetchAvailableSlots = async () => {
+    setLoading(true);
+    try {
+      const token = localStorage.getItem('token');
+      const res = await axios.get('/api/student/available-slots', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      setAvailableSlots(res.data.slots || []);
+      setAdviserInfo(res.data.adviser);
+      setShowRequestModal(true);
+    } catch (error) {
+      console.error('Error fetching available slots:', error);
+      setErrorMessage(error.response?.data?.message || 'Failed to fetch available slots');
+      setTimeout(() => setErrorMessage(""), 4000);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleRequestConsultation = async (slotId) => {
+    setLoading(true);
+    try {
+      const token = localStorage.getItem('token');
+      const res = await axios.post('/api/student/request-consultation', {
+        scheduleId: slotId,
+        message: message || "Consultation request"
+      }, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+
+      setSuccessMessage(res.data.message || "Consultation requested successfully!");
+      setShowRequestModal(false);
+      setMessage("");
+      window.location.reload(); // Refresh to show updated schedule
+    } catch (error) {
+      console.error('Error requesting consultation:', error);
+      setErrorMessage(error.response?.data?.message || 'Failed to request consultation');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Filter and sort schedules
+  const upcomingSchedules = schedules.filter(s => 
+    new Date(s.datetime) >= new Date() && s.status !== 'cancelled'
+  ).sort((a, b) => new Date(a.datetime) - new Date(b.datetime));
+
+  const myConfirmedSchedules = upcomingSchedules.filter(s => {
+    const myParticipation = s.participants?.find(p => p.role === 'student');
+    return myParticipation && myParticipation.status === 'confirmed';
+  });
+
+  const myPendingRequests = upcomingSchedules.filter(s => {
+    const myParticipation = s.participants?.find(p => p.role === 'student');
+    return myParticipation && myParticipation.status === 'invited';
+  });
+
+  return (
+    <div className="space-y-5">
+      {/* Success/Error Messages */}
+      {successMessage && (
+        <div className="bg-green-50 border-l-4 border-green-500 p-4 rounded-md">
+          <div className="flex items-center">
+            <FaCheckCircle className="h-5 w-5 text-green-500 mr-3" />
+            <p className="text-green-700 font-medium">{successMessage}</p>
           </div>
-        ))
-      ) : (
-        <div className="bg-gray-50 rounded-lg border border-gray-200 p-8">
-          <p className="text-gray-500 text-center text-sm">No upcoming schedules found.</p>
+        </div>
+      )}
+
+      {errorMessage && (
+        <div className="bg-red-50 border-l-4 border-red-500 p-4 rounded-md">
+          <div className="flex items-center">
+            <FaTimesCircle className="h-5 w-5 text-red-500 mr-3" />
+            <p className="text-red-700 font-medium">{errorMessage}</p>
+          </div>
+        </div>
+      )}
+
+      <div className="flex justify-between items-center">
+        <h2 className="text-xl font-bold text-gray-800">My Consultation Schedule</h2>
+        <button
+          onClick={fetchAvailableSlots}
+          disabled={loading}
+          className="px-4 py-2 bg-[#7C1D23] text-white rounded-md hover:bg-[#5a1519] transition-colors text-sm font-medium disabled:opacity-50"
+        >
+          <FaCalendar className="inline mr-2" />
+          {loading ? "Loading..." : "Request Consultation"}
+        </button>
+      </div>
+
+      {/* Quick Stats */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="bg-green-50 rounded-lg p-4 border border-green-200">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-2xl font-bold text-green-700">{myConfirmedSchedules.length}</p>
+              <p className="text-xs text-green-600 font-medium uppercase">Confirmed</p>
+            </div>
+            <FaCheckCircle className="h-8 w-8 text-green-600" />
+          </div>
+        </div>
+        <div className="bg-yellow-50 rounded-lg p-4 border border-yellow-200">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-2xl font-bold text-yellow-700">{myPendingRequests.length}</p>
+              <p className="text-xs text-yellow-600 font-medium uppercase">Pending Approval</p>
+            </div>
+            <FaClock className="h-8 w-8 text-yellow-600" />
+          </div>
+        </div>
+      </div>
+
+      {/* Pending Requests */}
+      {myPendingRequests.length > 0 && (
+        <div className="bg-yellow-50 rounded-lg border border-yellow-200 p-5">
+          <h3 className="text-lg font-semibold text-gray-800 mb-3 flex items-center">
+            <FaClock className="mr-2 text-yellow-600" />
+            Pending Approval ({myPendingRequests.length})
+          </h3>
+          <div className="space-y-3">
+            {myPendingRequests.map((schedule) => (
+              <div key={schedule._id} className="bg-white rounded-lg p-4 border border-yellow-300">
+                <h4 className="font-semibold text-gray-800">{schedule.title}</h4>
+                <p className="text-sm text-gray-600 mt-1">
+                  <FaCalendar className="inline mr-1" />
+                  {new Date(schedule.datetime).toLocaleString()}
+                </p>
+                <p className="text-sm text-gray-500">Location: {schedule.location}</p>
+                <span className="inline-block mt-2 px-2 py-1 bg-yellow-100 text-yellow-700 rounded-full text-xs font-medium">
+                  Waiting for adviser approval
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Confirmed Schedules */}
+      <div className="space-y-4">
+        {myConfirmedSchedules.length > 0 ? (
+          myConfirmedSchedules.map((schedule) => {
+            const isApproaching = new Date(schedule.datetime) - new Date() < 24 * 60 * 60 * 1000;
+            return (
+              <div 
+                key={schedule._id} 
+                className={`bg-white border rounded-lg p-5 hover:shadow-md transition-shadow ${
+                  isApproaching ? 'border-orange-300 bg-orange-50' : 'border-gray-200'
+                }`}
+              >
+                {isApproaching && (
+                  <div className="mb-2">
+                    <span className="px-2 py-1 bg-orange-100 text-orange-700 rounded-full text-xs font-medium">
+                      <FaClock className="inline mr-1" />
+                      Approaching Soon
+                    </span>
+                  </div>
+                )}
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="text-base font-semibold text-gray-800">{schedule.title}</h3>
+                    <p className="text-sm text-gray-600 mt-1">{schedule.description || 'Consultation with adviser'}</p>
+                    <p className="text-sm text-gray-500 mt-1">
+                      <FaCalendar className="inline mr-1" />
+                      {new Date(schedule.datetime).toLocaleDateString()} at {new Date(schedule.datetime).toLocaleTimeString()}
+                    </p>
+                    <p className="text-sm text-gray-500">Location: {schedule.location}</p>
+                  </div>
+                  <div className="text-right">
+                    <span className="px-3 py-1 bg-green-100 text-green-700 rounded-full text-xs font-medium">
+                      Confirmed
+                    </span>
+                  </div>
+                </div>
+              </div>
+            );
+          })
+        ) : (
+          <div className="bg-gray-50 rounded-lg border border-gray-200 p-8">
+            <FaCalendar className="mx-auto h-12 w-12 text-gray-400 mb-3" />
+            <p className="text-gray-500 text-center text-sm">No confirmed consultations yet.</p>
+            <p className="text-gray-400 text-center text-xs mt-1">Click "Request Consultation" to schedule a meeting with your adviser.</p>
+          </div>
+        )}
+      </div>
+
+      {/* Request Consultation Modal */}
+      {showRequestModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
+          <div className="bg-white rounded-lg shadow-lg max-w-3xl w-full p-6 max-h-[90vh] overflow-y-auto">
+            <div className="flex justify-between items-center mb-4">
+              <div>
+                <h3 className="text-lg font-semibold text-gray-800">Request Consultation</h3>
+                {adviserInfo && (
+                  <p className="text-sm text-gray-600 mt-1">
+                    Adviser: {adviserInfo.name} ({adviserInfo.email})
+                  </p>
+                )}
+              </div>
+              <button
+                onClick={() => setShowRequestModal(false)}
+                className="text-gray-500 hover:text-gray-700"
+              >
+                <FaClose className="h-6 w-6" />
+              </button>
+            </div>
+
+            {availableSlots.length === 0 ? (
+              <div className="bg-gray-50 rounded-lg border border-gray-200 p-8">
+                <FaCalendar className="mx-auto h-12 w-12 text-gray-400 mb-3" />
+                <p className="text-gray-500 text-center text-sm">No available consultation slots at the moment.</p>
+                <p className="text-gray-400 text-center text-xs mt-1">Please check back later or contact your adviser directly.</p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <p className="text-sm text-gray-600">
+                  Select an available time slot to request a consultation with your adviser:
+                </p>
+                {availableSlots.map((slot) => (
+                  <div 
+                    key={slot._id} 
+                    className={`border rounded-lg p-4 hover:shadow-md transition-shadow cursor-pointer ${
+                      selectedSlot === slot._id ? 'border-[#7C1D23] bg-red-50' : 'border-gray-200 bg-white'
+                    }`}
+                    onClick={() => setSelectedSlot(slot._id)}
+                  >
+                    <div className="flex items-start justify-between">
+                      <div className="flex-1">
+                        <h4 className="font-semibold text-gray-800">{slot.title}</h4>
+                        <p className="text-sm text-gray-600 mt-1">{slot.description}</p>
+                        <div className="mt-2 space-y-1">
+                          <p className="text-sm text-gray-500">
+                            <FaCalendar className="inline mr-1" />
+                            {new Date(slot.datetime).toLocaleDateString()} at {new Date(slot.datetime).toLocaleTimeString()}
+                          </p>
+                          <p className="text-sm text-gray-500">
+                            <FaClock className="inline mr-1" />
+                            Duration: {slot.duration} minutes
+                          </p>
+                          <p className="text-sm text-gray-500">
+                            Location: {slot.location}
+                          </p>
+                        </div>
+                      </div>
+                      {selectedSlot === slot._id && (
+                        <FaCheckCircle className="h-6 w-6 text-[#7C1D23]" />
+                      )}
+                    </div>
+                  </div>
+                ))}
+
+                <div className="flex justify-end space-x-3 pt-4">
+                  <button
+                    onClick={() => setShowRequestModal(false)}
+                    className="px-4 py-2 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300 transition-colors text-sm font-medium"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={() => handleRequestConsultation(selectedSlot)}
+                    disabled={!selectedSlot || loading}
+                    className="px-6 py-2 bg-[#7C1D23] text-white rounded-md hover:bg-[#5a1519] transition-colors text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {loading ? "Requesting..." : "Request Consultation"}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       )}
     </div>
-  </div>
-);
+  );
+};
 
 // Progress Tracking Component
 const ProgressTracking = ({ percentage, completed, total, myResearch, feedback }) => {
@@ -564,8 +809,283 @@ const ProgressTracking = ({ percentage, completed, total, myResearch, feedback }
           </div>
         </div>
       </div>
+
+      {/* Research Status */}
+      {myResearch.length > 0 && (
+        <div className="bg-white rounded-lg border border-gray-200 p-5">
+          <h3 className="text-lg font-semibold text-gray-800 mb-4">Research Status</h3>
+          <div className="space-y-3">
+            <div className="flex justify-between items-center">
+              <span className="text-sm text-gray-600">Current Stage:</span>
+              <span className="px-3 py-1 bg-blue-100 text-blue-700 rounded-full text-sm font-medium">
+                {myResearch[0].stage || 'N/A'}
+              </span>
+            </div>
+            <div className="flex justify-between items-center">
+              <span className="text-sm text-gray-600">Status:</span>
+              <span className={`px-3 py-1 rounded-full text-sm font-medium ${
+                myResearch[0].status === 'pending' ? 'bg-yellow-100 text-yellow-700' :
+                myResearch[0].status === 'in-progress' ? 'bg-blue-100 text-blue-700' :
+                myResearch[0].status === 'for-revision' ? 'bg-orange-100 text-orange-700' :
+                myResearch[0].status === 'completed' ? 'bg-green-100 text-green-700' :
+                'bg-gray-100 text-gray-700'
+              }`}>
+                {myResearch[0].status === 'for-revision' ? 'For Revision' : myResearch[0].status}
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Adviser Feedback & Notifications */}
+      <div className="bg-white rounded-lg border border-gray-200 p-5">
+        <h3 className="text-lg font-semibold text-gray-800 mb-4">Adviser Feedback & Notifications</h3>
+        <div className="space-y-3 max-h-96 overflow-y-auto">
+          {feedback && feedback.length > 0 ? (
+            feedback.map((item, index) => (
+              <div 
+                key={index} 
+                className={`p-4 rounded-lg border-l-4 ${
+                  item.type === 'approval' ? 'bg-green-50 border-green-500' :
+                  item.type === 'rejection' ? 'bg-red-50 border-red-500' :
+                  item.type === 'revision' ? 'bg-orange-50 border-orange-500' :
+                  'bg-blue-50 border-blue-500'
+                }`}
+              >
+                <div className="flex justify-between items-start mb-2">
+                  <div className="flex items-center space-x-2">
+                    {item.type === 'approval' && <FaCheckCircle className="text-green-600" />}
+                    {item.type === 'rejection' && <FaTimesCircle className="text-red-600" />}
+                    {item.type === 'revision' && <FaFileAlt className="text-orange-600" />}
+                    {item.type === 'feedback' && <FaFileAlt className="text-blue-600" />}
+                    <span className="text-sm font-semibold text-gray-800">
+                      {item.adviser?.name || 'Adviser'}
+                    </span>
+                  </div>
+                  <div className="text-right">
+                    <span className={`inline-block px-2 py-1 rounded-full text-xs font-medium ${
+                      item.type === 'approval' ? 'bg-green-100 text-green-700' :
+                      item.type === 'rejection' ? 'bg-red-100 text-red-700' :
+                      item.type === 'revision' ? 'bg-orange-100 text-orange-700' :
+                      'bg-blue-100 text-blue-700'
+                    }`}>
+                      {item.type}
+                    </span>
+                    <p className="text-xs text-gray-500 mt-1">
+                      {new Date(item.createdAt).toLocaleString()}
+                    </p>
+                  </div>
+                </div>
+                <p className="text-sm text-gray-700 leading-relaxed">{item.message}</p>
+                {item.type === 'rejection' && (
+                  <div className="mt-3 p-3 bg-white rounded border border-red-200">
+                    <p className="text-xs font-semibold text-red-700 mb-1">Action Required:</p>
+                    <p className="text-xs text-gray-600">Please review the feedback and resubmit your work after making the necessary revisions.</p>
+                  </div>
+                )}
+              </div>
+            ))
+          ) : (
+            <div className="text-center py-8">
+              <FaFileAlt className="mx-auto h-12 w-12 text-gray-400 mb-3" />
+              <p className="text-gray-500 text-sm">No feedback or notifications yet.</p>
+              <p className="text-gray-400 text-xs mt-1">Your adviser's feedback will appear here.</p>
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 };
+
+// Documents View Component
+const DocumentsView = () => {
+  const [documents, setDocuments] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [categoryFilter, setCategoryFilter] = useState("all");
+
+  useEffect(() => {
+    fetchDocuments();
+  }, []);
+
+  const fetchDocuments = async () => {
+    try {
+      const token = localStorage.getItem('token');
+      const response = await axios.get('/api/student/documents', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      setDocuments(response.data);
+    } catch (error) {
+      console.error('Error fetching documents:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDownload = async (doc) => {
+    try {
+      const token = localStorage.getItem('token');
+      const response = await axios.get(`/api/student/documents/${doc._id}/download`, {
+        headers: { Authorization: `Bearer ${token}` },
+        responseType: 'blob'
+      });
+      
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', doc.filename);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error('Error downloading document:', error);
+      alert('Error downloading document: ' + (error.response?.data?.message || error.message));
+    }
+  };
+
+  const handleView = async (doc) => {
+    try {
+      const token = localStorage.getItem('token');
+      const response = await axios.get(`/api/student/documents/${doc._id}`, {
+        headers: { Authorization: `Bearer ${token}` },
+        responseType: 'blob'
+      });
+      
+      const blob = new Blob([response.data], { type: doc.mimeType });
+      const url = URL.createObjectURL(blob);
+      window.open(url, '_blank');
+    } catch (error) {
+      console.error('Error viewing document:', error);
+      alert('Error viewing document');
+    }
+  };
+
+  const filteredDocuments = documents.filter(doc => {
+    const matchesSearch = doc.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                         doc.description?.toLowerCase().includes(searchQuery.toLowerCase());
+    const matchesCategory = categoryFilter === "all" || doc.category === categoryFilter;
+    return matchesSearch && matchesCategory;
+  });
+
+  const formatFileSize = (bytes) => {
+    if (!bytes) return 'N/A';
+    const kb = bytes / 1024;
+    if (kb < 1024) return `${kb.toFixed(2)} KB`;
+    return `${(kb / 1024).toFixed(2)} MB`;
+  };
+
+  const getCategoryColor = (category) => {
+    const colors = {
+      form: 'bg-blue-100 text-blue-700',
+      template: 'bg-green-100 text-green-700',
+      guideline: 'bg-purple-100 text-purple-700',
+      policy: 'bg-red-100 text-red-700',
+      other: 'bg-gray-100 text-gray-700'
+    };
+    return colors[category] || colors.other;
+  };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <div className="text-gray-500">Loading documents...</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-5">
+      <div className="flex justify-between items-center">
+        <h2 className="text-xl font-bold text-gray-800">Available Documents</h2>
+        <span className="text-sm text-gray-600">{filteredDocuments.length} document(s)</span>
+      </div>
+
+      {/* Search and Filter */}
+      <div className="bg-white rounded-lg border border-gray-200 p-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <input
+              type="text"
+              placeholder="Search documents..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-transparent"
+            />
+          </div>
+          <div>
+            <select
+              value={categoryFilter}
+              onChange={(e) => setCategoryFilter(e.target.value)}
+              className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-transparent"
+            >
+              <option value="all">All Categories</option>
+              <option value="form">Forms</option>
+              <option value="template">Templates</option>
+              <option value="guideline">Guidelines</option>
+              <option value="policy">Policies</option>
+              <option value="other">Other</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      {/* Documents List */}
+      <div className="bg-white rounded-lg border border-gray-200">
+        {filteredDocuments.length === 0 ? (
+          <div className="p-8 text-center text-gray-500">
+            No documents available
+          </div>
+        ) : (
+          <div className="divide-y divide-gray-200">
+            {filteredDocuments.map((doc) => (
+              <div key={doc._id} className="p-4 hover:bg-gray-50 transition-colors">
+                <div className="flex items-start justify-between">
+                  <div className="flex-1">
+                    <div className="flex items-center space-x-2 mb-2">
+                      <FaFileAlt className="text-[#7C1D23] h-5 w-5" />
+                      <h3 className="text-base font-semibold text-gray-900">{doc.title}</h3>
+                      <span className={`px-2 py-1 rounded-full text-xs font-medium ${getCategoryColor(doc.category)}`}>
+                        {doc.category}
+                      </span>
+                    </div>
+                    {doc.description && (
+                      <p className="text-sm text-gray-600 mb-2">{doc.description}</p>
+                    )}
+                    <div className="flex items-center space-x-4 text-xs text-gray-500">
+                      <span>Uploaded by: {doc.uploadedBy?.name || 'Unknown'}</span>
+                      <span>•</span>
+                      <span>{new Date(doc.createdAt).toLocaleDateString()}</span>
+                      <span>•</span>
+                      <span>{formatFileSize(doc.fileSize)}</span>
+                    </div>
+                  </div>
+                  <div className="flex items-center space-x-2 ml-4">
+                    <button
+                      onClick={() => handleView(doc)}
+                      className="p-2 text-gray-600 hover:text-blue-600 transition-colors"
+                      title="View Document"
+                    >
+                      <FaFileAlt className="h-4 w-4" />
+                    </button>
+                    <button
+                      onClick={() => handleDownload(doc)}
+                      className="p-2 text-gray-600 hover:text-[#7C1D23] transition-colors"
+                      title="Download"
+                    >
+                      <FaDownload className="h-4 w-4" />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
 export default GraduateDashboard;
 
