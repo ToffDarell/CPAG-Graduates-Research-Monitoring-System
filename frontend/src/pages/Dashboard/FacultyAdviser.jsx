@@ -209,6 +209,7 @@ const FacultyAdviserDashboard = ({setUser}) => {
     { id: "panels", label: "Panel Reviews", icon: <FaUsers /> },
     { id: "schedule", label: "Consultation Schedule", icon: <FaCalendar /> },
     { id: "students", label: "My Students", icon: <FaUsers /> },
+    { id: "documents", label: "Documents", icon: <FaFileAlt /> },
   ];
 
   const renderContent = () => {
@@ -239,6 +240,8 @@ const FacultyAdviserDashboard = ({setUser}) => {
           onUpdateStatus={handleUpdateThesisStatus}
           loading={loading}
         />;
+      case "documents":
+        return <DocumentsView />;
       default:
         return null;
     }
@@ -2719,6 +2722,195 @@ const PanelReviews = () => {
           </div>
         </div>
       )}
+    </div>
+  );
+};
+
+// Documents View Component
+const DocumentsView = () => {
+  const [documents, setDocuments] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [categoryFilter, setCategoryFilter] = useState("all");
+
+  useEffect(() => {
+    fetchDocuments();
+  }, []);
+
+  const fetchDocuments = async () => {
+    try {
+      const token = localStorage.getItem('token');
+      const response = await axios.get('/api/faculty/documents', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      setDocuments(response.data);
+    } catch (error) {
+      console.error('Error fetching documents:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDownload = async (doc) => {
+    try {
+      const token = localStorage.getItem('token');
+      const response = await axios.get(`/api/faculty/documents/${doc._id}/download`, {
+        headers: { Authorization: `Bearer ${token}` },
+        responseType: 'blob'
+      });
+      
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', doc.filename);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error('Error downloading document:', error);
+      alert('Error downloading document: ' + (error.response?.data?.message || error.message));
+    }
+  };
+
+  const handleView = async (doc) => {
+    try {
+      const token = localStorage.getItem('token');
+      const response = await axios.get(`/api/faculty/documents/${doc._id}`, {
+        headers: { Authorization: `Bearer ${token}` },
+        responseType: 'blob'
+      });
+      
+      const blob = new Blob([response.data], { type: doc.mimeType });
+      const url = URL.createObjectURL(blob);
+      window.open(url, '_blank');
+    } catch (error) {
+      console.error('Error viewing document:', error);
+      alert('Error viewing document');
+    }
+  };
+
+  const filteredDocuments = documents.filter(doc => {
+    const matchesSearch = doc.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                         doc.description?.toLowerCase().includes(searchQuery.toLowerCase());
+    const matchesCategory = categoryFilter === "all" || doc.category === categoryFilter;
+    return matchesSearch && matchesCategory;
+  });
+
+  const formatFileSize = (bytes) => {
+    if (!bytes) return 'N/A';
+    const kb = bytes / 1024;
+    if (kb < 1024) return `${kb.toFixed(2)} KB`;
+    return `${(kb / 1024).toFixed(2)} MB`;
+  };
+
+  const getCategoryColor = (category) => {
+    const colors = {
+      form: 'bg-blue-100 text-blue-700',
+      template: 'bg-green-100 text-green-700',
+      guideline: 'bg-purple-100 text-purple-700',
+      policy: 'bg-red-100 text-red-700',
+      other: 'bg-gray-100 text-gray-700'
+    };
+    return colors[category] || colors.other;
+  };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <div className="text-gray-500">Loading documents...</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-5">
+      <div className="flex justify-between items-center">
+        <h2 className="text-xl font-bold text-gray-800">Documents</h2>
+        <span className="text-sm text-gray-600">{filteredDocuments.length} document(s)</span>
+      </div>
+
+      {/* Search and Filter */}
+      <div className="bg-white rounded-lg border border-gray-200 p-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <input
+              type="text"
+              placeholder="Search documents..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-transparent"
+            />
+          </div>
+          <div>
+            <select
+              value={categoryFilter}
+              onChange={(e) => setCategoryFilter(e.target.value)}
+              className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-transparent"
+            >
+              <option value="all">All Categories</option>
+              <option value="form">Forms</option>
+              <option value="template">Templates</option>
+              <option value="guideline">Guidelines</option>
+              <option value="policy">Policies</option>
+              <option value="other">Other</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      {/* Documents List */}
+      <div className="bg-white rounded-lg border border-gray-200">
+        {filteredDocuments.length === 0 ? (
+          <div className="p-8 text-center text-gray-500">
+            No documents available
+          </div>
+        ) : (
+          <div className="divide-y divide-gray-200">
+            {filteredDocuments.map((doc) => (
+              <div key={doc._id} className="p-4 hover:bg-gray-50 transition-colors">
+                <div className="flex items-start justify-between">
+                  <div className="flex-1">
+                    <div className="flex items-center space-x-2 mb-2">
+                      <FaFileAlt className="text-[#7C1D23] h-5 w-5" />
+                      <h3 className="text-base font-semibold text-gray-900">{doc.title}</h3>
+                      <span className={`px-2 py-1 rounded-full text-xs font-medium ${getCategoryColor(doc.category)}`}>
+                        {doc.category}
+                      </span>
+                    </div>
+                    {doc.description && (
+                      <p className="text-sm text-gray-600 mb-2">{doc.description}</p>
+                    )}
+                    <div className="flex items-center space-x-4 text-xs text-gray-500">
+                      <span>Uploaded by: {doc.uploadedBy?.name || 'Unknown'}</span>
+                      <span>•</span>
+                      <span>{new Date(doc.createdAt).toLocaleDateString()}</span>
+                      <span>•</span>
+                      <span>{formatFileSize(doc.fileSize)}</span>
+                    </div>
+                  </div>
+                  <div className="flex items-center space-x-2 ml-4">
+                    <button
+                      onClick={() => handleView(doc)}
+                      className="p-2 text-gray-600 hover:text-blue-600 transition-colors"
+                      title="View Document"
+                    >
+                      <FaFileAlt className="h-4 w-4" />
+                    </button>
+                    <button
+                      onClick={() => handleDownload(doc)}
+                      className="p-2 text-gray-600 hover:text-[#7C1D23] transition-colors"
+                      title="Download"
+                    >
+                      <FaUpload className="h-4 w-4 transform rotate-180" />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 };
