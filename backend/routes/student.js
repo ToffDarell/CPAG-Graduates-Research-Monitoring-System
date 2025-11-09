@@ -3,6 +3,7 @@ import { checkAuth } from "../middleware/auth.js";
 import Research from "../models/Research.js";
 import Schedule from "../models/Schedule.js";
 import User from "../models/User.js";
+import { getAvailableDocuments, downloadDocument, viewDocument } from "../controllers/studentController.js";
 
 const router = express.Router();
 
@@ -191,6 +192,11 @@ router.post("/login", async (req, res) => {
     res.status(500).json({ message: error.message });
   }
 });
+
+// Document routes
+router.get("/documents", checkAuth(["student"]), getAvailableDocuments);
+router.get("/documents/:id", checkAuth(["student"]), viewDocument);
+router.get("/documents/:id/download", checkAuth(["student"]), downloadDocument);
 
 export default router;
 
