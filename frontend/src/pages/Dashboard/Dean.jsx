@@ -1080,12 +1080,20 @@ const ResearchRecordDetailsModal = ({ research, isOpen, onClose, onDownload }) =
               </div>
 
               {/* Panel Members */}
-              {research.panel && research.panel.length > 0 && (
+              {research.panelMembers && research.panelMembers.length > 0 && (
                 <div>
                   <h4 className="text-sm font-semibold text-gray-500 uppercase mb-2">Panel Members</h4>
                   <div className="bg-gray-50 p-4 rounded-lg space-y-2">
-                    {research.panel.map((member, index) => (
-                      <p key={index} className="text-sm">• {member.name || 'N/A'}</p>
+                    {research.panelMembers.map((member, index) => (
+                      <div key={index} className="flex items-center gap-2 text-sm">
+                        <span>• {member.name || 'N/A'}</span>
+                        {member.isExternal && (
+                          <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-700">
+                            External
+                          </span>
+                        )}
+                        <span className="text-gray-500 text-xs">({member.role})</span>
+                      </div>
                     ))}
                   </div>
                 </div>
@@ -1800,27 +1808,74 @@ const MonitoringEvaluation = ({ research }) => {
   );
 };
 
-const PanelAssignment = ({ research, faculty }) => (
-  <div className="space-y-5">
-    <h2 className="text-xl font-bold text-gray-800">Panel Assignment</h2>
-    <div className="bg-white rounded-lg border border-gray-200 p-4">
-      {research.length === 0 ? (
-        <p className="text-gray-500 text-center text-sm py-8">No research available for panel assignment.</p>
-      ) : (
-        <div className="space-y-3">
-          {research.filter(r => r.status === 'approved').map((item) => (
-            <div key={item._id} className="border border-gray-200 rounded-lg p-4">
-              <h4 className="text-sm font-semibold text-gray-800">{item.title}</h4>
-              <p className="text-xs text-gray-600 mt-1">
-                Panel: {item.panel?.length > 0 ? item.panel.map(p => p.name).join(', ') : 'Not assigned'}
-              </p>
-            </div>
-          ))}
-        </div>
-      )}
+const PanelAssignment = ({ research, faculty }) => {
+  const getStatusColor = (status) => {
+    const colors = {
+      'approved': 'bg-green-100 text-green-700',
+      'pending': 'bg-yellow-100 text-yellow-700',
+      'in-progress': 'bg-blue-100 text-blue-700',
+      'rejected': 'bg-red-100 text-red-700',
+      'completed': 'bg-purple-100 text-purple-700',
+      'archived': 'bg-gray-100 text-gray-700'
+    };
+    return colors[status?.toLowerCase()] || 'bg-gray-100 text-gray-700';
+  };
+
+  return (
+    <div className="space-y-5">
+      <div className="flex justify-between items-center">
+        <h2 className="text-xl font-bold text-gray-800">Panel Assignment</h2>
+        <p className="text-sm text-gray-600">Total Research: {research.length}</p>
+      </div>
+      <div className="bg-white rounded-lg border border-gray-200 p-4">
+        {research.length === 0 ? (
+          <p className="text-gray-500 text-center text-sm py-8">No research available for panel assignment.</p>
+        ) : (
+          <div className="space-y-3">
+            {research.map((item) => (
+              <div key={item._id} className="border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow">
+                <div className="flex justify-between items-start mb-2">
+                  <h4 className="text-sm font-semibold text-gray-800 flex-1">{item.title}</h4>
+                  <span className={`ml-2 px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(item.status)}`}>
+                    {item.status}
+                  </span>
+                </div>
+                <div className="space-y-1">
+                  <p className="text-xs text-gray-600">
+                    <span className="font-medium">Faculty Adviser:</span> {item.adviser?.name || 'Not assigned'}
+                  </p>
+                  <p className="text-xs text-gray-600">
+                    <span className="font-medium">Student(s):</span> {item.students?.map(s => s.name).join(', ') || 'Not assigned'}
+                  </p>
+                  <div className="text-xs text-gray-600">
+                    <span className="font-medium">Panel Members:</span>{' '}
+                    {item.panelMembers?.length > 0 ? (
+                      <div className="mt-1 space-y-1">
+                        {item.panelMembers.map((member, idx) => (
+                          <div key={idx} className="flex items-center gap-2">
+                            <span className="text-green-700 font-medium">• {member.name}</span>
+                            {member.isExternal && (
+                              <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-700">
+                                External
+                              </span>
+                            )}
+                            <span className="text-gray-500 text-xs">({member.role})</span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <span className="text-orange-600 font-medium">Not assigned</span>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
-  </div>
-);
+  );
+};
 
 const ArchivedDocuments = () => {
   const [documents, setDocuments] = useState([]);
