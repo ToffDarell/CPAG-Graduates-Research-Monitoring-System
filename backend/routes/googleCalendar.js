@@ -59,19 +59,32 @@ router.get('/callback', async (req, res) => {
     }
 
     const userId = state;
+    let redirectPath = '/dashboard/faculty';
+    
     if (userId) {
-      await User.findByIdAndUpdate(userId, {
+      const user = await User.findByIdAndUpdate(userId, {
         googleAccessToken: tokens.access_token,
         googleRefreshToken: tokens.refresh_token || undefined,
         googleTokenExpiry: expiryDate,
         calendarConnected: true,
-      });
+      }, { new: true });
+
+      // Redirect based on user role
+      if (user) {
+        if (user.role === 'program head') {
+          redirectPath = '/dashboard/program-head';
+        } else if (user.role === 'faculty adviser') {
+          redirectPath = '/dashboard/faculty';
+        }
+      }
     }
 
-    res.redirect(`${process.env.FRONTEND_URL}/dashboard/faculty?calendar=connected`);
+    res.redirect(`${process.env.FRONTEND_URL}${redirectPath}?calendar=connected`);
   } catch (error) {
     console.error('Error in OAuth callback:', error);
-    res.redirect(`${process.env.FRONTEND_URL}/dashboard/faculty?calendar=error`);
+    // Try to redirect to the correct dashboard, default to faculty if role unknown
+    const defaultPath = '/dashboard/faculty';
+    res.redirect(`${process.env.FRONTEND_URL}${defaultPath}?calendar=error`);
   }
 });
 
