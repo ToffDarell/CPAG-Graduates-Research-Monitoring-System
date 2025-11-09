@@ -6,6 +6,8 @@ import Research from "../models/Research.js";
 import User from "../models/User.js";
 import Document from "../models/Document.js";
 import crypto from "crypto";
+import fs from "fs";
+import path from "path";
 
 // Get panel members
 export const getPanelMembers = async (req, res) => {
@@ -1945,7 +1947,7 @@ export const submitPanelReviewByToken = async (req, res) => {
 
     await panel.save();
 
-    // Log activity (without user ID since it's external)
+    // Log activity
     await Activity.create({
       user: panel.assignedBy,
       action: "update",
@@ -3780,4 +3782,129 @@ const checkScheduleConflictsHelper = async (scheduleData) => {
     hasConflicts: conflicts.length > 0,
     conflicts,
   };
+};
+
+// Get available documents for program head
+export const getAvailableDocuments = async (req, res) => {
+  try {
+    const documents = await Document.find({
+      isActive: true,
+      accessibleTo: { $in: ["program head"] },
+    })
+      .populate("uploadedBy", "name")
+      .sort({ createdAt: -1 });
+    
+    res.json(documents);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Download document
+export const downloadDocument = async (req, res) => {
+  try {
+    const document = await Document.findById(req.params.id);
+    
+    if (!document) {
+      return res.status(404).json({ message: "Document not found" });
+    }
+
+    // Check access
+    const hasAccess = document.accessibleTo.includes("program head") || 
+    document.uploadedBy.toString() === req.user.id;
+    
+    if (!hasAccess) {
+      return res.status(403).json({ message: "Access denied" });
+    }
+
+    // Construct file path
+    let filePath;
+    if (path.isAbsolute(document.filepath)) {
+      filePath = document.filepath;
+    } else {
+      filePath = path.join(process.cwd(), 'uploads', path.basename(document.filepath));
+    }
+
+    // Check if file exists
+    if (!fs.existsSync(filePath)) {
+      const altPath = path.join(process.cwd(), document.filepath);
+      if (fs.existsSync(altPath)) {
+        filePath = altPath;
+      } else {
+        return res.status(404).json({ message: "File not found on server" });
+      }
+    }
+
+    // Log activity
+    await Activity.create({
+      user: req.user.id,
+      action: "download",
+      entityType: "document",
+      entityId: document._id,
+      entityName: document.title,
+      description: `Downloaded document: ${document.title}`,
+      metadata: { category: document.category, filename: document.filename }
+    });
+
+    // Send file
+    res.download(filePath, document.filename);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// View document (for inline viewing)
+export const viewDocument = async (req, res) => {
+  try {
+    const document = await Document.findById(req.params.id);
+    
+    if (!document) {
+      return res.status(404).json({ message: "Document not found" });
+    }
+
+    // Check access
+    const hasAccess = document.accessibleTo.includes("program head") || 
+                      document.uploadedBy.toString() === req.user.id;
+    
+    if (!hasAccess) {
+      return res.status(403).json({ message: "Access denied" });
+    }
+
+    // Construct file path
+    let filePath;
+    if (path.isAbsolute(document.filepath)) {
+      filePath = document.filepath;
+    } else {
+      filePath = path.join(process.cwd(), 'uploads', path.basename(document.filepath));
+    }
+
+    // Check if file exists
+    if (!fs.existsSync(filePath)) {
+      const altPath = path.join(process.cwd(), document.filepath);
+      if (fs.existsSync(altPath)) {
+        filePath = altPath;
+      } else {
+        return res.status(404).json({ message: "File not found on server" });
+      }
+    }
+
+    // Log activity
+    await Activity.create({
+      user: req.user.id,
+      action: "view",
+      entityType: "document",
+      entityId: document._id,
+      entityName: document.title,
+      description: `Viewed document: ${document.title}`,
+      metadata: { category: document.category }
+    });
+
+    // Send file for inline viewing
+    res.setHeader('Content-Type', document.mimeType);
+    res.setHeader('Content-Disposition', `inline; filename="${document.filename}"`);
+    const fileStream = fs.createReadStream(filePath);
+    fileStream.pipe(res);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
 };
