@@ -435,6 +435,11 @@ export const uploadDocument = async (req, res) => {
 
     // Try to import Document model
     const Document = (await import("../models/Document.js")).default;
+      
+    const parsedAccessibleTo = req.body.accessibleTo ? JSON.parse(req.body.accessibleTo) : ["dean"];
+    console.log('Document accessibleTo from request:', req.body.accessibleTo);
+    console.log('Parsed accessibleTo:', parsedAccessibleTo);
+    
     const document = new Document({
       title: req.body.title,
       description: req.body.description,
@@ -444,11 +449,12 @@ export const uploadDocument = async (req, res) => {
       fileSize: req.file.size,
       mimeType: req.file.mimetype,
       uploadedBy: req.user.id,
-      accessibleTo: req.body.accessibleTo ? JSON.parse(req.body.accessibleTo) : ["dean"],
+      accessibleTo: parsedAccessibleTo,
     });
 
     await document.save();
     console.log('Document saved successfully:', document._id);
+    console.log('Document accessibleTo saved as:', document.accessibleTo);
     
     // Log activity
     await logActivity(
