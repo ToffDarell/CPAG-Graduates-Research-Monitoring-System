@@ -190,9 +190,49 @@ export const getResearchRecords = async (req, res) => {
     const research = await Research.find()
       .populate("students", "name email")
       .populate("adviser", "name email")
-      .populate("panel")
+      .populate("panel", "name email")
       .sort({ createdAt: -1 });
-    res.json(research);
+    
+    // Fetch Panel data to include external panelists
+    const Panel = (await import("../models/Panel.js")).default;
+    const researchWithPanels = await Promise.all(
+      research.map(async (r) => {
+        const researchObj = r.toObject();
+        
+        // Find the Panel document for this research
+        const panelDoc = await Panel.findOne({ research: r._id })
+          .populate("members.faculty", "name email");
+        
+        if (panelDoc) {
+          // Combine faculty and external panelists
+          researchObj.panelMembers = panelDoc.members
+            .filter(m => m.isSelected) // Only include selected members
+            .map(m => {
+              if (m.isExternal) {
+                return {
+                  name: m.name,
+                  email: m.email,
+                  role: m.role,
+                  isExternal: true
+                };
+              } else {
+                return {
+                  name: m.faculty?.name || 'N/A',
+                  email: m.faculty?.email || 'N/A',
+                  role: m.role,
+                  isExternal: false
+                };
+              }
+            });
+        } else {
+          researchObj.panelMembers = [];
+        }
+        
+        return researchObj;
+      })
+    );
+    
+    res.json(researchWithPanels);
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
