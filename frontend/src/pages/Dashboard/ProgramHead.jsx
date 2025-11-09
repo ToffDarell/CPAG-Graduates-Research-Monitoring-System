@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { FaUsersCog, FaCalendarAlt, FaClipboardCheck, FaChartLine, FaFileAlt, FaBell, FaSignOutAlt, FaBars, FaTimes as FaClose, FaUpload, FaDownload, FaTrash, FaHistory, FaFilePdf, FaFileWord, FaSearch, FaCheck, FaUsers, FaEdit, FaChartBar, FaClock, FaMapMarkerAlt, FaExclamationTriangle } from "react-icons/fa";
+import { FaUsersCog, FaCalendarAlt, FaClipboardCheck, FaChartLine, FaFileAlt, FaBell, FaSignOutAlt, FaBars, FaTimes as FaClose, FaUpload, FaDownload, FaTrash, FaHistory, FaFilePdf, FaFileWord, FaSearch, FaCheck, FaUsers, FaEdit, FaChartBar, FaClock, FaMapMarkerAlt, FaExclamationTriangle, FaGoogle } from "react-icons/fa";
 import { useNavigate } from "react-router-dom";
 import axios from "axios";
 import { Calendar, momentLocalizer } from 'react-big-calendar';
@@ -16,6 +16,76 @@ const ProgramHeadDashboard = ({setUser}) => {
     { id: 2, name: "Dr. Johnson", role: "Member", status: "Pending" },
   ]);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  
+  // Google Calendar state
+  const [calendarConnected, setCalendarConnected] = useState(false);
+  const [calendarLoading, setCalendarLoading] = useState(false);
+
+  // Check for calendar connection callback on mount
+  useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const calendarParam = urlParams.get('calendar');
+    if (calendarParam === 'connected') {
+      setCalendarConnected(true);
+      setSelectedTab('schedules'); // Auto-switch to schedules tab
+      checkCalendarStatus();
+      // Clean up URL without refreshing
+      window.history.replaceState({}, document.title, '/dashboard/program-head');
+    } else if (calendarParam === 'error') {
+      alert('Failed to connect Google Calendar. Please try again.');
+      setSelectedTab('schedules'); // Still switch to schedules tab
+      // Clean up URL
+      window.history.replaceState({}, document.title, '/dashboard/program-head');
+    } else {
+      checkCalendarStatus();
+    }
+  }, []);
+
+  // Google Calendar functions
+  const checkCalendarStatus = async () => {
+    try {
+      const token = localStorage.getItem('token');
+      const res = await axios.get('/api/google-calendar/status', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      setCalendarConnected(res.data.connected);
+    } catch (error) {
+      console.error('Error checking calendar status:', error);
+      setCalendarConnected(false);
+    }
+  };
+
+  const connectGoogleCalendar = async () => {
+    try {
+      setCalendarLoading(true);
+      const token = localStorage.getItem('token');
+      const res = await axios.get('/api/google-calendar/auth-url', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      window.location.href = res.data.authUrl;
+    } catch (error) {
+      console.error('Error getting auth URL:', error);
+    } finally {
+      setCalendarLoading(false);
+    }
+  };
+
+  const disconnectGoogleCalendar = async () => {
+    if (!window.confirm('Are you sure you want to disconnect Google Calendar?')) return;
+    
+    try {
+      setCalendarLoading(true);
+      const token = localStorage.getItem('token');
+      await axios.post('/api/google-calendar/disconnect', {}, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      setCalendarConnected(false);
+    } catch (error) {
+      console.error('Error disconnecting calendar:', error);
+    } finally {
+      setCalendarLoading(false);
+    }
+  };
 
   const handleLogout = () => {
     // Show confirmation dialog
@@ -50,7 +120,12 @@ const ProgramHeadDashboard = ({setUser}) => {
       case "advisers":
         return <FacultyAdviserAssignment />;
       case "schedules":
-        return <ScheduleManagement />;
+        return <ScheduleManagement 
+          calendarConnected={calendarConnected}
+          onConnectCalendar={connectGoogleCalendar}
+          onDisconnectCalendar={disconnectGoogleCalendar}
+          calendarLoading={calendarLoading}
+        />;
       case "monitoring":
         return <ProcessMonitoring />;
       case "forms":
@@ -1127,7 +1202,7 @@ const PanelSelection = () => {
 };
 
 // Schedule Management Component
-const ScheduleManagement = () => {
+const ScheduleManagement = ({ calendarConnected, onConnectCalendar, onDisconnectCalendar, calendarLoading }) => {
   const [activeTab, setActiveTab] = useState("consultations"); // "consultations", "panels", or "calendar"
   const [consultationSchedules, setConsultationSchedules] = useState([]);
   const [panelsWithoutSchedule, setPanelsWithoutSchedule] = useState([]);
@@ -1508,6 +1583,34 @@ const ScheduleManagement = () => {
       <div className="bg-white border border-gray-200 rounded-lg p-5">
         <h2 className="text-xl font-bold text-gray-800 mb-2">Schedule Finalization</h2>
         <p className="text-sm text-gray-600">Finalize consultation schedules and create panel defense schedules</p>
+      </div>
+
+      {/* Google Calendar Connection */}
+      <div className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center space-x-3">
+            <FaGoogle className={`text-2xl ${calendarConnected ? 'text-green-600' : 'text-gray-400'}`} />
+            <div>
+              <h3 className="font-semibold text-gray-800">Google Calendar Integration</h3>
+              <p className="text-sm text-gray-600">
+                {calendarConnected 
+                  ? '✅ Connected - Schedules sync automatically' 
+                  : '❌ Not connected - Connect to enable sync'}
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={calendarConnected ? onDisconnectCalendar : onConnectCalendar}
+            disabled={calendarLoading}
+            className={`px-4 py-2 rounded-md font-medium text-sm transition-colors ${
+              calendarConnected
+                ? 'bg-red-500 hover:bg-red-600 text-white'
+                : 'bg-blue-600 hover:bg-blue-700 text-white'
+            } ${calendarLoading ? 'opacity-50 cursor-not-allowed' : ''}`}
+          >
+            {calendarLoading ? 'Loading...' : calendarConnected ? 'Disconnect' : 'Connect Calendar'}
+          </button>
+        </div>
       </div>
 
       {/* Tabs */}
@@ -3428,6 +3531,197 @@ const FormsManagement = () => {
             )}
           </div>
         </>
+      )}
+
+      {/* Dean's Documents Section */}
+      <DeanDocumentsSection />
+    </div>
+  );
+};
+
+// Dean's Documents Section Component
+const DeanDocumentsSection = () => {
+  const [documents, setDocuments] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [categoryFilter, setCategoryFilter] = useState("all");
+
+  useEffect(() => {
+    fetchDocuments();
+  }, []);
+
+  const fetchDocuments = async () => {
+    try {
+      const token = localStorage.getItem('token');
+      const response = await axios.get('/api/programhead/documents', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      setDocuments(response.data);
+    } catch (error) {
+      console.error('Error fetching documents:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDownload = async (doc) => {
+    try {
+      const token = localStorage.getItem('token');
+      const response = await axios.get(`/api/programhead/documents/${doc._id}/download`, {
+        headers: { Authorization: `Bearer ${token}` },
+        responseType: 'blob'
+      });
+      
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', doc.filename);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error('Error downloading document:', error);
+      alert('Error downloading document: ' + (error.response?.data?.message || error.message));
+    }
+  };
+
+  const handleView = async (doc) => {
+    try {
+      const token = localStorage.getItem('token');
+      const response = await axios.get(`/api/programhead/documents/${doc._id}`, {
+        headers: { Authorization: `Bearer ${token}` },
+        responseType: 'blob'
+      });
+      
+      const blob = new Blob([response.data], { type: doc.mimeType });
+      const url = URL.createObjectURL(blob);
+      window.open(url, '_blank');
+    } catch (error) {
+      console.error('Error viewing document:', error);
+      alert('Error viewing document');
+    }
+  };
+
+  const filteredDocuments = documents.filter(doc => {
+    const matchesSearch = doc.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                         doc.description?.toLowerCase().includes(searchQuery.toLowerCase());
+    const matchesCategory = categoryFilter === "all" || doc.category === categoryFilter;
+    return matchesSearch && matchesCategory;
+  });
+
+  const formatFileSize = (bytes) => {
+    if (!bytes) return 'N/A';
+    const kb = bytes / 1024;
+    if (kb < 1024) return `${kb.toFixed(2)} KB`;
+    return `${(kb / 1024).toFixed(2)} MB`;
+  };
+
+  const getCategoryColor = (category) => {
+    const colors = {
+      form: 'bg-blue-100 text-blue-700',
+      template: 'bg-green-100 text-green-700',
+      guideline: 'bg-purple-100 text-purple-700',
+      policy: 'bg-red-100 text-red-700',
+      other: 'bg-gray-100 text-gray-700'
+    };
+    return colors[category] || colors.other;
+  };
+
+  if (loading) {
+    return (
+      <div className="bg-white border border-gray-200 rounded-lg p-5">
+        <h3 className="text-lg font-semibold text-gray-800 mb-4">Documents from Dean</h3>
+        <div className="flex items-center justify-center py-8">
+          <div className="text-gray-500">Loading documents...</div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="bg-white border border-gray-200 rounded-lg p-5">
+      <div className="flex justify-between items-center mb-4">
+        <h3 className="text-lg font-semibold text-gray-800">Documents from Dean</h3>
+        <span className="text-sm text-gray-600">{filteredDocuments.length} document(s)</span>
+      </div>
+
+      {/* Search and Filter */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+        <div>
+          <input
+            type="text"
+            placeholder="Search documents..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-transparent text-sm"
+          />
+        </div>
+        <div>
+          <select
+            value={categoryFilter}
+            onChange={(e) => setCategoryFilter(e.target.value)}
+            className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-transparent text-sm"
+          >
+            <option value="all">All Categories</option>
+            <option value="form">Forms</option>
+            <option value="template">Templates</option>
+            <option value="guideline">Guidelines</option>
+            <option value="policy">Policies</option>
+            <option value="other">Other</option>
+          </select>
+        </div>
+      </div>
+
+      {/* Documents List */}
+      {filteredDocuments.length === 0 ? (
+        <div className="text-center py-8 text-gray-500 text-sm">
+          No documents available from dean
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {filteredDocuments.map((doc) => (
+            <div key={doc._id} className="border border-gray-200 rounded-lg p-4 hover:bg-gray-50 transition-colors">
+              <div className="flex items-start justify-between">
+                <div className="flex-1">
+                  <div className="flex items-center space-x-2 mb-2">
+                    <FaFileAlt className="text-[#7C1D23] h-4 w-4" />
+                    <h4 className="text-sm font-semibold text-gray-900">{doc.title}</h4>
+                    <span className={`px-2 py-1 rounded-full text-xs font-medium ${getCategoryColor(doc.category)}`}>
+                      {doc.category}
+                    </span>
+                  </div>
+                  {doc.description && (
+                    <p className="text-xs text-gray-600 mb-2">{doc.description}</p>
+                  )}
+                  <div className="flex items-center space-x-3 text-xs text-gray-500">
+                    <span>Uploaded by: {doc.uploadedBy?.name || 'Unknown'}</span>
+                    <span>•</span>
+                    <span>{new Date(doc.createdAt).toLocaleDateString()}</span>
+                    <span>•</span>
+                    <span>{formatFileSize(doc.fileSize)}</span>
+                  </div>
+                </div>
+                <div className="flex items-center space-x-2 ml-4">
+                  <button
+                    onClick={() => handleView(doc)}
+                    className="p-2 text-gray-600 hover:text-blue-600 transition-colors"
+                    title="View Document"
+                  >
+                    <FaFileAlt className="h-4 w-4" />
+                  </button>
+                  <button
+                    onClick={() => handleDownload(doc)}
+                    className="p-2 text-gray-600 hover:text-[#7C1D23] transition-colors"
+                    title="Download"
+                  >
+                    <FaDownload className="h-4 w-4" />
+                  </button>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
       )}
     </div>
   );
