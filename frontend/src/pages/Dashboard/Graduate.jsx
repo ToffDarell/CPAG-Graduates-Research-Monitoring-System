@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import { FaUpload, FaCalendar, FaBook, FaCheckCircle, FaClock, FaFileAlt, FaChartLine, FaSignOutAlt, FaBars, FaTimes as FaClose, FaTimesCircle, FaDownload } from "react-icons/fa";
 import { useNavigate } from "react-router-dom";
 import axios from "axios";
+import MySchedule from "../../components/MyScheduleComponent";
 
 const GraduateDashboard = ({setUser}) => {
   const navigate = useNavigate();
@@ -52,13 +53,26 @@ const GraduateDashboard = ({setUser}) => {
     }
   };
 
-  const fetchMySchedules = async () => {
+  const fetchMySchedules = async (filters = {}) => {
     try {
       const token = localStorage.getItem('token');
-      const res = await axios.get('/api/student/schedules', {
-        headers: { Authorization: `Bearer ${token}` }
+      const params = new URLSearchParams();
+      if (filters.startDate) params.append('startDate', filters.startDate);
+      if (filters.endDate) params.append('endDate', filters.endDate);
+      if (filters.type) params.append('type', filters.type);
+      
+      // Add cache-busting timestamp to force fresh data
+      params.append('_t', Date.now().toString());
+      
+      const res = await axios.get(`/api/student/schedules?${params.toString()}`, {
+        headers: { 
+          Authorization: `Bearer ${token}`,
+          'Cache-Control': 'no-cache',
+          'Pragma': 'no-cache'
+        }
       });
       setMySchedules(res.data);
+      console.log('Fetched schedules:', res.data.length, 'items');
     } catch (error) {
       console.error('Error fetching schedules:', error);
     }
@@ -179,7 +193,7 @@ const GraduateDashboard = ({setUser}) => {
           loading={loading}
         />;
       case "schedule":
-        return <MySchedule schedules={mySchedules} />;
+        return <MySchedule schedules={mySchedules} onRefresh={fetchMySchedules} />;
       case "progress":
         return <ProgressTracking 
           percentage={progressPercentage} 
@@ -487,291 +501,6 @@ const ComplianceForms = ({ onFormUpload, loading }) => {
   );
 };
 
-// My Schedule Component
-const MySchedule = ({ schedules }) => {
-  const [showRequestModal, setShowRequestModal] = useState(false);
-  const [availableSlots, setAvailableSlots] = useState([]);
-  const [adviserInfo, setAdviserInfo] = useState(null);
-  const [selectedSlot, setSelectedSlot] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [message, setMessage] = useState("");
-  const [successMessage, setSuccessMessage] = useState("");
-  const [errorMessage, setErrorMessage] = useState("");
-
-  const fetchAvailableSlots = async () => {
-    setLoading(true);
-    try {
-      const token = localStorage.getItem('token');
-      const res = await axios.get('/api/student/available-slots', {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      setAvailableSlots(res.data.slots || []);
-      setAdviserInfo(res.data.adviser);
-      setShowRequestModal(true);
-    } catch (error) {
-      console.error('Error fetching available slots:', error);
-      setErrorMessage(error.response?.data?.message || 'Failed to fetch available slots');
-      setTimeout(() => setErrorMessage(""), 4000);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleRequestConsultation = async (slotId) => {
-    setLoading(true);
-    try {
-      const token = localStorage.getItem('token');
-      const res = await axios.post('/api/student/request-consultation', {
-        scheduleId: slotId,
-        message: message || "Consultation request"
-      }, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-
-      setSuccessMessage(res.data.message || "Consultation requested successfully!");
-      setShowRequestModal(false);
-      setMessage("");
-      window.location.reload(); // Refresh to show updated schedule
-    } catch (error) {
-      console.error('Error requesting consultation:', error);
-      setErrorMessage(error.response?.data?.message || 'Failed to request consultation');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Filter and sort schedules
-  const upcomingSchedules = schedules.filter(s => 
-    new Date(s.datetime) >= new Date() && s.status !== 'cancelled'
-  ).sort((a, b) => new Date(a.datetime) - new Date(b.datetime));
-
-  const myConfirmedSchedules = upcomingSchedules.filter(s => {
-    const myParticipation = s.participants?.find(p => p.role === 'student');
-    return myParticipation && myParticipation.status === 'confirmed';
-  });
-
-  const myPendingRequests = upcomingSchedules.filter(s => {
-    const myParticipation = s.participants?.find(p => p.role === 'student');
-    return myParticipation && myParticipation.status === 'invited';
-  });
-
-  return (
-    <div className="space-y-5">
-      {/* Success/Error Messages */}
-      {successMessage && (
-        <div className="bg-green-50 border-l-4 border-green-500 p-4 rounded-md">
-          <div className="flex items-center">
-            <FaCheckCircle className="h-5 w-5 text-green-500 mr-3" />
-            <p className="text-green-700 font-medium">{successMessage}</p>
-          </div>
-        </div>
-      )}
-
-      {errorMessage && (
-        <div className="bg-red-50 border-l-4 border-red-500 p-4 rounded-md">
-          <div className="flex items-center">
-            <FaTimesCircle className="h-5 w-5 text-red-500 mr-3" />
-            <p className="text-red-700 font-medium">{errorMessage}</p>
-          </div>
-        </div>
-      )}
-
-      <div className="flex justify-between items-center">
-        <h2 className="text-xl font-bold text-gray-800">My Consultation Schedule</h2>
-        <button
-          onClick={fetchAvailableSlots}
-          disabled={loading}
-          className="px-4 py-2 bg-[#7C1D23] text-white rounded-md hover:bg-[#5a1519] transition-colors text-sm font-medium disabled:opacity-50"
-        >
-          <FaCalendar className="inline mr-2" />
-          {loading ? "Loading..." : "Request Consultation"}
-        </button>
-      </div>
-
-      {/* Quick Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div className="bg-green-50 rounded-lg p-4 border border-green-200">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-2xl font-bold text-green-700">{myConfirmedSchedules.length}</p>
-              <p className="text-xs text-green-600 font-medium uppercase">Confirmed</p>
-            </div>
-            <FaCheckCircle className="h-8 w-8 text-green-600" />
-          </div>
-        </div>
-        <div className="bg-yellow-50 rounded-lg p-4 border border-yellow-200">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-2xl font-bold text-yellow-700">{myPendingRequests.length}</p>
-              <p className="text-xs text-yellow-600 font-medium uppercase">Pending Approval</p>
-            </div>
-            <FaClock className="h-8 w-8 text-yellow-600" />
-          </div>
-        </div>
-      </div>
-
-      {/* Pending Requests */}
-      {myPendingRequests.length > 0 && (
-        <div className="bg-yellow-50 rounded-lg border border-yellow-200 p-5">
-          <h3 className="text-lg font-semibold text-gray-800 mb-3 flex items-center">
-            <FaClock className="mr-2 text-yellow-600" />
-            Pending Approval ({myPendingRequests.length})
-          </h3>
-          <div className="space-y-3">
-            {myPendingRequests.map((schedule) => (
-              <div key={schedule._id} className="bg-white rounded-lg p-4 border border-yellow-300">
-                <h4 className="font-semibold text-gray-800">{schedule.title}</h4>
-                <p className="text-sm text-gray-600 mt-1">
-                  <FaCalendar className="inline mr-1" />
-                  {new Date(schedule.datetime).toLocaleString()}
-                </p>
-                <p className="text-sm text-gray-500">Location: {schedule.location}</p>
-                <span className="inline-block mt-2 px-2 py-1 bg-yellow-100 text-yellow-700 rounded-full text-xs font-medium">
-                  Waiting for adviser approval
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Confirmed Schedules */}
-      <div className="space-y-4">
-        {myConfirmedSchedules.length > 0 ? (
-          myConfirmedSchedules.map((schedule) => {
-            const isApproaching = new Date(schedule.datetime) - new Date() < 24 * 60 * 60 * 1000;
-            return (
-              <div 
-                key={schedule._id} 
-                className={`bg-white border rounded-lg p-5 hover:shadow-md transition-shadow ${
-                  isApproaching ? 'border-orange-300 bg-orange-50' : 'border-gray-200'
-                }`}
-              >
-                {isApproaching && (
-                  <div className="mb-2">
-                    <span className="px-2 py-1 bg-orange-100 text-orange-700 rounded-full text-xs font-medium">
-                      <FaClock className="inline mr-1" />
-                      Approaching Soon
-                    </span>
-                  </div>
-                )}
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h3 className="text-base font-semibold text-gray-800">{schedule.title}</h3>
-                    <p className="text-sm text-gray-600 mt-1">{schedule.description || 'Consultation with adviser'}</p>
-                    <p className="text-sm text-gray-500 mt-1">
-                      <FaCalendar className="inline mr-1" />
-                      {new Date(schedule.datetime).toLocaleDateString()} at {new Date(schedule.datetime).toLocaleTimeString()}
-                    </p>
-                    <p className="text-sm text-gray-500">Location: {schedule.location}</p>
-                  </div>
-                  <div className="text-right">
-                    <span className="px-3 py-1 bg-green-100 text-green-700 rounded-full text-xs font-medium">
-                      Confirmed
-                    </span>
-                  </div>
-                </div>
-              </div>
-            );
-          })
-        ) : (
-          <div className="bg-gray-50 rounded-lg border border-gray-200 p-8">
-            <FaCalendar className="mx-auto h-12 w-12 text-gray-400 mb-3" />
-            <p className="text-gray-500 text-center text-sm">No confirmed consultations yet.</p>
-            <p className="text-gray-400 text-center text-xs mt-1">Click "Request Consultation" to schedule a meeting with your adviser.</p>
-          </div>
-        )}
-      </div>
-
-      {/* Request Consultation Modal */}
-      {showRequestModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
-          <div className="bg-white rounded-lg shadow-lg max-w-3xl w-full p-6 max-h-[90vh] overflow-y-auto">
-            <div className="flex justify-between items-center mb-4">
-              <div>
-                <h3 className="text-lg font-semibold text-gray-800">Request Consultation</h3>
-                {adviserInfo && (
-                  <p className="text-sm text-gray-600 mt-1">
-                    Adviser: {adviserInfo.name} ({adviserInfo.email})
-                  </p>
-                )}
-              </div>
-              <button
-                onClick={() => setShowRequestModal(false)}
-                className="text-gray-500 hover:text-gray-700"
-              >
-                <FaClose className="h-6 w-6" />
-              </button>
-            </div>
-
-            {availableSlots.length === 0 ? (
-              <div className="bg-gray-50 rounded-lg border border-gray-200 p-8">
-                <FaCalendar className="mx-auto h-12 w-12 text-gray-400 mb-3" />
-                <p className="text-gray-500 text-center text-sm">No available consultation slots at the moment.</p>
-                <p className="text-gray-400 text-center text-xs mt-1">Please check back later or contact your adviser directly.</p>
-              </div>
-            ) : (
-              <div className="space-y-4">
-                <p className="text-sm text-gray-600">
-                  Select an available time slot to request a consultation with your adviser:
-                </p>
-                {availableSlots.map((slot) => (
-                  <div 
-                    key={slot._id} 
-                    className={`border rounded-lg p-4 hover:shadow-md transition-shadow cursor-pointer ${
-                      selectedSlot === slot._id ? 'border-[#7C1D23] bg-red-50' : 'border-gray-200 bg-white'
-                    }`}
-                    onClick={() => setSelectedSlot(slot._id)}
-                  >
-                    <div className="flex items-start justify-between">
-                      <div className="flex-1">
-                        <h4 className="font-semibold text-gray-800">{slot.title}</h4>
-                        <p className="text-sm text-gray-600 mt-1">{slot.description}</p>
-                        <div className="mt-2 space-y-1">
-                          <p className="text-sm text-gray-500">
-                            <FaCalendar className="inline mr-1" />
-                            {new Date(slot.datetime).toLocaleDateString()} at {new Date(slot.datetime).toLocaleTimeString()}
-                          </p>
-                          <p className="text-sm text-gray-500">
-                            <FaClock className="inline mr-1" />
-                            Duration: {slot.duration} minutes
-                          </p>
-                          <p className="text-sm text-gray-500">
-                            Location: {slot.location}
-                          </p>
-                        </div>
-                      </div>
-                      {selectedSlot === slot._id && (
-                        <FaCheckCircle className="h-6 w-6 text-[#7C1D23]" />
-                      )}
-                    </div>
-                  </div>
-                ))}
-
-                <div className="flex justify-end space-x-3 pt-4">
-                  <button
-                    onClick={() => setShowRequestModal(false)}
-                    className="px-4 py-2 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300 transition-colors text-sm font-medium"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    onClick={() => handleRequestConsultation(selectedSlot)}
-                    disabled={!selectedSlot || loading}
-                    className="px-6 py-2 bg-[#7C1D23] text-white rounded-md hover:bg-[#5a1519] transition-colors text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    {loading ? "Requesting..." : "Request Consultation"}
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-};
-
 // Progress Tracking Component
 const ProgressTracking = ({ percentage, completed, total, myResearch, feedback }) => {
   const documentsUploaded = myResearch.length > 0 ? myResearch[0].forms?.length || 0 : 0;
@@ -912,12 +641,28 @@ const DocumentsView = () => {
   const fetchDocuments = async () => {
     try {
       const token = localStorage.getItem('token');
+      console.log('Fetching documents with token:', token ? 'Token exists' : 'No token found');
+      
+      if (!token) {
+        console.error('No authentication token found');
+        setLoading(false);
+        return;
+      }
+      
       const response = await axios.get('/api/student/documents', {
         headers: { Authorization: `Bearer ${token}` }
       });
+      console.log('Documents fetched successfully:', response.data.length, 'documents');
       setDocuments(response.data);
     } catch (error) {
       console.error('Error fetching documents:', error);
+      if (error.response) {
+        console.error('Response status:', error.response.status);
+        console.error('Response data:', error.response.data);
+        if (error.response.status === 401) {
+          console.error('Authentication failed. Token may be invalid or expired.');
+        }
+      }
     } finally {
       setLoading(false);
     }
