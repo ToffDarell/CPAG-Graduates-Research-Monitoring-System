@@ -18,7 +18,7 @@ const activitySchema = new mongoose.Schema(
     },
     entityType: {
       type: String,
-      enum: ["document", "research", "user", "panel", "feedback", "settings", "email", "schedule"],
+      enum: ["document", "research", "user", "panel", "feedback", "settings", "email", "schedule", "complianceForm"],
       required: true,
     },
     entityId: {
