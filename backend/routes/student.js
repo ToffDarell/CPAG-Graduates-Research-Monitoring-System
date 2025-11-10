@@ -61,9 +61,6 @@ const upload = multer({
   },
 });
 
-/**
- * Graduate Student Functional Requirements
- */
 
 // Login route (no authentication required)
 router.post("/login", async (req, res) => {
