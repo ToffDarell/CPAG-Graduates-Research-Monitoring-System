@@ -1,69 +1,127 @@
 import express from "express";
-import { checkAuth } from "../middleware/auth.js";
+import multer from "multer";
+import path from "path";
+import fs from "fs";
+import jwt from "jsonwebtoken";
+import { protect, checkAuth } from "../middleware/auth.js";
 import Research from "../models/Research.js";
 import Schedule from "../models/Schedule.js";
 import User from "../models/User.js";
-import { getAvailableDocuments, downloadDocument, viewDocument } from "../controllers/studentController.js";
+import { 
+  getAvailableDocuments, 
+  downloadDocument, 
+  viewDocument,
+  uploadComplianceForm,
+  getComplianceForms,
+  getComplianceForm,
+  downloadComplianceForm,
+  viewComplianceForm,
+  uploadChapter,
+  getMyResearch,
+  getMySchedules,
+  getAdviserFeedback,
+  exportScheduleICS
+} from "../controllers/studentController.js";
 
 const router = express.Router();
+
+// JWT Token Generator
+const generateToken = (id) => {
+  return jwt.sign({ id }, process.env.JWT_SECRET, { expiresIn: '30d' });
+};
+
+// Create uploads directory if it doesn't exist
+const uploadsDir = path.join(process.cwd(), 'uploads');
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+}
+
+// Configure multer for file uploads
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const uploadPath = path.join(process.cwd(), 'uploads');
+    cb(null, uploadPath);
+  },
+  filename: (req, file, cb) => {
+    const cleanName = file.originalname.replace(/[^a-zA-Z0-9.-]/g, '_');
+    cb(null, Date.now() + "-" + cleanName);
+  },
+});
+
+const upload = multer({ 
+  storage,
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit
+  fileFilter: (req, file, cb) => {
+    const allowedTypes = ['application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'];
+    if (allowedTypes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Invalid file type. Only PDF and DOCX files are allowed.'), false);
+    }
+  },
+});
 
 /**
  * Graduate Student Functional Requirements
  */
 
-// Upload compliance forms
-router.post("/upload-compliance", checkAuth(["student"]), async (req, res) => {
-  if (req.user.level !== "graduate") {
-    return res.status(403).json({ message: "Only graduate students can upload compliance forms." });
+// Login route (no authentication required)
+router.post("/login", async (req, res) => {
+  try {
+    const { email, password } = req.body;
+
+    if (!email || !password) {
+      return res.status(400).json({ message: "Email and password are required" });
+    }
+
+    // Find user by email (instead of username)
+    const user = await User.findOne({ email });
+    
+    if (!user) {
+      return res.status(401).json({ message: "Invalid email or password" });
+    }
+
+    const isMatch = await user.matchPassword(password);
+    if (!isMatch) {
+      return res.status(401).json({ message: "Invalid email or password" });
+    }
+
+    // Return user data using name instead of username
+    res.json({
+      _id: user._id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      studentId: user.studentId,
+      token: generateToken(user._id)
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
   }
-
-  const { researchId, complianceForm } = req.body;
-
-  const research = await Research.findByIdAndUpdate(
-    researchId,
-    { $push: { complianceForms: { file: complianceForm, uploadedBy: req.user._id } } },
-    { new: true }
-  );
-
-  res.json({ message: "Compliance form uploaded", research });
 });
 
-// Upload chapters (1–3 + approved title)
-router.post("/upload-chapters", checkAuth(["student"]), async (req, res) => {
-  if (req.user.level !== "graduate") {
-    return res.status(403).json({ message: "Only graduate students can upload chapters." });
-  }
+// Apply authentication middleware to all routes below
+router.use(protect, checkAuth(["graduate student"]));
 
-  const { researchId, title, chapters } = req.body; // chapters = [ch1, ch2, ch3]
+// Compliance form routes
+router.post("/compliance-form", upload.single("file"), uploadComplianceForm);
+router.get("/compliance-forms", getComplianceForms);
+router.get("/compliance-forms/:id", getComplianceForm);
+router.get("/compliance-forms/:id/download", downloadComplianceForm);
+router.get("/compliance-forms/:id/view", viewComplianceForm);
 
-  const research = await Research.findByIdAndUpdate(
-    researchId,
-    {
-      approvedTitle: title,
-      $push: { chapters: { uploadedBy: req.user._id, files: chapters } },
-    },
-    { new: true }
-  );
+// Research routes
+router.get("/research", getMyResearch);
+router.post("/chapter", upload.single("file"), uploadChapter);
 
-  res.json({ message: "Graduate chapters uploaded", research });
-});
 
-// View consultation/defense schedules
-router.get("/schedules", checkAuth(["student"]), async (req, res) => {
-  if (req.user.level !== "graduate") {
-    return res.status(403).json({ message: "Only graduate students can view schedules." });
-  }
-
-  const schedules = await Schedule.find({ "participants.user": req.user._id })
-    .populate("research", "title")
-    .populate("participants.user", "name email")
-    .populate("createdBy", "name email");
-
-  res.json(schedules);
-});
+// Schedule routes
+router.get("/schedules", getMySchedules);
+router.get("/schedules/:id/export-ics", exportScheduleICS);
+router.get("/feedback", getAdviserFeedback);
 
 // Get available consultation slots from adviser
-router.get("/available-slots", checkAuth(["student"]), async (req, res) => {
+router.get("/available-slots", async (req, res) => {
   try {
     if (req.user.level !== "graduate") {
       return res.status(403).json({ message: "Only graduate students can view available slots." });
@@ -101,7 +159,7 @@ router.get("/available-slots", checkAuth(["student"]), async (req, res) => {
 });
 
 // Request consultation
-router.post("/request-consultation", checkAuth(["student"]), async (req, res) => {
+router.post("/request-consultation", async (req, res) => {
   try {
     if (req.user.level !== "graduate") {
       return res.status(403).json({ message: "Only graduate students can request consultations." });
@@ -153,50 +211,15 @@ router.post("/request-consultation", checkAuth(["student"]), async (req, res) =>
 });
 
 // Logout
-router.post("/logout", checkAuth(["student"]), async (req, res) => {
+router.post("/logout", async (req, res) => {
   // Invalidate token client-side or manage session
   res.json({ message: "Graduate student logged out successfully" });
 });
 
-// Login route
-router.post("/login", async (req, res) => {
-  try {
-    const { email, password } = req.body;
-
-    if (!email || !password) {
-      return res.status(400).json({ message: "Email and password are required" });
-    }
-
-    // Find user by email (instead of username)
-    const user = await User.findOne({ email });
-    
-    if (!user) {
-      return res.status(401).json({ message: "Invalid email or password" });
-    }
-
-    const isMatch = await user.matchPassword(password);
-    if (!isMatch) {
-      return res.status(401).json({ message: "Invalid email or password" });
-    }
-
-    // Return user data using name instead of username
-    res.json({
-      _id: user._id,
-      name: user.name,
-      email: user.email,
-      role: user.role,
-      studentId: user.studentId,
-      token: generateToken(user._id)
-    });
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-});
-
 // Document routes
-router.get("/documents", checkAuth(["student"]), getAvailableDocuments);
-router.get("/documents/:id", checkAuth(["student"]), viewDocument);
-router.get("/documents/:id/download", checkAuth(["student"]), downloadDocument);
+router.get("/documents", getAvailableDocuments);
+router.get("/documents/:id", viewDocument);
+router.get("/documents/:id/download", downloadDocument);
 
 export default router;
 
