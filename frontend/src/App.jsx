@@ -9,6 +9,8 @@ import Home from "./pages/Home";
 import Login from "./pages/Login";
 import Register from "./pages/Register";
 import RoleSelection from "./pages/RoleSelection";
+import ForgotPassword from "./pages/ForgotPassword";
+import ResetPassword from "./pages/ResetPassword";
 import { useEffect, useState } from "react";
 import axios from "axios";
 import NotFound from "./components/NotFound";
@@ -98,6 +100,30 @@ function App() {
               <Navigate to={`/dashboard/${getDashboardPath(user.role)}`} />
             ) : (
               <Login setUser={setUser} />
+            )
+          }
+        />
+
+        {/* Forgot Password Route */}
+        <Route
+          path="/forgot-password"
+          element={
+            user ? (
+              <Navigate to={`/dashboard/${getDashboardPath(user.role)}`} />
+            ) : (
+              <ForgotPassword />
+            )
+          }
+        />
+
+        {/* Reset Password Route */}
+        <Route
+          path="/reset-password/:token"
+          element={
+            user ? (
+              <Navigate to={`/dashboard/${getDashboardPath(user.role)}`} />
+            ) : (
+              <ResetPassword />
             )
           }
         />
