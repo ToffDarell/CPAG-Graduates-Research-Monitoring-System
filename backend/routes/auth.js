@@ -4,6 +4,8 @@ import jwt from 'jsonwebtoken';
 import { protect } from '../middleware/auth.js';
 import { OAuth2Client } from 'google-auth-library';
 import dotenv from 'dotenv';
+import crypto from 'crypto';
+import nodemailer from 'nodemailer';
 
 dotenv.config();
 const CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
@@ -249,6 +251,121 @@ if (!(await user.matchPassword(password))) {
     } catch (err) {
         console.error(err);
         res.status(500).json({ message: 'Login failed' });
+    }
+});
+
+// ========== Forgot Password ==========
+router.post('/forgot-password', async (req, res) => {
+    const { email } = req.body;
+
+    try {
+        if (!email) {
+            return res.status(400).json({ message: 'Email is required' });
+        }
+
+        // Check if institutional email
+        if (!email.endsWith('@buksu.edu.ph') && !email.endsWith('@student.buksu.edu.ph')) {
+            return res.status(400).json({ message: 'Institutional emails only' });
+        }
+
+        const user = await User.findOne({ email });
+
+        if (!user) {
+            // For security, don't reveal if email exists
+            return res.status(200).json({ 
+                message: 'If your email is registered, you will receive a password reset link.' 
+            });
+        }
+
+        // Generate reset token
+        const resetToken = crypto.randomBytes(32).toString('hex');
+        const hashedToken = crypto.createHash('sha256').update(resetToken).digest('hex');
+
+        // Save hashed token and expiry (1 hour)
+        user.resetPasswordToken = hashedToken;
+        user.resetPasswordExpires = Date.now() + 3600000; // 1 hour
+        await user.save();
+
+        // Create reset URL
+        const resetUrl = `${process.env.FRONTEND_URL}/reset-password/${resetToken}`;
+
+        // Send email
+        const transporter = nodemailer.createTransport({
+            host: process.env.SMTP_HOST,
+            port: process.env.SMTP_PORT,
+            secure: false, // true for 465, false for other ports
+            auth: {
+                user: process.env.SMTP_USER,
+                pass: process.env.SMTP_PASS,
+            },
+        });
+
+        await transporter.sendMail({
+            from: process.env.SMTP_FROM || process.env.SMTP_USER,
+            to: user.email,
+            subject: 'Password Reset Request - Masteral Archive System',
+            html: `
+                <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+                    <h2 style="color: #7C1D23;">Password Reset Request</h2>
+                    <p>Hello <strong>${user.name}</strong>,</p>
+                    <p>You requested to reset your password. Click the button below to reset it:</p>
+                    <div style="text-align: center; margin: 30px 0;">
+                        <a href="${resetUrl}" 
+                           style="background-color: #7C1D23; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; display: inline-block;">
+                            Reset Password
+                        </a>
+                    </div>
+                    <p style="color: #666; font-size: 14px;">This link will expire in 1 hour.</p>
+                    <p style="color: #666; font-size: 14px;">If the button doesn't work, copy and paste this link:</p>
+                    <p style="color: #7C1D23; font-size: 12px; word-break: break-all;">${resetUrl}</p>
+                    <hr style="margin: 30px 0; border: none; border-top: 1px solid #ddd;" />
+                    <p style="color: #999; font-size: 12px;">If you didn't request this, please ignore this email.</p>
+                </div>
+            `,
+        });
+
+        res.status(200).json({ 
+            message: 'If your email is registered, you will receive a password reset link.' 
+        });
+    } catch (err) {
+        console.error('Forgot password error:', err);
+        res.status(500).json({ message: 'Failed to process password reset request' });
+    }
+});
+
+// ========== Reset Password ==========
+router.post('/reset-password/:token', async (req, res) => {
+    const { token } = req.params;
+    const { password } = req.body;
+
+    try {
+        if (!password || password.length < 6) {
+            return res.status(400).json({ message: 'Password must be at least 6 characters' });
+        }
+
+        // Hash the token from URL to compare with stored hash
+        const hashedToken = crypto.createHash('sha256').update(token).digest('hex');
+
+        // Find user with valid token
+        const user = await User.findOne({
+            resetPasswordToken: hashedToken,
+            resetPasswordExpires: { $gt: Date.now() }, // Token not expired
+        });
+
+        if (!user) {
+            return res.status(400).json({ message: 'Invalid or expired reset token' });
+        }
+
+        // Update password (will be hashed by pre-save hook)
+        user.password = password;
+        user.resetPasswordToken = undefined;
+        user.resetPasswordExpires = undefined;
+        await user.save();
+
+        res.status(200).json({ message: 'Password reset successful! You can now log in.' });
+    } catch (err) {
+        console.error('Reset password error:', err);
+        res.status(500).json({ message: 'Failed to reset password' });
     }
 });
 
