@@ -84,7 +84,7 @@ const Login = ({ setUser }) => {
 
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100 p-4">
+    <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4">
       <div className="bg-white p-8 rounded-xl shadow-2xl w-full max-w-md border border-gray-100">
         {/* Logo Section */}
         <div className="flex justify-center mb-6">
@@ -119,7 +119,7 @@ const Login = ({ setUser }) => {
               Email Address
             </label>
             <input
-              className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-300 focus:border-blue-400 transition-colors"
+              className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-[#7C1D23]/30 focus:border-[#7C1D23] transition-colors"
               type="email"
               name="email"
               value={formData.email}
@@ -136,12 +136,12 @@ const Login = ({ setUser }) => {
             </label>
             <div className="relative">
               <input
-                className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-300 focus:border-blue-400 transition-colors"
+                className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-[#7C1D23]/30 focus:border-[#7C1D23] transition-colors"
                 type={showPassword ? "text" : "password"}
                 name="password"
                 value={formData.password}
                 onChange={handleChange}
-                placeholder="Enter your password"
+                placeholder="********"
                 required
               />
               <button
@@ -151,6 +151,15 @@ const Login = ({ setUser }) => {
               >
                 {showPassword ? <FaEyeSlash /> : <FaEye />}
               </button>
+            </div>
+            {/* Forgot Password Link */}
+            <div className="text-right mt-2">
+              <Link 
+                to="/forgot-password"
+                className="text-sm text-[#7C1D23] hover:text-[#5a1519] hover:underline"
+              >
+                Forgot Password?
+              </Link>
             </div>
           </div>
 
@@ -168,7 +177,7 @@ const Login = ({ setUser }) => {
           <button
             type="submit"
             disabled={isLoading || (!!siteKey && !recaptchaToken)}
-            className="w-full bg-blue-600 text-white py-3 rounded-lg font-semibold hover:bg-blue-700 focus:ring-4 focus:ring-blue-200 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+            className="w-full bg-[#7C1D23] text-white py-3 rounded-lg font-semibold hover:bg-[#5a1519] focus:ring-4 focus:ring-[#7C1D23]/20 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {isLoading ? (
               <span className="flex items-center justify-center">
@@ -211,7 +220,7 @@ const Login = ({ setUser }) => {
             Don't have an account?{' '}
             <Link 
               to="/signup"
-              className="text-blue-600 hover:text-blue-700 font-semibold"
+              className="text-[#7C1D23] hover:text-[#5a1519] font-semibold"
             >
               Sign up here
             </Link>
