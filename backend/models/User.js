@@ -68,6 +68,13 @@ const userSchema = new mongoose.Schema(
     calendarConnected: {
       type: Boolean,
       default: false,
+    },
+    // Password reset fields
+    resetPasswordToken: {
+      type: String,
+    },
+    resetPasswordExpires: {
+      type: Date,
     }
   },
   { timestamps: true }
