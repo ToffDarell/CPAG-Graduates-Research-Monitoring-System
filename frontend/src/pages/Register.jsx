@@ -174,7 +174,7 @@ const Register = ({ setUser }) => {
   const selectedRoleDetails = roles.find(r => r.value === formData.role);
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100 p-4">
+    <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4">
       <div className="bg-white p-8 rounded-xl shadow-2xl w-full max-w-md border border-gray-100">
         {/* Logo Section */}
         <div className="flex justify-center mb-6">
@@ -193,7 +193,7 @@ const Register = ({ setUser }) => {
         {!isInvitation && (
           <Link 
             to="/signup" 
-            className="inline-flex items-center text-blue-600 hover:text-blue-700 mb-4 text-sm font-medium"
+            className="inline-flex items-center text-[#7C1D23] hover:text-[#5a1519] mb-4 text-sm font-medium"
           >
             <FaArrowLeft className="mr-2" />
             Change Role
@@ -214,9 +214,9 @@ const Register = ({ setUser }) => {
           </div>
         ) : (
           selectedRoleDetails && (
-            <div className="mb-6 p-4 bg-blue-50 rounded-lg border border-blue-200">
+            <div className="mb-6 p-4 bg-[#7C1D23]/10 rounded-lg border border-[#7C1D23]/20">
               <div className="flex items-center justify-center space-x-3">
-                <span className="text-lg font-semibold text-blue-700">
+                <span className="text-lg font-semibold text-[#7C1D23]">
                   Registering as {selectedRoleDetails.label}
                 </span>
               </div>
@@ -239,7 +239,7 @@ const Register = ({ setUser }) => {
               Full Name
             </label>
             <input
-              className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-300 focus:border-blue-400 transition-colors"
+              className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-[#7C1D23]/30 focus:border-[#7C1D23] transition-colors"
               type="text"
               name="name"
               value={formData.name}
@@ -255,7 +255,7 @@ const Register = ({ setUser }) => {
                 Student ID
               </label>
               <input
-                className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-300 focus:border-blue-400 transition-colors"
+                className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-[#7C1D23]/30 focus:border-[#7C1D23] transition-colors"
                 type="text"
                 name="studentId"
                 value={formData.studentId}
@@ -277,7 +277,7 @@ const Register = ({ setUser }) => {
               Institutional Email
             </label>
             <input
-              className={`w-full p-3 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-200 outline-none focus:border-blue-400 ${isInvitation ? 'bg-gray-100 cursor-not-allowed' : ''}`}
+              className={`w-full p-3 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23]/30 outline-none focus:border-[#7C1D23] ${isInvitation ? 'bg-gray-100 cursor-not-allowed' : ''}`}
               type="email"
               name="email"
               value={formData.email}
@@ -299,7 +299,7 @@ const Register = ({ setUser }) => {
             </label>
             <div className="relative">
               <input
-                className="w-full p-3 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-200 outline-none focus:border-blue-400"
+                className="w-full p-3 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23]/30 outline-none focus:border-[#7C1D23]"
                 type={showPassword ? "text" : "password"}
                 name="password"
                 value={formData.password}
@@ -336,7 +336,7 @@ const Register = ({ setUser }) => {
           <button
             type="submit"
             disabled={isLoading || (!!siteKey && !recaptchaToken)}
-            className="w-full bg-blue-600 text-white py-3 rounded-lg font-semibold hover:bg-blue-700 focus:ring-4 focus:ring-blue-200 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+            className="w-full bg-[#7C1D23] text-white py-3 rounded-lg font-semibold hover:bg-[#5a1519] focus:ring-4 focus:ring-[#7C1D23]/20 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {isLoading ? (
               <span className="flex items-center justify-center">
@@ -380,7 +380,7 @@ const Register = ({ setUser }) => {
             Already have an account?{' '}
             <Link 
               to="/login"
-              className="text-blue-600 hover:text-blue-700 font-semibold"
+              className="text-[#7C1D23] hover:text-[#5a1519] font-semibold"
             >
               Log in here
             </Link>
