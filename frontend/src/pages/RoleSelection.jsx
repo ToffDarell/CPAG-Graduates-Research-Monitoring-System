@@ -18,7 +18,7 @@ const RoleSelection = () => {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100 p-4">
+    <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4">
       <div className="bg-white p-8 rounded-xl shadow-2xl w-full max-w-4xl border border-gray-100">
         {/* Logo Section */}
         <div className="flex justify-center mb-6">
@@ -49,12 +49,12 @@ const RoleSelection = () => {
               <button
                 key={role.value}
                 onClick={() => handleRoleSelect(role.value)}
-                className="p-8 rounded-xl border-2 border-gray-200 bg-white hover:border-blue-500 hover:shadow-xl transition-all duration-300 flex flex-col items-center justify-center space-y-4 group"
+                className="p-8 rounded-xl border-2 border-gray-200 bg-white hover:border-[#7C1D23] hover:shadow-xl transition-all duration-300 flex flex-col items-center justify-center space-y-4 group"
               >
-                <div className="w-24 h-24 rounded-full bg-gray-100 group-hover:bg-blue-50 flex items-center justify-center transition-colors duration-300">
-                  <Icon className="text-5xl text-gray-600 group-hover:text-blue-600 transition-colors duration-300" />
+                <div className="w-24 h-24 rounded-full bg-gray-100 group-hover:bg-[#7C1D23]/10 flex items-center justify-center transition-colors duration-300">
+                  <Icon className="text-5xl text-gray-600 group-hover:text-[#7C1D23] transition-colors duration-300" />
                 </div>
-                <span className="text-lg font-semibold text-gray-700 group-hover:text-blue-700 transition-colors duration-300">
+                <span className="text-lg font-semibold text-gray-700 group-hover:text-[#7C1D23] transition-colors duration-300">
                   {role.label}
                 </span>
               </button>
@@ -70,12 +70,12 @@ const RoleSelection = () => {
             Already have an account?{" "}
             <button
               onClick={() => navigate("/login")}
-              className="text-blue-600 hover:text-blue-700 font-semibold"
+              className="text-[#7C1D23] hover:text-[#5a1519] font-semibold"
             >
               Login here
             </button>
           </p>
-          <p className="text-xs text-gray-500 mt-4 p-3 bg-blue-50 rounded-lg">
+          <p className="text-xs text-gray-500 mt-4 p-3 bg-[#7C1D23]/10 rounded-lg">
             <strong>Note:</strong> Faculty Advisers and Program Heads can only register through invitation links sent by the Dean.
           </p>
         </div>
