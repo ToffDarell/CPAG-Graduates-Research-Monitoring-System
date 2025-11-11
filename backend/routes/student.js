@@ -12,6 +12,7 @@ import {
   downloadDocument, 
   viewDocument,
   uploadComplianceForm,
+  uploadComplianceFormFromDrive,
   getComplianceForms,
   getComplianceForm,
   downloadComplianceForm,
@@ -102,6 +103,7 @@ router.use(protect, checkAuth(["graduate student"]));
 
 // Compliance form routes
 router.post("/compliance-form", upload.single("file"), uploadComplianceForm);
+router.post("/compliance-form-from-drive", uploadComplianceFormFromDrive);
 router.get("/compliance-forms", getComplianceForms);
 router.get("/compliance-forms/:id", getComplianceForm);
 router.get("/compliance-forms/:id/download", downloadComplianceForm);
@@ -110,7 +112,6 @@ router.get("/compliance-forms/:id/view", viewComplianceForm);
 // Research routes
 router.get("/research", getMyResearch);
 router.post("/chapter", upload.single("file"), uploadChapter);
-
 
 // Schedule routes
 router.get("/schedules", getMySchedules);
