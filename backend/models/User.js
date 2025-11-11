@@ -69,6 +69,20 @@ const userSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    // Google Drive integration
+    driveAccessToken: {
+      type: String,
+    },
+    driveRefreshToken: {
+      type: String,
+    },
+    driveTokenExpiry: {
+      type: Date,
+    },
+    driveConnected: {
+      type: Boolean,
+      default: false,
+    },
     // Password reset fields
     resetPasswordToken: {
       type: String,
