@@ -37,9 +37,7 @@ export default function DriveUploader({
   const oauthTokenRef = useRef(null);
   const tokenClientRef = useRef(null);
   const fileInputRef = useRef(null);
-  const wrapperRef = useRef(null);
   const [busy, setBusy] = useState(false);
-  const [menuOpen, setMenuOpen] = useState(false);
   const [accountHint, setAccountHint] = useState(() => {
     try {
       return localStorage.getItem('google_account_hint') || '';
@@ -201,7 +199,6 @@ export default function DriveUploader({
       const token = await ensureAuth();
       // Ensure token is stored in ref for callback access
       oauthTokenRef.current = token;
-      setMenuOpen(false);
       await new Promise((resolve) => window.gapi.load('picker', resolve));
 
       // Views: show all Drive files (Recent) first, like Classroom
@@ -291,7 +288,6 @@ export default function DriveUploader({
 
   const handleFileButtonClick = useCallback(() => {
     if (!allowLocalUpload) return;
-    setMenuOpen(false);
     fileInputRef.current?.click();
   }, [allowLocalUpload]);
 
@@ -324,32 +320,14 @@ export default function DriveUploader({
     [apiBase, defaultType, onUploaded]
   );
 
-  const toggleMenu = () => {
-    if (busy) return;
-    setMenuOpen((prev) => !prev);
-  };
-
   const buttonDisabled = !clientId || !apiKey || busy;
 
-  useEffect(() => {
-    if (!menuOpen) return;
-    const handleClick = (event) => {
-      if (wrapperRef.current && !wrapperRef.current.contains(event.target)) {
-        setMenuOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handleClick);
-    return () => {
-      document.removeEventListener('mousedown', handleClick);
-    };
-  }, [menuOpen]);
-
   return (
-    <div ref={wrapperRef} style={{ position: 'relative', display: 'inline-block' }}>
+    <div style={{ display: 'inline-block' }}>
       <button
         type="button"
         disabled={buttonDisabled}
-        onClick={toggleMenu}
+        onClick={openPicker}
         style={{
           display: 'flex',
           alignItems: 'center',
@@ -365,67 +343,7 @@ export default function DriveUploader({
         }}
       >
         {busy ? 'Please wait…' : driveButtonLabel}
-        <span style={{ marginLeft: 'auto', fontSize: '12px' }}>▾</span>
       </button>
-
-      {menuOpen && !buttonDisabled && (
-        <div
-          style={{
-            position: 'absolute',
-            top: 'calc(100% + 8px)',
-            right: 0,
-            backgroundColor: '#ffffff',
-            borderRadius: '8px',
-            boxShadow: '0 12px 28px rgba(15, 23, 42, 0.25)',
-            minWidth: '220px',
-            zIndex: 1000,
-            border: '1px solid rgba(15,23,42,0.08)',
-          }}
-        >
-          <div style={{ padding: '12px 16px', borderBottom: '1px solid #e5e7eb' }}>
-            <div style={{ fontSize: '12px', fontWeight: 600, color: '#6b7280' }}>Add or create</div>
-          </div>
-          <button
-            type="button"
-            onClick={openPicker}
-            style={{
-              width: '100%',
-              padding: '12px 16px',
-              textAlign: 'left',
-              fontSize: '14px',
-              color: '#111827',
-              background: 'none',
-              border: 'none',
-              cursor: 'pointer',
-            }}
-            onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#f3f4f6')}
-            onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
-          >
-            Google Drive
-            <div style={{ fontSize: '12px', color: '#6b7280', marginTop: '2px' }}>Attach from Drive</div>
-          </button>
-          {allowLocalUpload && (
-            <button
-              type="button"
-              onClick={handleFileButtonClick}
-              style={{
-                width: '100%',
-                padding: '12px 16px',
-                textAlign: 'left',
-                fontSize: '14px',
-                color: '#111827',
-                background: 'none',
-                border: 'none',
-                cursor: 'pointer',
-              }}
-              onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#f3f4f6')}
-              onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
-            >
-             
-            </button>
-          )}
-        </div>
-      )}
 
       {allowLocalUpload && (
         <input
