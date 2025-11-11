@@ -177,6 +177,248 @@ export const uploadComplianceForm = async (req, res) => {
   }
 };
 
+// Upload compliance form from Google Drive
+export const uploadComplianceFormFromDrive = async (req, res) => {
+  try {
+    console.log("Upload compliance form from Drive - Request received:", {
+      driveFileId: req.body.driveFileId ? "present" : "missing",
+      accessToken: req.body.accessToken ? "present" : "missing",
+      researchId: req.body.researchId,
+      formType: req.body.formType,
+      userId: req.user.id
+    });
+
+    const { driveFileId, accessToken, researchId, formType } = req.body;
+
+    if (!driveFileId || !accessToken) {
+      console.error("Missing required fields:", { driveFileId: !!driveFileId, accessToken: !!accessToken });
+      return res.status(400).json({ message: "Google Drive file ID and access token are required" });
+    }
+
+    if (!researchId) {
+      return res.status(400).json({ message: "Research ID is required" });
+    }
+
+    if (!formType) {
+      return res.status(400).json({ message: "Form type is required" });
+    }
+
+    // Import download function and stream utilities
+    const { downloadFileFromDrive } = await import("../utils/googleDrive.js");
+    const { pipeline } = await import("stream/promises");
+
+    // Download file from Google Drive
+    let stream, metadata;
+    try {
+      const result = await downloadFileFromDrive(driveFileId, accessToken);
+      stream = result.stream;
+      metadata = result.metadata;
+    } catch (error) {
+      console.error("Error downloading from Google Drive:", error);
+      return res.status(400).json({ message: `Failed to download file from Google Drive: ${error.message}` });
+    }
+
+    console.log("Downloaded file metadata:", {
+      name: metadata.name,
+      mimeType: metadata.mimeType,
+      size: metadata.size
+    });
+
+    // Validate file type - check MIME type and file extension
+    const allowedMimeTypes = [
+      'application/pdf', 
+      'application/x-pdf',
+      'application/msword', 
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    ];
+    
+    const fileName = metadata.name || '';
+    const fileExtension = fileName.split('.').pop()?.toLowerCase();
+    const allowedExtensions = ['pdf', 'doc', 'docx'];
+    
+    // Check if MIME type is allowed
+    const isValidMimeType = allowedMimeTypes.includes(metadata.mimeType);
+    // Check if file extension is allowed
+    const isValidExtension = fileExtension && allowedExtensions.includes(fileExtension);
+    
+    // Accept if either MIME type or extension is valid
+    if (!isValidMimeType && !isValidExtension) {
+      return res.status(400).json({ 
+        message: `Invalid file type. Only PDF and DOCX files are allowed. Received: ${metadata.mimeType || 'unknown'} (${fileExtension || 'no extension'})` 
+      });
+    }
+
+    // Validate file size (10MB limit) - Google Drive might not always provide size
+    if (metadata.size && metadata.size > 10 * 1024 * 1024) {
+      return res.status(400).json({ message: "File size exceeds 10MB limit" });
+    }
+
+    // Create uploads directory if it doesn't exist
+    const uploadsDir = path.join(process.cwd(), "uploads");
+    if (!fs.existsSync(uploadsDir)) {
+      fs.mkdirSync(uploadsDir, { recursive: true });
+    }
+
+    // Generate file path
+    const cleanName = metadata.name.replace(/[^a-zA-Z0-9.-]/g, "_");
+    const filepath = path.join(uploadsDir, Date.now() + "-" + cleanName);
+
+    // Save file to disk
+    try {
+      const writeStream = fs.createWriteStream(filepath);
+      await pipeline(stream, writeStream);
+      console.log("File saved successfully to:", filepath);
+    } catch (error) {
+      console.error("Error saving file to disk:", error);
+      return res.status(500).json({ message: `Failed to save file: ${error.message}` });
+    }
+
+    // Verify research and authorization
+    const research = await Research.findById(researchId)
+      .populate("adviser", "name email")
+      .populate("students", "name email");
+
+    if (!research) {
+      fs.unlinkSync(filepath); // Clean up file
+      return res.status(404).json({ message: "Research not found" });
+    }
+
+    const isStudent = research.students.some(s => s._id.toString() === req.user.id.toString());
+    if (!isStudent) {
+      fs.unlinkSync(filepath); // Clean up file
+      return res.status(403).json({ message: "You are not authorized to upload forms for this research" });
+    }
+
+    // Find previous version
+    const previousForm = await ComplianceForm.findOne({
+      student: req.user.id,
+      research: researchId,
+      formType: formType,
+      isCurrent: true,
+    });
+
+    if (previousForm) {
+      previousForm.isCurrent = false;
+      await previousForm.save();
+    }
+
+    // Get file stats
+    const stats = fs.statSync(filepath);
+
+    // Create new compliance form
+    const complianceForm = new ComplianceForm({
+      student: req.user.id,
+      research: researchId,
+      formType: formType,
+      filename: metadata.name,
+      filepath: filepath,
+      fileSize: stats.size,
+      mimeType: metadata.mimeType,
+      status: "pending",
+      version: previousForm ? previousForm.version + 1 : 1,
+      isCurrent: true,
+      uploadedBy: req.user.id,
+      previousVersion: previousForm ? previousForm._id : null,
+    });
+
+    await complianceForm.save();
+
+    // Log activity
+    await Activity.create({
+      user: req.user.id,
+      action: "upload",
+      entityType: "complianceForm",
+      entityId: complianceForm._id,
+      entityName: `Compliance Form: ${formType}`,
+      description: `Uploaded compliance form from Google Drive: ${formType} (Version ${complianceForm.version})`,
+      metadata: {
+        complianceFormId: complianceForm._id,
+        researchId: researchId,
+        formType: formType,
+        version: complianceForm.version,
+        filename: metadata.name,
+        fileSize: stats.size,
+        source: "google_drive",
+      },
+      ipAddress: req.ip,
+      userAgent: req.get("user-agent"),
+    });
+
+    // Send notification to adviser
+    if (research.adviser && research.adviser.email) {
+      const studentName = req.user.name || "Student";
+      const formTypeLabel = formType.charAt(0).toUpperCase() + formType.slice(1);
+      await sendNotificationEmail(
+        research.adviser.email,
+        `New Compliance Form Uploaded: ${formTypeLabel}`,
+        `${studentName} has uploaded a new ${formTypeLabel} compliance form for research: ${research.title}. Please review it.`,
+        `
+          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+            <h2 style="color: #7C1D23;">New Compliance Form Uploaded</h2>
+            <p>Hello ${research.adviser.name},</p>
+            <p><strong>${studentName}</strong> has uploaded a new <strong>${formTypeLabel}</strong> compliance form for research: <strong>${research.title}</strong>.</p>
+            <p>Version: ${complianceForm.version}</p>
+            <p>Source: Google Drive</p>
+            <p>Please review the form in the system.</p>
+            <hr style="margin: 30px 0; border: none; border-top: 1px solid #ddd;" />
+            <p style="color: #999; font-size: 12px;">This is an automated notification from the Masteral Archive and Monitoring System.</p>
+          </div>
+        `
+      );
+    }
+
+    // Send notification to student
+    const student = await User.findById(req.user.id);
+    if (student && student.email) {
+      await sendNotificationEmail(
+        student.email,
+        `Compliance Form Uploaded Successfully`,
+        `Your ${formType} compliance form has been uploaded successfully from Google Drive and is pending review.`,
+        `
+          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+            <h2 style="color: #7C1D23;">Compliance Form Uploaded</h2>
+            <p>Hello ${student.name},</p>
+            <p>Your <strong>${formType}</strong> compliance form has been uploaded successfully from Google Drive.</p>
+            <p>Version: ${complianceForm.version}</p>
+            <p>Status: Pending Review</p>
+            <p>Your adviser will review the form and you will be notified of the decision.</p>
+            <hr style="margin: 30px 0; border: none; border-top: 1px solid #ddd;" />
+            <p style="color: #999; font-size: 12px;">This is an automated notification from the Masteral Archive and Monitoring System.</p>
+          </div>
+        `
+      );
+    }
+
+    const populatedForm = await ComplianceForm.findById(complianceForm._id)
+      .populate("student", "name email")
+      .populate("research", "title")
+      .populate("uploadedBy", "name");
+
+    console.log("Compliance form uploaded successfully from Google Drive:", populatedForm._id);
+    
+    res.json({
+      message: "Compliance form uploaded successfully from Google Drive",
+      complianceForm: populatedForm,
+    });
+  } catch (error) {
+    console.error("Error uploading compliance form from Google Drive:", error);
+    console.error("Error stack:", error.stack);
+    console.error("Error details:", {
+      message: error.message,
+      code: error.code,
+      response: error.response?.data
+    });
+    
+    const statusCode = error.response?.status || 500;
+    const errorMessage = error.response?.data?.message || error.message || "Failed to upload compliance form from Google Drive";
+    
+    res.status(statusCode).json({ 
+      message: errorMessage,
+      error: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
+  }
+};
+
 // Get all compliance forms for the student
 export const getComplianceForms = async (req, res) => {
   try {
