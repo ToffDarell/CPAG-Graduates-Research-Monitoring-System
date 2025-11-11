@@ -5,11 +5,19 @@ import User from '../models/User.js';
 
 const router = express.Router();
 
-const oauth2Client = new google.auth.OAuth2(
-  process.env.GOOGLE_CLIENT_ID,
-  process.env.GOOGLE_CLIENT_SECRET,
-  process.env.GOOGLE_REDIRECT_URI
-);
+const createOAuthClient = () => {
+  const clientId = process.env.GOOGLE_CLIENT_ID;
+  const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+  const redirectUri = process.env.GOOGLE_REDIRECT_URI;
+
+  if (!clientId || !clientSecret || !redirectUri) {
+    throw new Error(
+      'Google OAuth environment variables are not fully configured. Please set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and GOOGLE_REDIRECT_URI.'
+    );
+  }
+
+  return new google.auth.OAuth2(clientId, clientSecret, redirectUri);
+};
 
 const SCOPES = [
   'https://www.googleapis.com/auth/calendar',
@@ -21,6 +29,8 @@ const SCOPES = [
  */
 router.get('/auth-url', protect, (req, res) => {
   try {
+    const oauth2Client = createOAuthClient();
+
     const authUrl = oauth2Client.generateAuthUrl({
       access_type: 'offline',
       scope: SCOPES,
@@ -43,6 +53,7 @@ router.get('/auth-url', protect, (req, res) => {
  */
 router.get('/callback', async (req, res) => {
   try {
+    const oauth2Client = createOAuthClient();
     const { code, state } = req.query;
 
     if (!code) {
@@ -117,6 +128,7 @@ router.get('/status', protect, async (req, res) => {
  */
 router.post('/disconnect', protect, async (req, res) => {
   try {
+    const oauth2Client = createOAuthClient();
     const user = await User.findById(req.user.id);
 
     if (!user) {
