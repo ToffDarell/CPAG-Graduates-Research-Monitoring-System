@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { FaUsersCog, FaCalendarAlt, FaClipboardCheck, FaChartLine, FaFileAlt, FaBell, FaSignOutAlt, FaBars, FaTimes as FaClose, FaUpload, FaDownload, FaTrash, FaHistory, FaFilePdf, FaFileWord, FaSearch, FaCheck, FaUsers, FaEdit, FaChartBar, FaClock, FaMapMarkerAlt, FaExclamationTriangle, FaGoogle } from "react-icons/fa";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import axios from "axios";
 import { Calendar, momentLocalizer } from 'react-big-calendar';
 import moment from 'moment';
@@ -10,7 +10,11 @@ const localizer = momentLocalizer(moment);
 
 const ProgramHeadDashboard = ({setUser}) => {
   const navigate = useNavigate();
-  const [selectedTab, setSelectedTab] = useState("panels");
+  const [searchParams, setSearchParams] = useSearchParams();
+  
+  // Initialize selectedTab from URL params, default to "panels"
+  const tabFromUrl = searchParams.get('tab');
+  const [selectedTab, setSelectedTab] = useState(tabFromUrl || "panels");
   const [panelMembers, setPanelMembers] = useState([
     { id: 1, name: "Dr. Smith", role: "Chair", status: "Assigned" },
     { id: 2, name: "Dr. Johnson", role: "Member", status: "Pending" },
@@ -21,21 +25,40 @@ const ProgramHeadDashboard = ({setUser}) => {
   const [calendarConnected, setCalendarConnected] = useState(false);
   const [calendarLoading, setCalendarLoading] = useState(false);
 
+  // Initialize tab from URL on mount (only if URL has tab param and it differs from initial state)
+  useEffect(() => {
+    const tabFromUrl = searchParams.get('tab');
+    if (tabFromUrl && tabFromUrl !== selectedTab) {
+      setSelectedTab(tabFromUrl);
+    } else if (!tabFromUrl && selectedTab) {
+      // If no tab in URL but we have a selectedTab, update URL
+      setSearchParams({ tab: selectedTab }, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Only run on mount
+
+  // Update URL when tab changes (after initial mount)
+  useEffect(() => {
+    const currentTab = searchParams.get('tab');
+    if (selectedTab && currentTab !== selectedTab) {
+      setSearchParams({ tab: selectedTab }, { replace: true });
+    }
+  }, [selectedTab]); // setSearchParams is stable, doesn't need to be in deps
+
   // Check for calendar connection callback on mount
   useEffect(() => {
-    const urlParams = new URLSearchParams(window.location.search);
-    const calendarParam = urlParams.get('calendar');
+    const calendarParam = searchParams.get('calendar');
     if (calendarParam === 'connected') {
       setCalendarConnected(true);
       setSelectedTab('schedules'); // Auto-switch to schedules tab
       checkCalendarStatus();
-      // Clean up URL without refreshing
-      window.history.replaceState({}, document.title, '/dashboard/program-head');
+      // Preserve tab param when cleaning up calendar param
+      navigate('/dashboard/program-head?tab=schedules', { replace: true });
     } else if (calendarParam === 'error') {
       alert('Failed to connect Google Calendar. Please try again.');
       setSelectedTab('schedules'); // Still switch to schedules tab
-      // Clean up URL
-      window.history.replaceState({}, document.title, '/dashboard/program-head');
+      // Preserve tab param when cleaning up calendar param
+      navigate('/dashboard/program-head?tab=schedules', { replace: true });
     } else {
       checkCalendarStatus();
     }
@@ -347,8 +370,21 @@ const PanelSelection = () => {
           axios.get('/api/programhead/research', { headers }),
           axios.get('/api/programhead/panels', { headers }),
         ]);
+        
+        // Get research IDs that already have panels assigned
+        const assignedResearchIds = new Set(
+          (panelsRes.data || [])
+            .map(panel => panel.research?._id || panel.research)
+            .filter(Boolean)
+        );
+        
+        // Filter out research that already has panels
+        const unassignedResearch = (researchRes.data || []).filter(
+          research => !assignedResearchIds.has(research._id)
+        );
+        
         setAvailablePanelists(panelistsRes.data || []);
-        setAvailableResearch(researchRes.data || []);
+        setAvailableResearch(unassignedResearch);
         setPanels(panelsRes.data || []);
       } catch (e) {
         console.error(e);
@@ -369,8 +405,26 @@ const PanelSelection = () => {
 
   const handleCreatePanel = async (e) => {
     e.preventDefault();
-    if (!panelForm.name || !panelForm.type || !panelForm.researchId || selectedMembers.length === 0) {
-      alert('Please complete all required fields and add at least one panelist.');
+    
+    // Debug logging
+    console.log('Panel Form:', panelForm);
+    console.log('Selected Members:', selectedMembers);
+    
+    // Detailed validation with helpful messages
+    if (!panelForm.name || panelForm.name.trim() === '') {
+      alert('Please enter a Panel Name.');
+      return;
+    }
+    if (!panelForm.type) {
+      alert('Please select a Panel Type.');
+      return;
+    }
+    if (!panelForm.researchId || panelForm.researchId === '') {
+      alert('Please select a Research title from the dropdown.\n\nMake sure you click on a specific research title, not just "Select Research".');
+      return;
+    }
+    if (selectedMembers.length < 2) {
+      alert('Please add at least 2 panelists to create a panel.\n\nYou can add existing faculty and/or invite external panelists.');
       return;
     }
     setLoading(true);
@@ -382,14 +436,29 @@ const PanelSelection = () => {
       const internalMembers = selectedMembers.filter(m => !m.isExternal);
       const externalMembers = selectedMembers.filter(m => m.isExternal);
       
-      // Create panel with internal members first
-      const res = await axios.post('/api/programhead/panels', {
+      console.log('Internal Members:', internalMembers);
+      console.log('External Members:', externalMembers);
+      
+      // Create panel with internal members first (or empty array if only external members)
+      // We need at least an empty array to create the panel structure
+      const requestPayload = {
         name: panelForm.name,
         description: panelForm.description,
         type: panelForm.type,
         researchId: panelForm.researchId,
-        members: internalMembers,
-      }, { headers });
+        members: internalMembers.length > 0 ? internalMembers : [],
+      };
+      
+      console.log('========================================');
+      console.log('ABOUT TO SEND REQUEST TO BACKEND:');
+      console.log('Payload:', JSON.stringify(requestPayload, null, 2));
+      console.log('Members array is Array?', Array.isArray(requestPayload.members));
+      console.log('Members count:', requestPayload.members.length);
+      console.log('========================================');
+      
+      const res = await axios.post('/api/programhead/panels', requestPayload, { headers });
+      
+      console.log('Panel created response:', res.data);
       
       const panelId = res.data.panel._id;
       
@@ -408,18 +477,42 @@ const PanelSelection = () => {
         await Promise.all(invitePromises);
       }
       
-      // Refresh panels list
-      const panelsRes = await axios.get('/api/programhead/panels', { headers });
+      // Refresh panels list and available research
+      const [panelsRes, researchRes] = await Promise.all([
+        axios.get('/api/programhead/panels', { headers }),
+        axios.get('/api/programhead/research', { headers }),
+      ]);
+      
+      // Update assigned research IDs and filter available research
+      const assignedResearchIds = new Set(
+        (panelsRes.data || [])
+          .map(panel => panel.research?._id || panel.research)
+          .filter(Boolean)
+      );
+      const unassignedResearch = (researchRes.data || []).filter(
+        research => !assignedResearchIds.has(research._id)
+      );
+      
       setPanels(panelsRes.data || []);
+      setAvailableResearch(unassignedResearch);
       
       setPanelForm({ name: '', description: '', type: 'oral_defense', researchId: '' });
       setSelectedMembers([]);
       setInviteMode(false);
       
       alert(`Panel created successfully. ${internalMembers.length} internal panelist(s) assigned. ${externalMembers.length > 0 ? externalMembers.length + ' invitation(s) sent.' : ''}`);
+      
+      // Show info if no more research available
+      if (unassignedResearch.length === 0) {
+        alert('Note: All research titles now have panels assigned. Delete an existing panel to reassign research.');
+      }
     } catch (error) {
-      console.error(error);
-      alert(error?.response?.data?.message || 'Failed to create panel');
+      console.error('Full error:', error);
+      console.error('Error response:', error?.response);
+      console.error('Error response data:', error?.response?.data);
+      
+      const errorMsg = error?.response?.data?.message || 'Failed to create panel';
+      alert(`Error: ${errorMsg}\n\nCheck console for details.`);
     } finally {
       setLoading(false);
     }
@@ -571,9 +664,24 @@ const PanelSelection = () => {
       
       alert('Panel deleted successfully');
       
-      // Refresh panels list
-      const panelsRes = await axios.get('/api/programhead/panels', { headers });
+      // Refresh panels list and available research
+      const [panelsRes, researchRes] = await Promise.all([
+        axios.get('/api/programhead/panels', { headers }),
+        axios.get('/api/programhead/research', { headers }),
+      ]);
+      
+      // Update assigned research IDs and filter available research
+      const assignedResearchIds = new Set(
+        (panelsRes.data || [])
+          .map(panel => panel.research?._id || panel.research)
+          .filter(Boolean)
+      );
+      const unassignedResearch = (researchRes.data || []).filter(
+        research => !assignedResearchIds.has(research._id)
+      );
+      
       setPanels(panelsRes.data || []);
+      setAvailableResearch(unassignedResearch);
     } catch (error) {
       console.error(error);
       alert(error?.response?.data?.message || 'Failed to delete panel');
@@ -644,22 +752,22 @@ const PanelSelection = () => {
         <div className="flex items-center justify-between mb-4">
           <div>
             <h2 className="text-xl font-bold text-gray-800">Panel Management</h2>
-            <p className="text-sm text-gray-600 mt-1">Create panels and manage panelists for evaluation sessions</p>
+            <p className="text-sm text-gray-600 mt-1">Create research panels and manage panelists for evaluation sessions</p>
           </div>
         </div>
       </div>
 
       {/* Create New Panel Section */}
       <div className="bg-white border border-gray-200 rounded-lg p-5">
-        <h3 className="text-lg font-semibold text-gray-800 mb-4">Create New Panel</h3>
+        <h3 className="text-lg font-semibold text-gray-800 mb-4">Assign New Panel</h3>
         <form onSubmit={handleCreatePanel} className="space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Panel Name</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Defense Name</label>
               <input value={panelForm.name} onChange={e => setPanelForm({ ...panelForm, name: e.target.value })} className="w-full px-4 py-2 rounded-md border border-gray-300 focus:border-[#7C1D23] focus:ring-2 focus:ring-[#7C1D23]/20 text-sm" placeholder="e.g., Proposal Defense Panel A" />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Panel Type</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Defense Type</label>
               <select value={panelForm.type} onChange={e => setPanelForm({ ...panelForm, type: e.target.value })} className="w-full px-4 py-2 rounded-md border border-gray-300 focus:border-[#7C1D23] focus:ring-2 focus:ring-[#7C1D23]/20 text-sm">
                 <option value="oral_defense">Oral Defense</option>
                 <option value="thesis_review">Thesis Review</option>
@@ -669,38 +777,55 @@ const PanelSelection = () => {
             </div>
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Panel Description</label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Defense Description <span className="text-xs text-gray-500">(Optional)</span></label>
             <textarea value={panelForm.description} onChange={e => setPanelForm({ ...panelForm, description: e.target.value })} rows={3} className="w-full px-4 py-2 rounded-md border border-gray-300 focus:border-[#7C1D23] focus:ring-2 focus:ring-[#7C1D23]/20 text-sm" placeholder="Notes for panelists..." />
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Research</label>
-            <select value={panelForm.researchId} onChange={e => setPanelForm({ ...panelForm, researchId: e.target.value })} className="w-full px-4 py-2 rounded-md border border-gray-300 focus:border-[#7C1D23] focus:ring-2 focus:ring-[#7C1D23]/20 text-sm">
-              <option value="">Select Research</option>
+            <select 
+              value={panelForm.researchId} 
+              onChange={e => setPanelForm({ ...panelForm, researchId: e.target.value })} 
+              className="w-full px-4 py-2 rounded-md border border-gray-300 focus:border-[#7C1D23] focus:ring-2 focus:ring-[#7C1D23]/20 text-sm"
+              disabled={availableResearch.length === 0}
+            >
+              <option value="">
+                {availableResearch.length === 0 
+                  ? 'No research available (all have panels assigned)' 
+                  : 'Select Research'}
+              </option>
               {availableResearch.map(r => (
                 <option key={r._id} value={r._id}>{r.title}</option>
               ))}
             </select>
+            {availableResearch.length === 0 && (
+              <p className="text-xs text-orange-600 mt-1">
+                All research titles already have panels. Delete an existing panel to reassign.
+              </p>
+            )}
           </div>
           {/* Toggle between Select and Invite */}
-          <div className="flex items-center gap-4 mb-2">
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="radio"
-                checked={!inviteMode}
-                onChange={() => setInviteMode(false)}
-                className="text-[#7C1D23] focus:ring-[#7C1D23]"
-              />
-              <span className="text-sm font-medium text-gray-700">Select Existing Faculty</span>
-            </label>
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="radio"
-                checked={inviteMode}
-                onChange={() => setInviteMode(true)}
-                className="text-[#7C1D23] focus:ring-[#7C1D23]"
-              />
-              <span className="text-sm font-medium text-gray-700">Invite New Panelist</span>
-            </label>
+          <div className="flex items-center justify-between gap-4 mb-2">
+            <div className="flex items-center gap-4">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="radio"
+                  checked={!inviteMode}
+                  onChange={() => setInviteMode(false)}
+                  className="text-[#7C1D23] focus:ring-[#7C1D23]"
+                />
+                <span className="text-sm font-medium text-gray-700">Select Existing Faculty</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="radio"
+                  checked={inviteMode}
+                  onChange={() => setInviteMode(true)}
+                  className="text-[#7C1D23] focus:ring-[#7C1D23]"
+                />
+                <span className="text-sm font-medium text-gray-700">Invite New Panelist</span>
+              </label>
+            </div>
+            
           </div>
 
           {!inviteMode ? (
@@ -793,6 +918,31 @@ const PanelSelection = () => {
                 <button
                   type="button"
                   onClick={() => {
+                    // Validate before adding
+                    if (!inviteForm.name || !inviteForm.email || !inviteForm.role) {
+                      alert('Please fill in all required fields: Name, Email, and Role');
+                      return;
+                    }
+                    
+                    // Validate email format
+                    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+                    if (!emailRegex.test(inviteForm.email)) {
+                      alert('Please enter a valid email address');
+                      return;
+                    }
+                    
+                    // Validate institutional email domain
+                    if (!inviteForm.email.endsWith('@buksu.edu.ph')) {
+                      alert('Panelist must use @buksu.edu.ph institutional email address');
+                      return;
+                    }
+                    
+                    // Check for duplicate email
+                    if (selectedMembers.some(m => m.isExternal && m.email === inviteForm.email)) {
+                      alert('This panelist email is already added');
+                      return;
+                    }
+                    
                     // This will be handled after panel creation - store invite data for now
                     const inviteData = { ...inviteForm, isExternal: true };
                     setSelectedMembers(prev => [...prev, inviteData]);
@@ -1266,13 +1416,17 @@ const ScheduleManagement = ({ calendarConnected, onConnectCalendar, onDisconnect
         headers: { Authorization: `Bearer ${token}` }
       });
       
-      // Get all panels with schedules
+      // Get all panels with ACTIVE schedules (exclude cancelled and completed)
       const schedulesRes = await axios.get('/api/programhead/schedules', {
         headers: { Authorization: `Bearer ${token}` }
       });
       const scheduledPanelIds = new Set(
         (schedulesRes.data || [])
-          .filter(s => s.panel)
+          .filter(s => 
+            s.panel && 
+            s.status !== 'cancelled' && 
+            s.status !== 'completed'
+          )
           .map(s => s.panel._id || s.panel)
       );
 
@@ -1634,7 +1788,7 @@ const ScheduleManagement = ({ calendarConnected, onConnectCalendar, onDisconnect
                 : "text-gray-600 hover:text-gray-800"
             }`}
           >
-            Create Panel Schedule
+            Create Defense Schedule
           </button>
           <button
             onClick={() => setActiveTab("created")}
@@ -1644,7 +1798,7 @@ const ScheduleManagement = ({ calendarConnected, onConnectCalendar, onDisconnect
                 : "text-gray-600 hover:text-gray-800"
             }`}
           >
-            Created Panel Schedules
+            Created Defense Schedules
           </button>
           <button
             onClick={() => setActiveTab("calendar")}
@@ -1880,45 +2034,21 @@ const ScheduleManagement = ({ calendarConnected, onConnectCalendar, onDisconnect
                             <FaEdit />
                           </button>
                         )}
-                        {schedule.status !== 'cancelled' && (
+                        {schedule.status !== 'completed' && (
                           <button
                             onClick={async () => {
-                              if (window.confirm('Are you sure you want to cancel/archive this schedule? All participants will be notified.')) {
-                                try {
-                                  const token = localStorage.getItem('token');
-                                  await axios.put(`/api/programhead/schedules/${schedule._id}/archive`, {}, {
-                                    headers: { Authorization: `Bearer ${token}` }
-                                  });
-                                  alert('Schedule cancelled successfully!');
-                                  fetchCreatedPanelSchedules();
-                                  if (activeTab === "calendar") {
-                                    fetchAllSchedules();
-                                  }
-                                } catch (error) {
-                                  console.error('Error cancelling schedule:', error);
-                                  alert(error.response?.data?.message || 'Error cancelling schedule');
-                                }
-                              }
-                            }}
-                            className="p-2 text-orange-600 hover:bg-orange-50 rounded transition-colors"
-                            title="Cancel/Archive"
-                          >
-                            <FaTrash />
-                          </button>
-                        )}
-                        {schedule.status === 'cancelled' && (
-                          <button
-                            onClick={async () => {
-                              if (window.confirm('Are you sure you want to permanently delete this cancelled schedule? This action cannot be undone.')) {
+                              if (window.confirm('Are you sure you want to delete this schedule? This will permanently remove it from the database and the panel will be available for creating a new schedule. This action cannot be undone.')) {
                                 try {
                                   const token = localStorage.getItem('token');
                                   await axios.delete(`/api/programhead/schedules/${schedule._id}`, {
                                     headers: { Authorization: `Bearer ${token}` }
                                   });
-                                  alert('Schedule deleted successfully!');
+                                  alert('Schedule deleted successfully! The panel is now available for creating a new schedule.');
                                   fetchCreatedPanelSchedules();
+                                  // Refresh panels without schedule list after deletion
+                                  fetchPanelsWithoutSchedule();
                                   if (activeTab === "calendar") {
-                                    fetchAllSchedules();
+                                    fetchFinalizedSchedules();
                                   }
                                 } catch (error) {
                                   console.error('Error deleting schedule:', error);
@@ -1927,7 +2057,7 @@ const ScheduleManagement = ({ calendarConnected, onConnectCalendar, onDisconnect
                               }
                             }}
                             className="p-2 text-red-600 hover:bg-red-50 rounded transition-colors"
-                            title="Delete Permanently"
+                            title="Delete Schedule"
                           >
                             <FaTrash />
                           </button>
@@ -4089,6 +4219,16 @@ const FacultyAdviserAssignment = () => {
 const ResearchRecords = () => {
   const [researchRecords, setResearchRecords] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [showFinalizeModal, setShowFinalizeModal] = useState(false);
+  const [selectedResearch, setSelectedResearch] = useState(null);
+  const [finalizeForm, setFinalizeForm] = useState({
+    finalGrade: '',
+    evaluationStatus: '',
+    semester: '',
+    academicYear: '',
+    submissionDate: ''
+  });
+  const [finalizing, setFinalizing] = useState(false);
 
   // Fetch research records on component mount
   useEffect(() => {
@@ -4104,25 +4244,6 @@ const ResearchRecords = () => {
       setResearchRecords(res.data);
     } catch (error) {
       console.error('Error fetching research records:', error);
-    }
-  };
-
-  const handleShareWithDean = async (researchId) => {
-    setLoading(true);
-    try {
-      const token = localStorage.getItem('token');
-      await axios.post('/api/programhead/share-with-dean', {
-        researchId
-      }, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      
-      alert('Research record shared with Dean successfully!');
-    } catch (error) {
-      console.error('Error sharing with Dean:', error);
-      alert('Error sharing research record with Dean');
-    } finally {
-      setLoading(false);
     }
   };
 
@@ -4146,23 +4267,104 @@ const ResearchRecords = () => {
     }
   };
 
+  const handleFinalizeResearch = (research) => {
+    setSelectedResearch(research);
+    // Pre-fill form with existing data if available
+    setFinalizeForm({
+      finalGrade: research.finalGrade || '',
+      evaluationStatus: research.evaluationStatus || 'passed',
+      semester: research.semester || '',
+      academicYear: research.academicYear || '',
+      submissionDate: research.submissionDate ? new Date(research.submissionDate).toISOString().split('T')[0] : ''
+    });
+    setShowFinalizeModal(true);
+  };
+
+  const handleFinalizeSubmit = async (e) => {
+    e.preventDefault();
+    
+    if (!finalizeForm.finalGrade || !finalizeForm.evaluationStatus) {
+      alert('Please fill in Final Grade and Evaluation Status');
+      return;
+    }
+
+    setFinalizing(true);
+    try {
+      const token = localStorage.getItem('token');
+      const payload = {
+        finalGrade: finalizeForm.finalGrade,
+        evaluationStatus: finalizeForm.evaluationStatus,
+      };
+      
+      // Add optional fields if provided
+      if (finalizeForm.semester) payload.semester = finalizeForm.semester;
+      if (finalizeForm.academicYear) payload.academicYear = finalizeForm.academicYear;
+      if (finalizeForm.submissionDate) payload.submissionDate = finalizeForm.submissionDate;
+
+      const finalizeEndpoint = `/api/programhead/research/${selectedResearch._id}/finalize`;
+      const requestConfig = {
+        headers: { Authorization: `Bearer ${token}` }
+      };
+
+      const sendFinalizeRequest = async (url) => {
+        console.log(`[Finalize Research] Sending request to: ${url}`);
+        return axios.put(url, payload, requestConfig);
+      };
+
+      try {
+        await sendFinalizeRequest(finalizeEndpoint);
+      } catch (error) {
+        if (error.response?.status === 404) {
+          const apiBase = import.meta.env.VITE_API_BASE || 'http://localhost:5000';
+          const directEndpoint = `${apiBase}${finalizeEndpoint}`;
+          console.warn('[Finalize Research] Proxy returned 404. Retrying via direct backend URL:', directEndpoint);
+          await sendFinalizeRequest(directEndpoint);
+        } else {
+          throw error;
+        }
+      }
+      
+      setShowFinalizeModal(false);
+      setSelectedResearch(null);
+      setFinalizeForm({
+        finalGrade: '',
+        evaluationStatus: '',
+        semester: '',
+        academicYear: '',
+        submissionDate: ''
+      });
+      
+      fetchResearchRecords();
+      alert('Research finalized successfully! The student will be notified.');
+    } catch (error) {
+      console.error('Error finalizing research:', error);
+      const errorMessage = error.response?.data?.message || error.message || 'Error finalizing research';
+      alert(errorMessage);
+    } finally {
+      setFinalizing(false);
+    }
+  };
+
+  // Filter out archived research (backend already filters, but this is defensive)
+  const activeResearch = researchRecords.filter(r => r.status !== 'archived');
+
   return (
     <div className="space-y-5">
       <div className="flex justify-between items-center">
         <h2 className="text-xl font-bold text-gray-800">Research Records Management</h2>
         <span className="px-3 py-1 bg-blue-100 text-blue-700 rounded-full text-xs font-medium">
-          {researchRecords.length} Total Records
+          {activeResearch.length} Total Records
         </span>
       </div>
 
       {/* Research Records List */}
       <div className="space-y-4">
-        {researchRecords.length === 0 ? (
+        {activeResearch.length === 0 ? (
           <div className="bg-gray-50 rounded-lg border border-gray-200 p-8">
             <p className="text-gray-500 text-center text-sm">No research records found.</p>
           </div>
         ) : (
-          researchRecords.map((research) => (
+          activeResearch.map((research) => (
             <div key={research._id} className="bg-white border border-gray-200 rounded-lg p-5 hover:shadow-md transition-shadow">
               <div className="flex items-start justify-between">
                 <div className="flex-1">
@@ -4185,7 +4387,7 @@ const ResearchRecords = () => {
                           Created: {new Date(research.createdAt).toLocaleDateString()}
                         </span>
                       </div>
-                      <div className="mt-3">
+                      <div className="mt-3 flex items-center gap-2 flex-wrap">
                         <span className={`px-3 py-1 rounded-full text-xs font-medium ${
                           research.status === 'completed' ? 'bg-green-100 text-green-700' :
                           research.status === 'in-progress' ? 'bg-blue-100 text-blue-700' :
@@ -4194,6 +4396,16 @@ const ResearchRecords = () => {
                         }`}>
                           {research.status}
                         </span>
+                        {research.status === 'completed' && !research.finalizedDate && (
+                          <span className="px-2 py-1 bg-orange-100 text-orange-700 rounded-full text-xs font-medium">
+                            Ready for Finalization
+                          </span>
+                        )}
+                        {research.finalizedDate && (
+                          <span className="px-2 py-1 bg-purple-100 text-purple-700 rounded-full text-xs font-medium">
+                            Finalized
+                          </span>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -4205,14 +4417,22 @@ const ResearchRecords = () => {
                       {new Date(research.updatedAt).toLocaleDateString()}
                     </p>
                   </div>
-                  <div className="flex space-x-2">
-                    <button 
-                      onClick={() => handleShareWithDean(research._id)}
-                      disabled={loading}
-                      className="px-3 py-1 bg-blue-600 text-white rounded-md text-xs font-medium hover:bg-blue-700 transition-colors disabled:opacity-50"
-                    >
-                      Share with Dean
-                    </button>
+                  <div className="flex flex-col gap-2">
+                    {research.status === 'completed' && !research.finalizedDate && (
+                      <button 
+                        onClick={() => handleFinalizeResearch(research)}
+                        disabled={loading || finalizing}
+                        className="px-3 py-1 bg-green-600 text-white rounded-md text-xs font-medium hover:bg-green-700 transition-colors disabled:opacity-50"
+                        title="Finalize this research to make it appear in student's Completed Thesis page"
+                      >
+                        Finalize
+                      </button>
+                    )}
+                    {research.finalizedDate && (
+                      <span className="px-3 py-1 bg-green-100 text-green-700 rounded-md text-xs font-medium text-center">
+                        Finalized
+                      </span>
+                    )}
                     <button 
                       onClick={() => handleArchiveResearch(research._id)}
                       disabled={loading}
@@ -4231,33 +4451,181 @@ const ResearchRecords = () => {
       {/* Summary Statistics */}
       <div className="bg-gray-50 rounded-lg border border-gray-200 p-5">
         <h3 className="text-base font-semibold text-gray-800 mb-4">Research Records Summary</h3>
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
           <div className="bg-white rounded-lg p-4 text-center border border-gray-200">
             <p className="text-2xl font-bold text-blue-600">
-              {researchRecords.filter(r => r.status === 'in-progress').length}
+              {activeResearch.filter(r => r.status === 'in-progress').length}
             </p>
             <p className="text-xs text-gray-600 mt-1 uppercase font-semibold">In Progress</p>
           </div>
           <div className="bg-white rounded-lg p-4 text-center border border-gray-200">
             <p className="text-2xl font-bold text-green-600">
-              {researchRecords.filter(r => r.status === 'completed').length}
+              {activeResearch.filter(r => r.finalizedDate).length}
             </p>
-            <p className="text-xs text-gray-600 mt-1 uppercase font-semibold">Completed</p>
+            <p className="text-xs text-gray-600 mt-1 uppercase font-semibold">Finalized</p>
+          </div>
+          <div className="bg-white rounded-lg p-4 text-center border border-gray-200">
+            <p className="text-2xl font-bold text-orange-600">
+              {activeResearch.filter(r => r.status === 'completed' && !r.finalizedDate).length}
+            </p>
+            <p className="text-xs text-gray-600 mt-1 uppercase font-semibold">Ready to Finalize</p>
           </div>
           <div className="bg-white rounded-lg p-4 text-center border border-gray-200">
             <p className="text-2xl font-bold text-yellow-600">
-              {researchRecords.filter(r => r.status === 'pending').length}
+              {activeResearch.filter(r => r.status === 'pending').length}
             </p>
             <p className="text-xs text-gray-600 mt-1 uppercase font-semibold">Pending</p>
           </div>
           <div className="bg-white rounded-lg p-4 text-center border border-gray-200">
             <p className="text-2xl font-bold text-gray-600">
-              {researchRecords.filter(r => r.adviser).length}
+              {activeResearch.filter(r => r.adviser).length}
             </p>
             <p className="text-xs text-gray-600 mt-1 uppercase font-semibold">With Adviser</p>
           </div>
         </div>
       </div>
+
+      {/* Finalize Research Modal */}
+      {showFinalizeModal && selectedResearch && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
+          <div className="bg-white rounded-lg shadow-lg max-w-2xl w-full p-6 max-h-[90vh] overflow-y-auto">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-semibold text-gray-800">Finalize Research</h3>
+              <button
+                onClick={() => {
+                  setShowFinalizeModal(false);
+                  setSelectedResearch(null);
+                  setFinalizeForm({
+                    finalGrade: '',
+                    evaluationStatus: '',
+                    semester: '',
+                    academicYear: '',
+                    submissionDate: ''
+                  });
+                }}
+                className="text-gray-500 hover:text-gray-700"
+              >
+                <FaClose className="h-6 w-6" />
+              </button>
+            </div>
+
+            <div className="mb-4 p-4 bg-gray-50 rounded-lg">
+              <p className="text-sm font-medium text-gray-700">Research Title:</p>
+              <p className="text-gray-800">{selectedResearch.title}</p>
+              <p className="text-sm font-medium text-gray-700 mt-2">Student(s):</p>
+              <p className="text-gray-800">
+                {selectedResearch.students?.map(s => s.name).join(', ') || 'N/A'}
+              </p>
+            </div>
+
+            <form onSubmit={handleFinalizeSubmit} className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Final Grade <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  value={finalizeForm.finalGrade}
+                  onChange={(e) => setFinalizeForm({ ...finalizeForm, finalGrade: e.target.value })}
+                  placeholder="e.g., A, B+, Pass, Fail"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-[#7C1D23]"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Evaluation Status <span className="text-red-500">*</span>
+                </label>
+                <select
+                  value={finalizeForm.evaluationStatus}
+                  onChange={(e) => setFinalizeForm({ ...finalizeForm, evaluationStatus: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-[#7C1D23]"
+                  required
+                >
+                  <option value="">Select Status</option>
+                  <option value="passed">Passed</option>
+                  <option value="failed">Failed</option>
+                  <option value="approved">Approved</option>
+                  <option value="rejected">Rejected</option>
+                  <option value="in-review">In Review</option>
+                  <option value="pending">Pending</option>
+                </select>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Semester (Optional)
+                  </label>
+                  <select
+                    value={finalizeForm.semester}
+                    onChange={(e) => setFinalizeForm({ ...finalizeForm, semester: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-[#7C1D23]"
+                  >
+                    <option value="">Select Semester</option>
+                    <option value="1st">1st Semester</option>
+                    <option value="2nd">2nd Semester</option>
+                    <option value="Summer">Summer</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Academic Year (Optional)
+                  </label>
+                  <input
+                    type="text"
+                    value={finalizeForm.academicYear}
+                    onChange={(e) => setFinalizeForm({ ...finalizeForm, academicYear: e.target.value })}
+                    placeholder="e.g., 2024-2025"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-[#7C1D23]"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Submission Date (Optional)
+                </label>
+                <input
+                  type="date"
+                  value={finalizeForm.submissionDate}
+                  onChange={(e) => setFinalizeForm({ ...finalizeForm, submissionDate: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-[#7C1D23]"
+                />
+              </div>
+
+              <div className="flex justify-end gap-3 pt-4">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowFinalizeModal(false);
+                    setSelectedResearch(null);
+                    setFinalizeForm({
+                      finalGrade: '',
+                      evaluationStatus: '',
+                      semester: '',
+                      academicYear: '',
+                      submissionDate: ''
+                    });
+                  }}
+                  className="px-4 py-2 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300 transition-colors text-sm font-medium"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={finalizing}
+                  className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {finalizing ? 'Finalizing...' : 'Finalize Research'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

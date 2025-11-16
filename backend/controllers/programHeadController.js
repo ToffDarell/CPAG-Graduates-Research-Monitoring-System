@@ -8,6 +8,7 @@ import Document from "../models/Document.js";
 import crypto from "crypto";
 import fs from "fs";
 import path from "path";
+import { createConsultationEvent, deleteCalendarEvent } from "../utils/googleCalendar.js";
 
 // Get panel members
 export const getPanelMembers = async (req, res) => {
@@ -81,28 +82,70 @@ export const assignPanelMembers = async (req, res) => {
 
 // Create panel
 export const createPanel = async (req, res) => {
+  console.log('CREATE PANEL FUNCTION CALLED! ');
   try {
     const { name, description, type, researchId, members } = req.body;
 
-    if (!name || !type || !researchId || !Array.isArray(members) || members.length === 0) {
-      return res.status(400).json({ message: "Missing required fields" });
+    console.log('[CREATE PANEL] Request body:', { name, type, researchId, membersCount: members?.length });
+    console.log('[CREATE PANEL] Members received:', JSON.stringify(members, null, 2));
+
+    // Detailed validation
+    const missingFields = [];
+    if (!name) missingFields.push('name');
+    if (!type) missingFields.push('type');
+    if (!researchId) missingFields.push('researchId');
+    if (!Array.isArray(members)) missingFields.push('members (must be array)');
+
+    if (missingFields.length > 0) {
+      const errorMsg = `Missing or invalid required fields: ${missingFields.join(', ')}`;
+      console.log('[CREATE PANEL] Validation failed:', errorMsg);
+      return res.status(400).json({ message: errorMsg });
     }
+
+    // Note: Frontend validates that at least 2 panelists (internal + external combined) are required.
+    // Internal members are sent in this request, external members are invited via separate endpoint.
+
+    // Auto-activate all faculty members when creating a panel
+    const activatedMembers = members.map(member => ({
+      faculty: member.faculty,
+      role: member.role,
+      isSelected: true, // Auto-activate faculty members
+      status: 'assigned' // Valid enum value from Panel schema
+    }));
+
+    console.log('[CREATE PANEL] Activated members:', JSON.stringify(activatedMembers, null, 2));
 
     const panel = new Panel({
       name,
       description: description || "",
       type,
       research: researchId,
-      members,
+      members: activatedMembers, // Use activated members
       assignedBy: req.user.id,
       status: "pending",
     });
 
     await panel.save();
+    console.log('[CREATE PANEL] Panel saved with ID:', panel._id);
+    console.log('[CREATE PANEL] Panel members after save:', JSON.stringify(panel.members, null, 2));
 
     const populated = await Panel.findById(panel._id)
-      .populate("research", "title students")
+      .populate({
+        path: "research",
+        select: "title students",
+        populate: {
+          path: "students",
+          select: "name email"
+        }
+      })
       .populate("members.faculty", "name email");
+    
+    console.log('[CREATE PANEL] Populated panel members:', JSON.stringify(populated.members.map(m => ({
+      faculty: m.faculty?._id || m.faculty,
+      role: m.role,
+      isSelected: m.isSelected,
+      status: m.status
+    })), null, 2));
 
     // Update Research.panel field with assigned panel member IDs
     if (researchId) {
@@ -146,17 +189,42 @@ export const createPanel = async (req, res) => {
 
       if (panelistEmails.length > 0) {
         const researchTitle = populated.research?.title || "Research";
+        
+        // Get student names
+        const students = populated.research?.students || [];
+        const studentNames = Array.isArray(students) 
+          ? students.map(s => s?.name || (typeof s === 'object' ? s.name : 'Unknown')).filter(Boolean)
+          : [];
+        const studentNamesText = studentNames.length > 0 
+          ? studentNames.join(", ") 
+          : "Not specified";
+
         await transporter.sendMail({
           from: process.env.SMTP_FROM,
           to: panelistEmails.join(","),
           subject: `Panel Assignment: ${name}`,
           html: `
-            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-              <h2 style="color: #7C1D23;">You have been assigned as a panelist</h2>
-              <p><strong>Panel:</strong> ${name}</p>
-              <p><strong>Type:</strong> ${type.replace(/_/g, " ")}</p>
-              <p><strong>Research:</strong> ${researchTitle}</p>
-              <p>${description || ""}</p>
+            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+              <div style="background-color: #7C1D23; color: white; padding: 20px; border-radius: 5px 5px 0 0;">
+                <h2 style="margin: 0; font-size: 24px;">You have been assigned as a panelist</h2>
+              </div>
+              <div style="background-color: #f9f9f9; padding: 20px; border: 1px solid #ddd; border-top: none;">
+                <p style="margin-top: 0;">Dear Panelist,</p>
+                <p>You have been assigned to serve as a panelist for the following research panel:</p>
+                
+                <div style="background-color: white; padding: 15px; margin: 20px 0; border-left: 4px solid #7C1D23; border-radius: 4px;">
+                  <p style="margin: 8px 0;"><strong style="color: #333;">Panel Name:</strong> <span style="color: #7C1D23;">${name}</span></p>
+                  <p style="margin: 8px 0;"><strong style="color: #333;">Panel Type:</strong> ${type.replace(/_/g, " ").replace(/\b\w/g, l => l.toUpperCase())}</p>
+                  <p style="margin: 8px 0;"><strong style="color: #333;">Research Title:</strong> ${researchTitle}</p>
+                  <p style="margin: 8px 0;"><strong style="color: #333;">Student(s):</strong> ${studentNamesText}</p>
+                  ${description ? `<p style="margin: 8px 0;"><strong style="color: #333;">Description:</strong> ${description}</p>` : ''}
+                </div>
+
+                <p style="margin-bottom: 0;">Please review the research materials and prepare for the panel evaluation. You will receive further notifications regarding the schedule and submission deadlines.</p>
+              </div>
+              <div style="background-color: #f0f0f0; padding: 15px; border-radius: 0 0 5px 5px; border: 1px solid #ddd; border-top: none;">
+                <p style="color: #999; font-size: 12px; margin: 0;">If you have any questions or concerns, please contact the Program Head.</p>
+              </div>
             </div>
           `,
         });
@@ -192,9 +260,47 @@ export const updatePanelMembers = async (req, res) => {
       return res.status(400).json({ message: "Members must be an array" });
     }
 
+    // Get existing panel to compare members
+    const existingPanel = await Panel.findById(id);
+    if (!existingPanel) {
+      return res.status(404).json({ message: "Panel not found" });
+    }
+
+    // Create a set of existing member faculty IDs for comparison
+    const existingFacultyIds = new Set(
+      existingPanel.members.map(m => {
+        const fId = m.faculty?._id || m.faculty;
+        return fId?.toString();
+      }).filter(Boolean)
+    );
+
+    // Auto-activate newly added members (keep existing members' isSelected status)
+    const updatedMembers = members.map(member => {
+      const memberFacultyId = (member.faculty?._id || member.faculty)?.toString();
+      
+      // Find if this member already exists in the panel
+      const existingMember = existingPanel.members.find(m => {
+        const existingFacultyId = (m.faculty?._id || m.faculty)?.toString();
+        return existingFacultyId === memberFacultyId;
+      });
+
+      // If it's a new member, auto-activate it; otherwise, preserve existing isSelected status
+      if (existingMember) {
+        return {
+          ...member,
+          isSelected: existingMember.isSelected // Preserve existing status
+        };
+      } else {
+        return {
+          ...member,
+          isSelected: true // Auto-activate new members
+        };
+      }
+    });
+
     const panel = await Panel.findByIdAndUpdate(
       id,
-      { members, assignedBy: req.user.id },
+      { members: updatedMembers, assignedBy: req.user.id },
       { new: true }
     )
       .populate("research", "title students")
@@ -224,7 +330,10 @@ export const updatePanelMembers = async (req, res) => {
       entityId: panel._id,
       entityName: panel.name,
       description: "Edited panel membership",
-      metadata: { memberCount: members.length }
+      metadata: { 
+        memberCount: updatedMembers.length,
+        activeCount: updatedMembers.filter(m => m.isSelected).length
+      }
     });
 
     res.json({ message: "Panel membership updated", panel });
@@ -764,10 +873,17 @@ export const getPanelDefenseSchedules = async (req, res) => {
     
     const query = {
       panel: { $exists: true, $ne: null }, // Only schedules with panel field
+      status: { $ne: "cancelled" }, // Exclude cancelled schedules
     };
 
+    // If a specific status is requested, override the default filter
     if (status && status !== 'all') {
-      query.status = status;
+      if (status === 'cancelled') {
+        // Allow showing cancelled schedules if explicitly requested
+        query.status = 'cancelled';
+      } else {
+        query.status = status;
+      }
     }
 
     if (startDate || endDate) {
@@ -780,6 +896,8 @@ export const getPanelDefenseSchedules = async (req, res) => {
       }
     }
 
+    console.log('[Get Panel Defense Schedules] Query:', JSON.stringify(query));
+
     const schedules = await Schedule.find(query)
       .populate("research", "title students")
       .populate("panel", "name type status")
@@ -787,6 +905,8 @@ export const getPanelDefenseSchedules = async (req, res) => {
       .populate("createdBy", "name email")
       .populate("finalizedBy", "name email")
       .sort({ datetime: 1 });
+    
+    console.log(`[Get Panel Defense Schedules] Found ${schedules.length} schedules`);
     
     res.json(schedules);
   } catch (error) {
@@ -1022,6 +1142,28 @@ export const deleteSchedule = async (req, res) => {
     const scheduleTitle = schedule.title || "Schedule";
     const scheduleId = schedule._id;
 
+    console.log(`[Delete Schedule] Permanently deleting schedule: ${scheduleId} - "${scheduleTitle}"`);
+
+    // Delete Google Calendar event if it exists
+    if (schedule.googleCalendarEventId) {
+      try {
+        const user = await User.findById(req.user.id);
+        if (user?.googleAccessToken) {
+          console.log(`[Delete Schedule] Deleting Google Calendar event: ${schedule.googleCalendarEventId}`);
+          await deleteCalendarEvent(
+            schedule.googleCalendarEventId,
+            user.googleAccessToken,
+            user.googleRefreshToken,
+            user._id.toString()
+          );
+          console.log(`[Delete Schedule] Google Calendar event deleted successfully`);
+        }
+      } catch (calendarError) {
+        console.error('[Delete Schedule] Error deleting Google Calendar event:', calendarError);
+        // Don't fail the deletion if calendar deletion fails
+      }
+    }
+
     // If it's a panel schedule, update panel status and clear meeting details
     if (schedule.panel) {
       schedule.panel.meetingDate = null;
@@ -1051,7 +1193,29 @@ export const deleteSchedule = async (req, res) => {
       }
     });
     
-    await Schedule.findByIdAndDelete(id);
+    // Permanently delete the schedule from database
+    const deleteResult = await Schedule.findByIdAndDelete(id);
+    
+    if (!deleteResult) {
+      console.error(`[Delete Schedule] Failed to delete schedule ${scheduleId} - schedule not found`);
+      return res.status(404).json({ message: "Schedule not found or already deleted" });
+    }
+    
+    console.log(`[Delete Schedule] Schedule ${scheduleId} permanently deleted from database`);
+    console.log(`[Delete Schedule] Deleted schedule details:`, {
+      id: deleteResult._id.toString(),
+      title: deleteResult.title,
+      panelId: deleteResult.panel?.toString() || 'N/A'
+    });
+    
+    // Verify deletion by checking if schedule still exists
+    const verifyDelete = await Schedule.findById(id);
+    if (verifyDelete) {
+      console.error(`[Delete Schedule] WARNING: Schedule ${scheduleId} still exists after deletion attempt!`);
+    } else {
+      console.log(`[Delete Schedule] Verified: Schedule ${scheduleId} successfully removed from database`);
+    }
+    
     res.json({ message: "Schedule deleted successfully" });
   } catch (error) {
     console.error("Delete schedule error:", error);
@@ -1080,103 +1244,105 @@ export const archiveSchedule = async (req, res) => {
       return res.status(404).json({ message: "Schedule not found" });
     }
 
-    if (!schedule.panel) {
-      return res.status(400).json({ message: "This schedule is not a panel defense schedule" });
-    }
-
     const oldStatus = schedule.status;
+    console.log(`[Archive Schedule] Changing status from "${oldStatus}" to "cancelled" for schedule: ${schedule._id}`);
     schedule.status = "cancelled";
     await schedule.save();
+    console.log(`[Archive Schedule] Schedule ${schedule._id} status updated to: ${schedule.status}`);
 
-    // Update panel meeting details
-    schedule.panel.meetingDate = null;
-    schedule.panel.meetingLocation = null;
-    if (schedule.panel.status === 'scheduled') {
-      schedule.panel.status = 'confirmed'; // Revert to confirmed
+    // Update panel meeting details (if panel exists)
+    if (schedule.panel) {
+      schedule.panel.meetingDate = null;
+      schedule.panel.meetingLocation = null;
+      if (schedule.panel.status === 'scheduled') {
+        schedule.panel.status = 'confirmed'; // Revert to confirmed
+      }
+      await schedule.panel.save();
     }
-    await schedule.panel.save();
 
-    // Send cancellation notifications
-    try {
-      const transporter = nodemailer.createTransport({
-        host: process.env.SMTP_HOST,
-        port: process.env.SMTP_PORT,
-        secure: false,
-        auth: {
-          user: process.env.SMTP_USER,
-          pass: process.env.SMTP_PASS,
-        },
-      });
+    // Send cancellation notifications (only if panel exists)
+    if (schedule.panel) {
+      try {
+        const transporter = nodemailer.createTransport({
+          host: process.env.SMTP_HOST,
+          port: process.env.SMTP_PORT,
+          secure: false,
+          auth: {
+            user: process.env.SMTP_USER,
+            pass: process.env.SMTP_PASS,
+          },
+        });
 
-      // Collect participant emails
-      const participantEmails = schedule.participants
-        .map(p => p.user?.email)
-        .filter(Boolean);
+        // Collect participant emails
+        const participantEmails = schedule.participants
+          .map(p => p.user?.email)
+          .filter(Boolean);
 
-      // For panel defense schedules, ensure students are included
-      if (schedule.research?.students) {
-        const students = Array.isArray(schedule.research.students) 
-          ? schedule.research.students 
-          : [schedule.research.students];
-        for (const student of students) {
-          if (student?.email && !participantEmails.includes(student.email)) {
-            participantEmails.push(student.email);
+        // For panel defense schedules, ensure students are included
+        if (schedule.research?.students) {
+          const students = Array.isArray(schedule.research.students) 
+            ? schedule.research.students 
+            : [schedule.research.students];
+          for (const student of students) {
+            if (student?.email && !participantEmails.includes(student.email)) {
+              participantEmails.push(student.email);
+            }
           }
         }
-      }
 
-      // Add external panelist emails
-      const externalPanelists = schedule.panel.members
-        .filter(m => m.isExternal && m.isSelected && m.email)
-        .map(m => m.email);
-      participantEmails.push(...externalPanelists);
+        // Add external panelist emails
+        const externalPanelists = schedule.panel.members
+          .filter(m => m.isExternal && m.isSelected && m.email)
+          .map(m => m.email);
+        participantEmails.push(...externalPanelists);
 
-      const uniqueEmails = [...new Set(participantEmails)];
+        const uniqueEmails = [...new Set(participantEmails)];
 
-      if (uniqueEmails.length > 0) {
-        const researchTitle = schedule.research?.title || schedule.panel.research?.title || "Research";
-        const scheduleDateStr = schedule.datetime.toLocaleString('en-US', {
-          weekday: 'long',
-          year: 'numeric',
-          month: 'long',
-          day: 'numeric',
-          hour: 'numeric',
-          minute: '2-digit',
-        });
+        if (uniqueEmails.length > 0) {
+          const researchTitle = schedule.research?.title || schedule.panel.research?.title || "Research";
+          const scheduleDateStr = schedule.datetime.toLocaleString('en-US', {
+            weekday: 'long',
+            year: 'numeric',
+            month: 'long',
+            day: 'numeric',
+            hour: 'numeric',
+            minute: '2-digit',
+          });
 
-        await transporter.sendMail({
-          from: process.env.SMTP_FROM,
-          to: uniqueEmails.join(","),
-          subject: `Schedule Cancelled: ${schedule.panel.name}`,
-          html: `
-            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
-              <div style="background-color: #dc2626; color: white; padding: 20px; border-radius: 5px 5px 0 0;">
-                <h2 style="margin: 0;">Schedule Cancelled</h2>
-              </div>
-              <div style="background-color: #f9f9f9; padding: 20px; border: 1px solid #ddd; border-top: none;">
-                <p>Dear Participant,</p>
-                <p>The following panel defense schedule has been cancelled:</p>
-                
-                <div style="background-color: white; padding: 15px; margin: 20px 0; border-left: 4px solid #dc2626;">
-                  <p style="margin: 5px 0;"><strong>Panel Name:</strong> ${schedule.panel.name}</p>
-                  <p style="margin: 5px 0;"><strong>Research:</strong> ${researchTitle}</p>
-                  <p style="margin: 5px 0;"><strong>Original Date & Time:</strong> ${scheduleDateStr}</p>
-                  <p style="margin: 5px 0;"><strong>Location:</strong> ${schedule.location}</p>
+          await transporter.sendMail({
+            from: process.env.SMTP_FROM,
+            to: uniqueEmails.join(","),
+            subject: `Schedule Cancelled: ${schedule.panel.name}`,
+            html: `
+              <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+                <div style="background-color: #dc2626; color: white; padding: 20px; border-radius: 5px 5px 0 0;">
+                  <h2 style="margin: 0;">Schedule Cancelled</h2>
                 </div>
+                <div style="background-color: #f9f9f9; padding: 20px; border: 1px solid #ddd; border-top: none;">
+                  <p>Dear Participant,</p>
+                  <p>The following panel defense schedule has been cancelled:</p>
+                  
+                  <div style="background-color: white; padding: 15px; margin: 20px 0; border-left: 4px solid #dc2626;">
+                    <p style="margin: 5px 0;"><strong>Panel Name:</strong> ${schedule.panel.name}</p>
+                    <p style="margin: 5px 0;"><strong>Research:</strong> ${researchTitle}</p>
+                    <p style="margin: 5px 0;"><strong>Original Date & Time:</strong> ${scheduleDateStr}</p>
+                    <p style="margin: 5px 0;"><strong>Location:</strong> ${schedule.location}</p>
+                  </div>
 
-                <p>Please remove this event from your calendar. A new schedule will be provided if the panel defense is rescheduled.</p>
-                <p>If you have any questions, please contact the Program Head.</p>
+                  <p>Please remove this event from your calendar. A new schedule will be provided if the panel defense is rescheduled.</p>
+                  <p>If you have any questions, please contact the Program Head.</p>
+                </div>
+                <div style="background-color: #f0f0f0; padding: 15px; border-radius: 0 0 5px 5px; border: 1px solid #ddd; border-top: none;">
+                  <p style="color: #999; font-size: 12px; margin: 0;">This is an automated notification. Please do not reply to this email.</p>
+                </div>
               </div>
-              <div style="background-color: #f0f0f0; padding: 15px; border-radius: 0 0 5px 5px; border: 1px solid #ddd; border-top: none;">
-                <p style="color: #999; font-size: 12px; margin: 0;">This is an automated notification. Please do not reply to this email.</p>
-              </div>
-            </div>
-          `,
-        });
+            `,
+          });
+        }
+      } catch (emailErr) {
+        console.error("Schedule cancellation email error:", emailErr);
+        // Don't fail the cancellation if email fails
       }
-    } catch (emailErr) {
-      console.error("Schedule cancellation email error:", emailErr);
-      // Don't fail the cancellation if email fails
     }
 
     // Log activity
@@ -1190,8 +1356,8 @@ export const archiveSchedule = async (req, res) => {
       metadata: {
         scheduleId: schedule._id,
         title: schedule.title,
-        panelId: schedule.panel._id,
-        panelName: schedule.panel.name,
+        panelId: schedule.panel?._id,
+        panelName: schedule.panel?.name,
         oldStatus,
         newStatus: "cancelled",
         cancelledAt: new Date(),
@@ -1327,7 +1493,7 @@ export const uploadForm = async (req, res) => {
 // Get research records
 export const getResearchRecords = async (req, res) => {
   try {
-    const research = await Research.find()
+    const research = await Research.find({ status: { $ne: 'archived'}})
       .populate("students", "name email")
       .populate("adviser", "name email")
       .sort({ createdAt: -1 });
@@ -1640,7 +1806,14 @@ export const invitePanelist = async (req, res) => {
     }
 
     const panel = await Panel.findById(panelId)
-      .populate("research", "title students")
+      .populate({
+        path: "research",
+        select: "title students",
+        populate: {
+          path: "students",
+          select: "name email"
+        }
+      })
       .populate("assignedBy", "name email");
 
     if (!panel) {
@@ -1699,6 +1872,16 @@ export const invitePanelist = async (req, res) => {
       const reviewLink = `${frontendUrl}/panel-review/${invitationToken}`;
 
       const researchTitle = panel.research?.title || "Research";
+      
+      // Get student names
+      const students = panel.research?.students || [];
+      const studentNames = Array.isArray(students) 
+        ? students.map(s => s?.name || (typeof s === 'object' ? s.name : 'Unknown')).filter(Boolean)
+        : [];
+      const studentNamesText = studentNames.length > 0 
+        ? studentNames.join(", ") 
+        : "Not specified";
+      
       const deadlineText = reviewDeadline 
         ? new Date(reviewDeadline).toLocaleDateString() 
         : "To be determined";
@@ -1710,20 +1893,21 @@ export const invitePanelist = async (req, res) => {
         html: `
           <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
             <div style="background-color: #7C1D23; color: white; padding: 20px; border-radius: 5px 5px 0 0;">
-              <h2 style="margin: 0;">You've been invited as a panelist</h2>
+              <h2 style="margin: 0; font-size: 24px;">You've been invited as a panelist</h2>
             </div>
             <div style="background-color: #f9f9f9; padding: 20px; border: 1px solid #ddd; border-top: none;">
-              <p>Dear <strong>${name}</strong>,</p>
-              <p>You have been invited to serve as a <strong>${role.replace(/_/g, ' ')}</strong> panelist for the following evaluation:</p>
+              <p style="margin-top: 0;">Dear <strong>${name}</strong>,</p>
+              <p>You have been invited to serve as a <strong>${role.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}</strong> panelist for the following evaluation:</p>
               
-              <div style="background-color: white; padding: 15px; margin: 20px 0; border-left: 4px solid #7C1D23;">
-                <p style="margin: 5px 0;"><strong>Panel Name:</strong> ${panel.name}</p>
-                <p style="margin: 5px 0;"><strong>Research:</strong> ${researchTitle}</p>
-                <p style="margin: 5px 0;"><strong>Panel Type:</strong> ${panel.type.replace(/_/g, ' ')}</p>
-                <p style="margin: 5px 0;"><strong>Review Deadline:</strong> ${deadlineText}</p>
+              <div style="background-color: white; padding: 15px; margin: 20px 0; border-left: 4px solid #7C1D23; border-radius: 4px;">
+                <p style="margin: 8px 0;"><strong style="color: #333;">Panel Name:</strong> <span style="color: #7C1D23;">${panel.name}</span></p>
+                <p style="margin: 8px 0;"><strong style="color: #333;">Panel Type:</strong> ${panel.type.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}</p>
+                <p style="margin: 8px 0;"><strong style="color: #333;">Research Title:</strong> ${researchTitle}</p>
+                <p style="margin: 8px 0;"><strong style="color: #333;">Student(s):</strong> ${studentNamesText}</p>
+                <p style="margin: 8px 0;"><strong style="color: #333;">Review Deadline:</strong> ${deadlineText}</p>
               </div>
 
-              ${panel.description ? `<p style="margin: 15px 0;"><strong>Description:</strong> ${panel.description}</p>` : ''}
+              ${panel.description ? `<p style="margin: 15px 0; padding: 10px; background-color: #f0f0f0; border-radius: 4px;"><strong style="color: #333;">Description:</strong> ${panel.description}</p>` : ''}
 
               <p>Please click the button below to access your review dashboard and submit your evaluation:</p>
               
@@ -2622,36 +2806,58 @@ export const replacePanelDocument = async (req, res) => {
 export const getActivityLogs = async (req, res) => {
   try {
     const { action, entityType, limit = 100, page = 1 } = req.query;
-    
+
+    const pageNumber = Math.max(parseInt(page, 10) || 1, 1);
+    const limitNumber = Math.max(parseInt(limit, 10) || 100, 1);
+
     let query = {};
-    
+
     // Filter by action if provided
     if (action && action !== 'all') {
       query.action = action;
     }
-    
+
     // Filter by entity type if provided
     if (entityType && entityType !== 'all') {
       query.entityType = entityType;
     }
-    
-    const skip = (parseInt(page) - 1) * parseInt(limit);
-    
+
+    const allowedRoles = ["graduate student", "faculty adviser"];
+    const allowedUserIds = await User.find({
+      role: { $in: allowedRoles }
+    }).distinct("_id");
+
+    if (!allowedUserIds.length) {
+      return res.json({
+        activities: [],
+        pagination: {
+          total: 0,
+          page: pageNumber,
+          limit: limitNumber,
+          pages: 0
+        }
+      });
+    }
+
+    query.user = { $in: allowedUserIds };
+
+    const skip = (pageNumber - 1) * limitNumber;
+
     const activities = await Activity.find(query)
       .populate("user", "name email role")
       .sort({ createdAt: -1 })
-      .limit(parseInt(limit))
+      .limit(limitNumber)
       .skip(skip);
-    
+
     const total = await Activity.countDocuments(query);
-    
+
     res.json({
       activities,
       pagination: {
         total,
-        page: parseInt(page),
-        limit: parseInt(limit),
-        pages: Math.ceil(total / parseInt(limit))
+        page: pageNumber,
+        limit: limitNumber,
+        pages: Math.ceil(total / limitNumber)
       }
     });
   } catch (error) {
@@ -2664,24 +2870,50 @@ export const getActivityStats = async (req, res) => {
   try {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    
+
     const thisWeek = new Date();
     thisWeek.setDate(thisWeek.getDate() - 7);
-    
+
+    const allowedRoles = ["graduate student", "faculty adviser"];
+    const allowedUserIds = await User.find({
+      role: { $in: allowedRoles }
+    }).distinct("_id");
+
+    if (!allowedUserIds.length) {
+      return res.json({
+        total: 0,
+        today: 0,
+        thisWeek: 0,
+        byAction: [],
+        byEntityType: [],
+        recentUsers: []
+      });
+    }
+
+    const baseQuery = { user: { $in: allowedUserIds } };
+
     const stats = {
-      total: await Activity.countDocuments(),
-      today: await Activity.countDocuments({ createdAt: { $gte: today } }),
-      thisWeek: await Activity.countDocuments({ createdAt: { $gte: thisWeek } }),
+      total: await Activity.countDocuments(baseQuery),
+      today: await Activity.countDocuments({
+        ...baseQuery,
+        createdAt: { $gte: today }
+      }),
+      thisWeek: await Activity.countDocuments({
+        ...baseQuery,
+        createdAt: { $gte: thisWeek }
+      }),
       byAction: await Activity.aggregate([
+        { $match: { ...baseQuery } },
         { $group: { _id: "$action", count: { $sum: 1 } } },
         { $sort: { count: -1 } }
       ]),
       byEntityType: await Activity.aggregate([
+        { $match: { ...baseQuery } },
         { $group: { _id: "$entityType", count: { $sum: 1 } } },
         { $sort: { count: -1 } }
       ]),
       recentUsers: await Activity.aggregate([
-        { $match: { createdAt: { $gte: thisWeek } } },
+        { $match: { ...baseQuery, createdAt: { $gte: thisWeek } } },
         { $group: { _id: "$user", count: { $sum: 1 } } },
         { $sort: { count: -1 } },
         { $limit: 10 },
@@ -2690,7 +2922,7 @@ export const getActivityStats = async (req, res) => {
         { $project: { user: "$userInfo.name", count: 1 } }
       ])
     };
-    
+
     res.json(stats);
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -3325,6 +3557,84 @@ export const finalizeSchedule = async (req, res) => {
       // Don't fail the finalization if email fails
     }
 
+    // Sync to Google Calendar if user has connected calendar and event doesn't exist yet
+    let calendarEvent = null;
+    if (!schedule.googleCalendarEventId) {
+      const user = await User.findById(req.user.id);
+      console.log('[FINALIZE SCHEDULE] Checking Google Calendar connection:', {
+        userId: req.user.id,
+        calendarConnected: user?.calendarConnected,
+        hasAccessToken: !!user?.googleAccessToken,
+        hasRefreshToken: !!user?.googleRefreshToken,
+        tokenExpiry: user?.googleTokenExpiry
+      });
+
+      if (user?.calendarConnected && user?.googleAccessToken && user?.googleRefreshToken) {
+        try {
+          console.log('[FINALIZE SCHEDULE] Creating Google Calendar event for schedule:', schedule.title);
+          console.log('[FINALIZE SCHEDULE] Schedule data:', {
+            title: schedule.title,
+            datetime: schedule.datetime,
+            duration: schedule.duration,
+            location: schedule.location,
+            type: schedule.type,
+            attendeeCount: uniqueEmails.length
+          });
+
+          // Create Google Calendar event (token refresh will happen automatically if needed)
+          calendarEvent = await createConsultationEvent(
+            {
+              title: schedule.title,
+              description: schedule.description || `${scheduleType} for ${researchTitle}`,
+              datetime: schedule.datetime,
+              duration: schedule.duration,
+              location: schedule.location,
+              type: schedule.type,
+              researchTitle: researchTitle,
+              attendeeEmails: uniqueEmails,
+            },
+            user.googleAccessToken,
+            user.googleRefreshToken,
+            user._id.toString()
+          );
+
+          console.log('[FINALIZE SCHEDULE] Google Calendar event created successfully:', {
+            eventId: calendarEvent.eventId,
+            eventLink: calendarEvent.eventLink,
+            meetLink: calendarEvent.meetLink
+          });
+
+          schedule.googleCalendarEventId = calendarEvent.eventId;
+          schedule.googleCalendarLink = calendarEvent.eventLink;
+          schedule.googleMeetLink = calendarEvent.meetLink;
+          schedule.calendarSynced = true;
+          await schedule.save();
+          
+          console.log('[FINALIZE SCHEDULE] Schedule updated with calendar sync status: true');
+        } catch (calendarError) {
+          console.error('[FINALIZE SCHEDULE] Error syncing to Google Calendar:', calendarError);
+          console.error('[FINALIZE SCHEDULE] Error details:', {
+            message: calendarError.message,
+            code: calendarError.code,
+            response: calendarError.response?.data,
+            status: calendarError.response?.status,
+            statusText: calendarError.response?.statusText,
+            stack: calendarError.stack
+          });
+          // Don't fail finalization if calendar sync fails
+          console.log('[FINALIZE SCHEDULE] Continuing without Google Calendar sync');
+        }
+      } else {
+        console.log('[FINALIZE SCHEDULE] Google Calendar not connected or missing tokens:', {
+          calendarConnected: user?.calendarConnected,
+          hasAccessToken: !!user?.googleAccessToken,
+          hasRefreshToken: !!user?.googleRefreshToken
+        });
+      }
+    } else {
+      console.log('[FINALIZE SCHEDULE] Schedule already has Google Calendar event:', schedule.googleCalendarEventId);
+    }
+
     // Log activity
     await Activity.create({
       user: req.user.id,
@@ -3385,10 +3695,41 @@ export const createPanelSchedule = async (req, res) => {
       return res.status(404).json({ message: "Panel not found" });
     }
 
-    // Check if panel already has a schedule
-    const existingSchedule = await Schedule.findOne({ panel: panelId });
-    if (existingSchedule) {
-      return res.status(400).json({ message: "Panel already has a schedule. Please update the existing schedule instead." });
+    // Check if panel already has an ACTIVE schedule (exclude cancelled and completed)
+    // First, get ALL schedules for this panel to see what exists
+    const allSchedulesForPanel = await Schedule.find({ panel: panelId }).select('_id status title datetime');
+    console.log('[CREATE PANEL SCHEDULE] Checking schedules for panel:', panelId);
+    console.log('[CREATE PANEL SCHEDULE] All schedules found:', JSON.stringify(allSchedulesForPanel.map(s => ({
+      id: s._id.toString(),
+      status: s.status,
+      title: s.title,
+      datetime: s.datetime
+    })), null, 2));
+    
+    // Filter out cancelled and completed schedules
+    const activeSchedules = allSchedulesForPanel.filter(s => 
+      s.status !== 'cancelled' && s.status !== 'completed'
+    );
+    
+    console.log('[CREATE PANEL SCHEDULE] Active schedules (not cancelled/completed):', activeSchedules.length);
+    
+    if (activeSchedules.length > 0) {
+      const existingSchedule = activeSchedules[0];
+      console.log('[CREATE PANEL SCHEDULE] BLOCKING - Found active schedule:', {
+        id: existingSchedule._id.toString(),
+        status: existingSchedule.status,
+        title: existingSchedule.title
+      });
+      return res.status(400).json({ 
+        message: `Panel already has an active schedule (status: "${existingSchedule.status}"). Please delete the existing schedule first to create a new one.` 
+      });
+    }
+    
+    // If we get here, either no schedules exist, or all are cancelled/completed
+    if (allSchedulesForPanel.length > 0) {
+      console.log('[CREATE PANEL SCHEDULE] ALLOWING - All existing schedules are cancelled/completed');
+    } else {
+      console.log('[CREATE PANEL SCHEDULE] ALLOWING - No existing schedules found');
     }
 
     // Validate datetime
@@ -3588,6 +3929,84 @@ export const createPanelSchedule = async (req, res) => {
       // Don't fail the creation if email fails
     }
 
+    // Sync to Google Calendar if user has connected calendar
+    let calendarEvent = null;
+    const user = await User.findById(req.user.id);
+    console.log('[CREATE PANEL SCHEDULE] Checking Google Calendar connection:', {
+      userId: req.user.id,
+      calendarConnected: user?.calendarConnected,
+      hasAccessToken: !!user?.googleAccessToken,
+      hasRefreshToken: !!user?.googleRefreshToken,
+      tokenExpiry: user?.googleTokenExpiry
+    });
+
+    if (user?.calendarConnected && user?.googleAccessToken && user?.googleRefreshToken) {
+      try {
+        console.log('[CREATE PANEL SCHEDULE] Creating Google Calendar event for schedule:', schedule.title);
+        console.log('[CREATE PANEL SCHEDULE] Schedule data:', {
+          title: schedule.title,
+          datetime: schedule.datetime,
+          duration: schedule.duration,
+          location: schedule.location,
+          type: schedule.type,
+          attendeeCount: uniqueEmails.length
+        });
+
+        const researchTitle = panel.research?.title || "Research";
+        const scheduleTypeLabel = scheduleType === "proposal_defense" ? "Proposal Defense" : "Final Defense";
+
+        // Create Google Calendar event (token refresh will happen automatically if needed)
+        calendarEvent = await createConsultationEvent(
+          {
+            title: schedule.title,
+            description: schedule.description || `${scheduleTypeLabel} for ${researchTitle}`,
+            datetime: schedule.datetime,
+            duration: schedule.duration,
+            location: schedule.location,
+            type: schedule.type,
+            researchTitle: researchTitle,
+            attendeeEmails: uniqueEmails,
+          },
+          user.googleAccessToken,
+          user.googleRefreshToken,
+          user._id.toString()
+        );
+
+        console.log('[CREATE PANEL SCHEDULE] Google Calendar event created successfully:', {
+          eventId: calendarEvent.eventId,
+          eventLink: calendarEvent.eventLink,
+          meetLink: calendarEvent.meetLink
+        });
+
+        // Update schedule with Google Calendar event details
+        schedule.googleCalendarEventId = calendarEvent.eventId;
+        schedule.googleCalendarLink = calendarEvent.eventLink;
+        schedule.googleMeetLink = calendarEvent.meetLink;
+        schedule.calendarSynced = true;
+        await schedule.save();
+        
+        console.log('[CREATE PANEL SCHEDULE] Schedule updated with calendar sync status: true');
+      } catch (calendarError) {
+        console.error('[CREATE PANEL SCHEDULE] Error syncing to Google Calendar:', calendarError);
+        console.error('[CREATE PANEL SCHEDULE] Error details:', {
+          message: calendarError.message,
+          code: calendarError.code,
+          response: calendarError.response?.data,
+          status: calendarError.response?.status,
+          statusText: calendarError.response?.statusText,
+          stack: calendarError.stack
+        });
+        // Don't fail creation if calendar sync fails - schedule is still created
+        console.log('[CREATE PANEL SCHEDULE] Continuing without Google Calendar sync');
+      }
+    } else {
+      console.log('[CREATE PANEL SCHEDULE] Google Calendar not connected or missing tokens:', {
+        calendarConnected: user?.calendarConnected,
+        hasAccessToken: !!user?.googleAccessToken,
+        hasRefreshToken: !!user?.googleRefreshToken
+      });
+    }
+
     // Log activity
     await Activity.create({
       user: req.user.id,
@@ -3595,7 +4014,7 @@ export const createPanelSchedule = async (req, res) => {
       entityType: "schedule",
       entityId: schedule._id,
       entityName: schedule.title,
-      description: `Created and finalized panel defense schedule: ${schedule.title}`,
+      description: `Created and finalized panel defense schedule: ${schedule.title}${calendarEvent ? ' (synced to Google Calendar)' : ''}`,
       metadata: {
         panelId: panel._id,
         panelName: panel.name,
@@ -3603,6 +4022,7 @@ export const createPanelSchedule = async (req, res) => {
         datetime: schedule.datetime,
         location: schedule.location,
         duration: schedule.duration,
+        calendarSynced: schedule.calendarSynced,
       }
     });
 

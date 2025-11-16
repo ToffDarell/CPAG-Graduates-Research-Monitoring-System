@@ -1,5 +1,6 @@
 import Research from "../models/Research.js";
 import Feedback from "../models/Feedback.js";
+import FeedbackComment from "../models/FeedbackComment.js";
 import Schedule from "../models/Schedule.js";
 import User from "../models/User.js";
 import Activity from "../models/Activity.js";
@@ -314,6 +315,210 @@ export const downloadFeedbackFile = async (req, res) => {
   }
 };
 
+// View feedback file (for inline viewing)
+export const viewFeedbackFile = async (req, res) => {
+  try {
+    const { feedbackId } = req.params;
+
+    // Validate feedbackId format
+    if (!feedbackId || feedbackId.length !== 24) {
+      return res.status(400).json({ message: "Invalid feedback ID format" });
+    }
+
+    // First check authorization without populating
+    const feedback = await Feedback.findById(feedbackId);
+    
+    if (!feedback) {
+      return res.status(404).json({ message: "Feedback not found" });
+    }
+
+    // Verify authorization
+    const feedbackAdviserId = feedback.adviser.toString();
+    const currentUserId = req.user.id.toString();
+
+    if (feedbackAdviserId !== currentUserId) {
+      return res.status(403).json({ 
+        message: "Unauthorized access. You can only view feedback that you created." 
+      });
+    }
+
+    // Now populate for response
+    await feedback.populate('student', 'name email');
+    await feedback.populate('adviser', 'name email');
+
+    if (!feedback.file || !feedback.file.filepath) {
+      return res.status(404).json({ message: "No file attached to this feedback" });
+    }
+
+    // Construct file path
+    let filePath;
+    if (path.isAbsolute(feedback.file.filepath)) {
+      filePath = feedback.file.filepath;
+    } else {
+      filePath = path.join(process.cwd(), feedback.file.filepath);
+    }
+
+    // Check if file exists
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ message: "File not found on server" });
+    }
+
+    // Send file for inline viewing
+    res.setHeader('Content-Type', feedback.file.mimetype);
+    res.setHeader('Content-Disposition', `inline; filename="${feedback.file.filename}"`);
+    const fileStream = fs.createReadStream(filePath);
+    fileStream.pipe(res);
+  } catch (error) {
+    console.error("Error viewing feedback file:", error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Get comments for a feedback
+export const getFeedbackComments = async (req, res) => {
+  try {
+    const { feedbackId } = req.params;
+
+    const feedback = await Feedback.findById(feedbackId);
+    if (!feedback) {
+      return res.status(404).json({ message: "Feedback not found" });
+    }
+
+    // Verify authorization
+    if (feedback.adviser.toString() !== req.user.id) {
+      return res.status(403).json({ message: "Unauthorized access" });
+    }
+
+    const comments = await FeedbackComment.find({ feedback: feedbackId })
+      .populate('createdBy', 'name email')
+      .populate('resolvedBy', 'name')
+      .sort({ createdAt: -1 });
+
+    res.json(comments);
+  } catch (error) {
+    console.error("Error fetching comments:", error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Add comment to feedback
+export const addFeedbackComment = async (req, res) => {
+  try {
+    const { feedbackId } = req.params;
+    const { comment, position, pageNumber, selectedText, highlightColor } = req.body;
+
+    const feedback = await Feedback.findById(feedbackId);
+    if (!feedback) {
+      return res.status(404).json({ message: "Feedback not found" });
+    }
+
+    // Verify authorization
+    if (feedback.adviser.toString() !== req.user.id) {
+      return res.status(403).json({ message: "Unauthorized access" });
+    }
+
+    const feedbackComment = new FeedbackComment({
+      feedback: feedbackId,
+      createdBy: req.user.id,
+      comment,
+      position: {
+        ...position,
+        pageNumber: pageNumber || null,
+        selectedText: selectedText || ''
+      },
+      highlightColor: highlightColor || "#ffeb3b"
+    });
+
+    await feedbackComment.save();
+
+    const populatedComment = await FeedbackComment.findById(feedbackComment._id)
+      .populate('createdBy', 'name email');
+
+    res.status(201).json({
+      message: "Comment added successfully",
+      comment: populatedComment
+    });
+  } catch (error) {
+    console.error("Error adding comment:", error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Update comment (resolve/edit)
+export const updateFeedbackComment = async (req, res) => {
+  try {
+    const { commentId } = req.params;
+    const { comment, resolved } = req.body;
+
+    const feedbackComment = await FeedbackComment.findById(commentId)
+      .populate('feedback');
+    
+    if (!feedbackComment) {
+      return res.status(404).json({ message: "Comment not found" });
+    }
+
+    // Verify authorization
+    if (feedbackComment.feedback.adviser.toString() !== req.user.id) {
+      return res.status(403).json({ message: "Unauthorized access" });
+    }
+
+    if (comment !== undefined) {
+      feedbackComment.comment = comment;
+    }
+
+    if (resolved !== undefined) {
+      feedbackComment.resolved = resolved;
+      if (resolved) {
+        feedbackComment.resolvedAt = new Date();
+        feedbackComment.resolvedBy = req.user.id;
+      } else {
+        feedbackComment.resolvedAt = null;
+        feedbackComment.resolvedBy = null;
+      }
+    }
+
+    await feedbackComment.save();
+
+    const populatedComment = await FeedbackComment.findById(feedbackComment._id)
+      .populate('createdBy', 'name email')
+      .populate('resolvedBy', 'name');
+
+    res.json({
+      message: "Comment updated successfully",
+      comment: populatedComment
+    });
+  } catch (error) {
+    console.error("Error updating comment:", error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Delete comment
+export const deleteFeedbackComment = async (req, res) => {
+  try {
+    const { commentId } = req.params;
+
+    const feedbackComment = await FeedbackComment.findById(commentId)
+      .populate('feedback');
+    
+    if (!feedbackComment) {
+      return res.status(404).json({ message: "Comment not found" });
+    }
+
+    // Verify authorization
+    if (feedbackComment.feedback.adviser.toString() !== req.user.id) {
+      return res.status(403).json({ message: "Unauthorized access" });
+    }
+
+    await FeedbackComment.findByIdAndDelete(commentId);
+
+    res.json({ message: "Comment deleted successfully" });
+  } catch (error) {
+    console.error("Error deleting comment:", error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
 // Delete feedback
 export const deleteFeedback = async (req, res) => {
   try {
@@ -447,15 +652,41 @@ export const createConsultationSlot = async (req, res) => {
 
     // Sync to Google Calendar if enabled and user has connected calendar
     let calendarEvent = null;
-    if (syncToCalendar !== false && user.calendarConnected && user.googleAccessToken) {
-      try {
-        if (user.googleTokenExpiry && user.googleTokenExpiry > new Date()) {
-          const attendeeEmails = [];
-          if (researchData && researchData.students) {
-            attendeeEmails.push(...researchData.students.map(s => s.email));
-          }
+    let calendarError = null;
+    console.log('[CREATE CONSULTATION SLOT] Checking Google Calendar connection:', {
+      userId: req.user.id,
+      syncToCalendar: syncToCalendar !== false,
+      calendarConnected: user?.calendarConnected,
+      hasAccessToken: !!user?.googleAccessToken,
+      hasRefreshToken: !!user?.googleRefreshToken,
+      tokenExpiry: user?.googleTokenExpiry,
+      tokenExpired: user?.googleTokenExpiry ? user.googleTokenExpiry < new Date() : 'unknown'
+    });
 
-          calendarEvent = await createConsultationEvent({
+    if (syncToCalendar !== false && user?.calendarConnected && user?.googleAccessToken && user?.googleRefreshToken) {
+      try {
+        console.log('[CREATE CONSULTATION SLOT] Creating Google Calendar event for consultation:', schedule.title);
+        
+        // Collect attendee emails
+        const attendeeEmails = [];
+        if (researchData && researchData.students) {
+          attendeeEmails.push(...researchData.students.map(s => s.email));
+        }
+
+        console.log('[CREATE CONSULTATION SLOT] Schedule data:', {
+          title: schedule.title,
+          datetime: schedule.datetime,
+          datetimeISO: schedule.datetime?.toISOString(),
+          duration: schedule.duration,
+          location: schedule.location,
+          type: schedule.type,
+          researchTitle: researchData?.title,
+          attendeeCount: attendeeEmails.length
+        });
+
+        // Create Google Calendar event (token refresh will happen automatically if needed)
+        calendarEvent = await createConsultationEvent(
+          {
             title: schedule.title,
             description: schedule.description,
             datetime: schedule.datetime,
@@ -464,16 +695,54 @@ export const createConsultationSlot = async (req, res) => {
             type: schedule.type,
             researchTitle: researchData?.title,
             attendeeEmails,
-          }, user.googleAccessToken);
+          },
+          user.googleAccessToken,
+          user.googleRefreshToken,
+          user._id.toString()
+        );
 
-          schedule.googleCalendarEventId = calendarEvent.eventId;
-          schedule.googleCalendarLink = calendarEvent.eventLink;
-          schedule.googleMeetLink = calendarEvent.meetLink;
-          schedule.calendarSynced = true;
-        }
-      } catch (calendarError) {
-        console.error('Error syncing to Google Calendar:', calendarError);
+        console.log('[CREATE CONSULTATION SLOT] Google Calendar event created successfully:', {
+          eventId: calendarEvent.eventId,
+          eventLink: calendarEvent.eventLink,
+          meetLink: calendarEvent.meetLink
+        });
+
+        // Update schedule with Google Calendar event details
+        schedule.googleCalendarEventId = calendarEvent.eventId;
+        schedule.googleCalendarLink = calendarEvent.eventLink;
+        schedule.googleMeetLink = calendarEvent.meetLink;
+        schedule.calendarSynced = true;
+        
+        console.log('[CREATE CONSULTATION SLOT] Schedule updated with calendar sync status: true');
+      } catch (error) {
+        calendarError = error;
+        console.error('[CREATE CONSULTATION SLOT] Error syncing to Google Calendar:', error);
+        console.error('[CREATE CONSULTATION SLOT] Error details:', {
+          message: error.message,
+          code: error.code,
+          response: error.response?.data,
+          status: error.response?.status,
+          statusText: error.response?.statusText,
+          stack: error.stack
+        });
+        // Don't fail creation if calendar sync fails - schedule is still created
+        // But we'll inform the user about the sync failure
+        schedule.calendarSynced = false;
+        console.log('[CREATE CONSULTATION SLOT] Continuing without Google Calendar sync');
       }
+    } else {
+      const skipReason = !user?.calendarConnected ? 'Calendar not connected' : 
+                        !user?.googleAccessToken ? 'No access token' : 
+                        !user?.googleRefreshToken ? 'No refresh token - user needs to reconnect calendar' : 
+                        'syncToCalendar is false';
+      console.log('[CREATE CONSULTATION SLOT] Google Calendar sync skipped:', {
+        syncToCalendar: syncToCalendar !== false,
+        calendarConnected: user?.calendarConnected,
+        hasAccessToken: !!user?.googleAccessToken,
+        hasRefreshToken: !!user?.googleRefreshToken,
+        reason: skipReason
+      });
+      schedule.calendarSynced = false;
     }
 
     await schedule.save();
@@ -500,13 +769,25 @@ export const createConsultationSlot = async (req, res) => {
       .populate("participants.user", "name email")
       .populate("createdBy", "name email");
 
+    // Prepare response message
+    let message = "Consultation slot created successfully.";
+    if (calendarEvent) {
+      message = "Consultation slot created and synced to Google Calendar!";
+    } else if (calendarError) {
+      message = `Consultation slot created, but Google Calendar sync failed: ${calendarError.message}. Please check your calendar connection.`;
+    } else if (syncToCalendar !== false && !user?.calendarConnected) {
+      message = "Consultation slot created. Connect Google Calendar to enable automatic sync.";
+    }
+
     res.status(201).json({ 
-      message: calendarEvent 
-        ? "Consultation slot created and synced to Google Calendar!" 
-        : "Consultation slot created successfully.", 
+      message,
       schedule: populatedSchedule,
       calendarSynced: schedule.calendarSynced,
-      meetLink: schedule.googleMeetLink
+      meetLink: schedule.googleMeetLink,
+      calendarError: calendarError ? {
+        message: calendarError.message,
+        code: calendarError.code
+      } : null
     });
   } catch (error) {
     console.error("Error creating consultation slot:", error);

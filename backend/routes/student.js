@@ -18,6 +18,9 @@ import {
   downloadComplianceForm,
   viewComplianceForm,
   uploadChapter,
+  uploadChapterFromDrive,
+  getChapterSubmissions,
+  getProgressOverview,
   getMyResearch,
   getMySchedules,
   getAdviserFeedback,
@@ -111,7 +114,10 @@ router.get("/compliance-forms/:id/view", viewComplianceForm);
 
 // Research routes
 router.get("/research", getMyResearch);
+router.get("/chapters", getChapterSubmissions);
+router.get("/progress", getProgressOverview);
 router.post("/chapter", upload.single("file"), uploadChapter);
+router.post("/chapter-from-drive", uploadChapterFromDrive);
 
 // Schedule routes
 router.get("/schedules", getMySchedules);

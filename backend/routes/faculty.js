@@ -10,6 +10,11 @@ import {
   getAllFeedback,
   getFeedbackByResearch,
   downloadFeedbackFile,
+  viewFeedbackFile,
+  getFeedbackComments,
+  addFeedbackComment,
+  updateFeedbackComment,
+  deleteFeedbackComment,
   deleteFeedback,
   getConsultationSchedules,
   createConsultationSlot,
@@ -56,6 +61,15 @@ router.post("/feedback", upload.single("file"), uploadFeedback);
 router.get("/feedback", getAllFeedback);
 router.get("/feedback/research/:researchId", getFeedbackByResearch);
 router.get("/feedback/download/:feedbackId", downloadFeedbackFile);
+
+// IMPORTANT: /feedback/view/:feedbackId must come BEFORE /feedback/:feedbackId/comments
+// to avoid route conflicts
+router.get("/feedback/view/:feedbackId", viewFeedbackFile);
+
+router.get("/feedback/:feedbackId/comments", getFeedbackComments);
+router.post("/feedback/:feedbackId/comments", addFeedbackComment);
+router.put("/feedback/comments/:commentId", updateFeedbackComment);
+router.delete("/feedback/comments/:commentId", deleteFeedbackComment);
 router.delete("/feedback/:feedbackId", deleteFeedback);
 
 // Consultation schedules

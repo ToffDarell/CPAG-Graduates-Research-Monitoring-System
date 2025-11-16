@@ -1,12 +1,17 @@
-import React, { useState, useEffect } from "react";
-import { FaUpload, FaCalendar, FaBook, FaCheckCircle, FaClock, FaFileAlt, FaChartLine, FaSignOutAlt, FaBars, FaTimes as FaClose, FaTimesCircle, FaDownload } from "react-icons/fa";
-import { useNavigate } from "react-router-dom";
+import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { FaUpload, FaCalendar, FaBook, FaCheckCircle, FaClock, FaFileAlt, FaChartLine, FaSignOutAlt, FaBars, FaTimes as FaClose, FaTimesCircle, FaDownload, FaSearch, FaFilter, FaExclamationTriangle, FaChevronRight, FaInfoCircle, FaChevronDown, FaChevronUp, FaPaperclip, FaHistory } from "react-icons/fa";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import axios from "axios";
 import MySchedule from "../../components/MyScheduleComponent";
+import DriveUploader from "../../components/DriveUploader";
 
 const GraduateDashboard = ({setUser}) => {
   const navigate = useNavigate();
-  const [selectedTab, setSelectedTab] = useState("chapters");
+  const [searchParams, setSearchParams] = useSearchParams();
+  
+  // Initialize selectedTab from URL params, default to "chapters"
+  const tabFromUrl = searchParams.get('tab');
+  const [selectedTab, setSelectedTab] = useState(tabFromUrl || "chapters");
   const [uploadProgress, setUploadProgress] = useState({
     chapter1: false,
     chapter2: false,
@@ -18,16 +23,45 @@ const GraduateDashboard = ({setUser}) => {
   const [uploadingChapter, setUploadingChapter] = useState(null);
   const [mySchedules, setMySchedules] = useState([]);
   const [adviserFeedback, setAdviserFeedback] = useState([]);
+  const [progressOverview, setProgressOverview] = useState(null);
+  const [progressLoading, setProgressLoading] = useState(false);
+  const [progressError, setProgressError] = useState(null);
+  const [chapterData, setChapterData] = useState([]);
+  const [chapterLoading, setChapterLoading] = useState(false);
+  const [chapterError, setChapterError] = useState(null);
+
 
   const completedChapters = Object.values(uploadProgress).filter(Boolean).length;
   const totalChapters = Object.keys(uploadProgress).length;
   const progressPercentage = (completedChapters / totalChapters) * 100;
+
+  // Initialize tab from URL on mount (only if URL has tab param and it differs from initial state)
+  useEffect(() => {
+    const tabFromUrl = searchParams.get('tab');
+    if (tabFromUrl && tabFromUrl !== selectedTab) {
+      setSelectedTab(tabFromUrl);
+    } else if (!tabFromUrl && selectedTab) {
+      // If no tab in URL but we have a selectedTab, update URL
+      setSearchParams({ tab: selectedTab }, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Only run on mount
+
+  // Update URL when tab changes (after initial mount)
+  useEffect(() => {
+    const currentTab = searchParams.get('tab');
+    if (selectedTab && currentTab !== selectedTab) {
+      setSearchParams({ tab: selectedTab }, { replace: true });
+    }
+  }, [selectedTab]); // setSearchParams is stable, doesn't need to be in deps
 
   // Fetch my research data
   useEffect(() => {
     fetchMyResearch();
     fetchMySchedules();
     fetchAdviserFeedback();
+    fetchProgressOverview();
+    fetchChapterSubmissions();
   }, []);
 
   const fetchMyResearch = async () => {
@@ -50,6 +84,38 @@ const GraduateDashboard = ({setUser}) => {
       }
     } catch (error) {
       console.error('Error fetching research:', error);
+    }
+  };
+
+  const fetchChapterSubmissions = async () => {
+    setChapterLoading(true);
+    setChapterError(null);
+    try {
+      const token = localStorage.getItem('token');
+      const res = await axios.get('/api/student/chapters', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+
+      const chapters = res.data?.chapters || [];
+      setChapterData(chapters);
+
+      const chapterProgress = chapters.reduce((acc, chapter) => {
+        const approvedSubmission = chapter.submissions?.find(
+          (submission) => submission.status === 'approved'
+        );
+        acc[chapter.chapterType] = Boolean(approvedSubmission);
+        return acc;
+      }, { chapter1: false, chapter2: false, chapter3: false });
+
+      setUploadProgress((prev) => ({
+        ...prev,
+        ...chapterProgress,
+      }));
+    } catch (error) {
+      console.error('Error fetching chapter submissions:', error);
+      setChapterError(error.response?.data?.message || 'Failed to load chapter submissions');
+    } finally {
+      setChapterLoading(false);
     }
   };
 
@@ -90,70 +156,159 @@ const GraduateDashboard = ({setUser}) => {
     }
   };
 
-  const handleChapterUpload = async (chapterType, file) => {
-    if (!file) return;
+  const fetchProgressOverview = async () => {
+    setProgressLoading(true);
+    setProgressError(null);
+    try {
+      const token = localStorage.getItem('token');
+      const res = await axios.get('/api/student/progress', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      setProgressOverview(res.data);
+    } catch (error) {
+      console.error('Error fetching progress overview:', error);
+      setProgressError(error.response?.data?.message || 'Failed to load progress overview');
+    } finally {
+      setProgressLoading(false);
+    }
+  };
+
+  const handleChapterUpload = async ({ chapterType, chapterTitle, file }) => {
+    if (!file || !chapterType) return;
     
     setUploadingChapter(chapterType);
     setLoading(true);
     
     try {
       const token = localStorage.getItem('token');
-      const formData = new FormData();
-      formData.append('file', file);
-      formData.append('researchId', myResearch[0]?._id || '');
-      formData.append('chapterType', chapterType);
+      const researchId = myResearch[0]?._id || '';
+      
+      if (!researchId) {
+        throw new Error('No active research found. Please create a research first.');
+      }
 
-      await axios.post('/api/student/chapter', formData, {
-        headers: { 
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'multipart/form-data'
-        }
+      console.log('Uploading chapter:', {
+        chapterType,
+        chapterTitle,
+        isDriveFile: file.isDriveFile,
+        hasDriveFileId: !!file.driveFileId,
+        hasAccessToken: !!file.accessToken,
+        isFileInstance: file instanceof File,
+        researchId: researchId
       });
-      
-      // Update progress
-      setUploadProgress(prev => ({
-        ...prev,
-        [chapterType]: true
-      }));
-      
-      // Refresh research data
+
+      // Check if it's a Google Drive file
+      if (file.isDriveFile && file.driveFileId && file.accessToken) {
+        console.log('Uploading chapter from Google Drive...', {
+          driveFileId: file.driveFileId,
+          fileName: file.name,
+          chapterType: chapterType,
+          researchId: researchId
+        });
+
+        let endpoint = '/api/student/chapter-from-drive';
+        let response;
+
+        try {
+          console.log('Attempting upload via proxy to:', endpoint);
+          response = await axios.post(endpoint, {
+            driveFileId: file.driveFileId,
+            accessToken: file.accessToken,
+            researchId: researchId,
+            chapterType: chapterType,
+            chapterTitle: chapterTitle || ''
+          }, {
+            headers: {
+              Authorization: `Bearer ${token}`,
+              'Content-Type': 'application/json'
+            }
+          });
+        } catch (proxyError) {
+          // If proxy returns 404, try direct backend URL
+          if (proxyError.response?.status === 404) {
+            console.warn('Proxy returned 404, trying direct backend URL...');
+            const directEndpoint = 'http://localhost:5000/api/student/chapter-from-drive';
+            console.log('Attempting upload via direct URL to:', directEndpoint);
+            try {
+              response = await axios.post(directEndpoint, {
+                driveFileId: file.driveFileId,
+                accessToken: file.accessToken,
+                researchId: researchId,
+                chapterType: chapterType,
+                chapterTitle: chapterTitle || ''
+              }, {
+                headers: {
+                  Authorization: `Bearer ${token}`,
+                  'Content-Type': 'application/json'
+                }
+              });
+            } catch (directError) {
+              console.error('Direct backend call also failed:', directError);
+              if (directError.response?.status === 404) {
+                throw new Error('The chapter upload endpoint was not found. Please ensure the backend server is running and has been restarted to load the new route.');
+              } else if (directError.code === 'ECONNREFUSED') {
+                throw new Error('Cannot connect to backend server. Please ensure the backend is running on http://localhost:5000');
+              } else {
+                throw directError;
+              }
+            }
+          } else {
+            throw proxyError;
+          }
+        }
+
+        console.log('Google Drive upload response:', response.data);
+      } else if (file instanceof File) {
+        console.log('Uploading regular file...', {
+          fileName: file.name,
+          fileSize: file.size,
+          fileType: file.type
+        });
+
+        // Regular file upload
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('researchId', researchId);
+        formData.append('chapterType', chapterType);
+        formData.append('chapterTitle', chapterTitle || '');
+
+        const response = await axios.post('/api/student/chapter', formData, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'multipart/form-data'
+          }
+        });
+        console.log('Regular upload response:', response.data);
+      } else {
+        console.error('Invalid file selection:', file);
+        throw new Error('Invalid file selection. Please select a file again. If using Google Drive, make sure the file was selected correctly.');
+      }
+
+      // Refresh data
       fetchMyResearch();
-      alert(`${chapterType} uploaded successfully!`);
+      fetchChapterSubmissions();
+      fetchProgressOverview();
+      
+      return true;
     } catch (error) {
       console.error('Error uploading chapter:', error);
-      alert('Error uploading chapter. Please try again.');
+      console.error('Error response:', error.response);
+      console.error('Error details:', {
+        status: error.response?.status,
+        statusText: error.response?.statusText,
+        data: error.response?.data,
+        message: error.message
+      });
+      
+      const errorMessage = error.response?.data?.message || error.message || 'Error uploading chapter. Please try again.';
+      alert(errorMessage);
+      throw error;
     } finally {
       setLoading(false);
       setUploadingChapter(null);
     }
   };
 
-  const handleComplianceFormUpload = async (file) => {
-    if (!file) return;
-    
-    setLoading(true);
-    
-    try {
-      const token = localStorage.getItem('token');
-      const formData = new FormData();
-      formData.append('file', file);
-      formData.append('researchId', myResearch[0]?._id || '');
-
-      await axios.post('/api/student/compliance-form', formData, {
-        headers: { 
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'multipart/form-data'
-        }
-      });
-      
-      alert('Compliance form uploaded successfully!');
-    } catch (error) {
-      console.error('Error uploading compliance form:', error);
-      alert('Error uploading compliance form. Please try again.');
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const handleLogout = () => {
     // Show confirmation dialog
@@ -175,33 +330,49 @@ const GraduateDashboard = ({setUser}) => {
     { id: "compliance", label: "Compliance Forms", icon: <FaFileAlt /> },
     { id: "schedule", label: "My Schedule", icon: <FaCalendar /> },
     { id: "progress", label: "Progress Tracking", icon: <FaChartLine /> },
+    { id: "completed", label: "Completed Thesis", icon: <FaCheckCircle /> },
     { id: "documents", label: "Documents", icon: <FaFileAlt /> },
   ];
 
   const renderContent = () => {
     switch (selectedTab) {
       case "chapters":
-        return <ResearchChapters 
-          progress={uploadProgress} 
-          onChapterUpload={handleChapterUpload}
-          loading={loading}
-          uploadingChapter={uploadingChapter}
-        />;
+        return (
+          <ResearchChapters 
+            progress={uploadProgress}
+            chapters={chapterData}
+            chapterLoading={chapterLoading}
+            chapterError={chapterError}
+            onChapterUpload={handleChapterUpload}
+            uploading={loading}
+            uploadingChapter={uploadingChapter}
+          />
+        );
       case "compliance":
         return <ComplianceForms 
-          onFormUpload={handleComplianceFormUpload}
-          loading={loading}
+          myResearch={myResearch}
+          onFormUpload={fetchMyResearch}
         />;
       case "schedule":
         return <MySchedule schedules={mySchedules} onRefresh={fetchMySchedules} />;
       case "progress":
-        return <ProgressTracking 
-          percentage={progressPercentage} 
-          completed={completedChapters} 
-          total={totalChapters} 
-          myResearch={myResearch}
-          feedback={adviserFeedback}
-        />;
+        return (
+          <ProgressTracking
+            data={progressOverview}
+            loading={progressLoading}
+            error={progressError}
+            onRefresh={fetchProgressOverview}
+            fallback={{
+              percentage: progressPercentage,
+              completed: completedChapters,
+              total: totalChapters,
+              research: myResearch,
+            }}
+            feedback={adviserFeedback}
+          />
+        );
+      case "completed":
+        return <CompletedThesis />;
       case "documents":
         return <DocumentsView />;
       default:
@@ -383,246 +554,2024 @@ const StatCard = ({ title, value, icon, color }) => {
 };
 
 // Research Chapters Component
-const ResearchChapters = ({ progress, onChapterUpload, loading, uploadingChapter }) => {
-  const handleFileChange = (chapterType, event) => {
-    const file = event.target.files[0];
-    if (file) {
-      onChapterUpload(chapterType, file);
+const ResearchChapters = ({
+  progress,
+  chapters = [],
+  chapterLoading,
+  chapterError,
+  onChapterUpload,
+  uploading,
+  uploadingChapter,
+}) => {
+  const defaultTitles = useMemo(
+    () => ({
+      chapter1: "Chapter 1 - Introduction",
+      chapter2: "Chapter 2 - Literature Review",
+      chapter3: "Chapter 3 - Methodology",
+    }),
+    []
+  );
+
+  const [selectedChapter, setSelectedChapter] = useState("chapter1");
+  const [chapterTitle, setChapterTitle] = useState("");
+  const [selectedFile, setSelectedFile] = useState(null);
+  const [dragActive, setDragActive] = useState(false);
+  const [formError, setFormError] = useState(null);
+  const [formSuccess, setFormSuccess] = useState(null);
+  const [expanded, setExpanded] = useState({
+    chapter1: true,
+    chapter2: false,
+    chapter3: false,
+  });
+  const fileInputRef = useRef(null);
+
+  useEffect(() => {
+    setFormError(null);
+    setFormSuccess(null);
+  }, [selectedChapter]);
+
+  const resetForm = useCallback(() => {
+    setSelectedFile(null);
+    setChapterTitle("");
+    setDragActive(false);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+  }, []);
+
+  const handleFileSelect = useCallback((file) => {
+    if (!file) return;
+    
+    // Handle Google Drive files
+    if (file.isDriveFile && file.driveFileId && file.accessToken) {
+      setSelectedFile(file);
+      setFormError(null);
+      return;
+    }
+    
+    // Handle regular file uploads
+    const allowedTypes = [
+      "application/pdf",
+      "application/msword",
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ];
+    const maxSize = 10 * 1024 * 1024; // 10MB
+
+    if (!allowedTypes.includes(file.type)) {
+      setFormError("Unsupported file type. Please upload a PDF or Word document.");
+      return;
+    }
+
+    if (file.size > maxSize) {
+      setFormError("File size exceeds the 10MB limit.");
+      return;
+    }
+
+    setSelectedFile(file);
+    setFormError(null);
+  }, []);
+
+  const handleGoogleDriveFileSelected = useCallback((fileInfo) => {
+    console.log('Google Drive file selected for chapter:', fileInfo);
+    
+    if (!fileInfo || !fileInfo.id) {
+      setFormError("Failed to get Google Drive file information. Please try again.");
+      return;
+    }
+
+    if (!fileInfo.accessToken) {
+      setFormError("Failed to get Google Drive access token. Please try selecting the file again.");
+      return;
+    }
+
+    // Store the drive file info
+    setSelectedFile({
+      name: fileInfo.name,
+      driveFileId: fileInfo.id,
+      accessToken: fileInfo.accessToken,
+      mimeType: fileInfo.mimeType,
+      size: fileInfo.size,
+      isDriveFile: true
+    });
+    setFormError(null);
+  }, []);
+
+  const handleDrag = useCallback((event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.type === "dragenter" || event.type === "dragover") {
+      setDragActive(true);
+    } else if (event.type === "dragleave") {
+      setDragActive(false);
+    }
+  }, []);
+
+  const handleDrop = useCallback(
+    (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      setDragActive(false);
+      if (event.dataTransfer?.files?.[0]) {
+        handleFileSelect(event.dataTransfer.files[0]);
+      }
+    },
+    [handleFileSelect]
+  );
+
+  const handleUpload = async () => {
+    if (!selectedFile) {
+      setFormError("Please select a chapter file to upload.");
+      return;
+    }
+
+    setFormError(null);
+    try {
+      await onChapterUpload({
+        chapterType: selectedChapter,
+        chapterTitle: chapterTitle.trim(),
+        file: selectedFile,
+      });
+      setFormSuccess("Chapter uploaded successfully and is now pending review.");
+      resetForm();
+      setTimeout(() => setFormSuccess(null), 4000);
+    } catch (error) {
+      const errorMessage =
+        error?.response?.data?.message || "Upload failed. Please try again.";
+      setFormError(errorMessage);
     }
   };
 
+  const downloadFile = useCallback(async (endpoint, filename) => {
+    try {
+      const token = localStorage.getItem("token");
+      const response = await axios.get(endpoint, {
+        responseType: "blob",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement("a");
+      link.href = url;
+      link.setAttribute("download", filename || "file");
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error("Error downloading file:", error);
+      alert("Failed to download the file. Please try again.");
+    }
+  }, []);
+
+  const totalSubmissions = useMemo(
+    () =>
+      chapters.reduce(
+        (acc, chapter) => acc + (chapter.submissions?.length || 0),
+        0
+      ),
+    [chapters]
+  );
+
+  const approvedSubmissions = useMemo(
+    () =>
+      chapters.reduce((acc, chapter) => {
+        const approved = chapter.submissions?.filter(
+          (submission) => submission.status === "approved"
+        );
+        return acc + (approved?.length || 0);
+      }, 0),
+    [chapters]
+  );
+
+  const statusClasses = {
+    pending: "bg-yellow-100 text-yellow-700",
+    approved: "bg-green-100 text-green-700",
+    rejected: "bg-red-100 text-red-700",
+    revision: "bg-orange-100 text-orange-700",
+  };
+
+  const statusLabels = {
+    pending: "Pending Review",
+    approved: "Reviewed",
+    rejected: "Rejected",
+    revision: "Needs Revision",
+  };
+
+  const formatDateTime = (value) =>
+    value
+      ? new Date(value).toLocaleString(undefined, {
+          month: "short",
+          day: "numeric",
+          year: "numeric",
+          hour: "numeric",
+          minute: "2-digit",
+        })
+      : "—";
+
+  const toggleChapter = (chapterType) => {
+    setExpanded((prev) => ({
+      ...prev,
+      [chapterType]: !prev[chapterType],
+    }));
+  };
+
+  const isUploadingCurrent = Boolean(
+    uploading && uploadingChapter === selectedChapter
+  );
+
   return (
-    <div className="space-y-5">
-      <div className="flex justify-between items-center">
-        <h2 className="text-xl font-bold text-gray-800">Research Chapters</h2>
-        <span className="px-3 py-1 bg-green-100 text-green-700 rounded-full text-xs font-medium">
-          {Object.values(progress).filter(Boolean).length}/{Object.keys(progress).length} Completed
-        </span>
+    <div className="space-y-6">
+      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+        <div>
+          <h2 className="text-xl font-bold text-gray-800">Research Chapters</h2>
+          <p className="text-sm text-gray-500">
+            Upload thesis chapters individually, track review status, and access reviewer feedback.
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="px-3 py-1 bg-green-100 text-green-700 rounded-full text-xs font-medium">
+            {approvedSubmissions}/{Object.keys(progress).length} Chapters Reviewed
+          </div>
+          <div className="px-3 py-1 bg-blue-100 text-blue-700 rounded-full text-xs font-medium">
+            {totalSubmissions} Submission{totalSubmissions !== 1 ? "s" : ""}
+          </div>
+        </div>
       </div>
 
-      <div className="space-y-4">
-        {[
-          { id: 1, title: "Chapter 1 - Introduction", status: progress.chapter1 },
-          { id: 2, title: "Chapter 2 - Literature Review", status: progress.chapter2 },
-          { id: 3, title: "Chapter 3 - Methodology", status: progress.chapter3 },
-        ].map((chapter) => (
+      <div className="bg-white border border-gray-200 rounded-lg shadow-sm">
+        <div className="p-5 border-b border-gray-200">
+          <h3 className="text-lg font-semibold text-gray-800 mb-2 flex items-center gap-2">
+            <FaUpload className="text-[#7C1D23]" />
+            Submit a Chapter for Review
+          </h3>
+          <p className="text-sm text-gray-500">
+            Select the chapter, provide a title, and upload your latest draft. You can resubmit new versions at any time.
+          </p>
+        </div>
+        <div
+          className="p-5 space-y-4"
+          onDragEnter={handleDrag}
+          onDragOver={handleDrag}
+          onDragLeave={handleDrag}
+          onDrop={handleDrop}
+        >
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Chapter
+              </label>
+              <select
+                value={selectedChapter}
+                onChange={(e) => setSelectedChapter(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23]/20 focus:border-[#7C1D23]"
+              >
+                <option value="chapter1">Chapter 1 - Introduction</option>
+                <option value="chapter2">Chapter 2 - Literature Review</option>
+                <option value="chapter3">Chapter 3 - Methodology</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Chapter Title <span className="text-gray-400 text-xs">(optional)</span>
+              </label>
+              <input
+                type="text"
+                value={chapterTitle}
+                onChange={(e) => setChapterTitle(e.target.value)}
+                placeholder={defaultTitles[selectedChapter]}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23]/20 focus:border-[#7C1D23]"
+                maxLength={150}
+              />
+            </div>
+          </div>
+
           <div
-            key={chapter.id}
-            className={`p-5 rounded-lg border transition-all ${
-              chapter.status
-                ? "border-green-300 bg-green-50"
-                : "border-gray-200 bg-white hover:border-gray-300"
+            className={`border-2 border-dashed rounded-lg p-6 transition-colors ${
+              dragActive ? "border-[#7C1D23] bg-[#f9f1f2]" : "border-gray-300 bg-gray-50"
             }`}
           >
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center space-x-3">
-                {chapter.status ? (
-                  <FaCheckCircle className="h-5 w-5 text-green-600" />
-                ) : (
-                  <FaClock className="h-5 w-5 text-gray-400" />
-                )}
-                <h3 className="text-base font-semibold text-gray-800">{chapter.title}</h3>
-              </div>
-              <span
-                className={`px-3 py-1 rounded-full text-xs font-medium ${
-                  chapter.status
-                    ? "bg-green-100 text-green-700"
-                    : "bg-gray-100 text-gray-600"
-                }`}
-              >
-                {chapter.status ? "Completed" : "Pending"}
-              </span>
-            </div>
-            {!chapter.status && (
-              <div className="flex items-center space-x-3">
-                <input 
-                  type="file" 
-                  className="flex-1 text-sm border border-gray-300 rounded-md p-2"
-                  accept=".pdf,.doc,.docx"
-                  onChange={(e) => handleFileChange(chapter.id === 1 ? 'chapter1' : chapter.id === 2 ? 'chapter2' : 'chapter3', e)}
-                  disabled={loading}
-                />
-                <button 
-                  className={`flex items-center px-4 py-2 text-white rounded-md transition-colors text-sm font-medium ${
-                    uploadingChapter === (chapter.id === 1 ? 'chapter1' : chapter.id === 2 ? 'chapter2' : 'chapter3')
-                      ? 'bg-gray-400 cursor-not-allowed'
-                      : 'bg-[#7C1D23] hover:bg-[#5a1519]'
-                  }`}
-                  disabled={loading}
+            <div className="flex flex-col items-center text-center">
+              <FaUpload className="text-[#7C1D23] text-xl mb-2" />
+              <p className="text-sm text-gray-600 mb-2">
+                Drag and drop your chapter file here, or select from your options below
+              </p>
+              <p className="text-xs text-gray-400 mb-4">
+                Accepted formats: PDF, DOC, DOCX • Max size: 10MB
+              </p>
+              
+              <div className="flex gap-3 justify-center">
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  className="px-4 py-2 bg-[#7C1D23] text-white rounded-md hover:bg-[#5a1519] transition-colors text-sm font-medium"
                 >
-                  <FaUpload className="mr-2 text-sm" />
-                  {uploadingChapter === (chapter.id === 1 ? 'chapter1' : chapter.id === 2 ? 'chapter2' : 'chapter3') ? 'Uploading...' : 'Upload'}
+                  Select File from Computer
                 </button>
+                <DriveUploader
+                  defaultType="chapter"
+                  driveButtonLabel="Upload from Google Drive"
+                  buttonBg="#7C1D23"
+                  buttonTextColor="#ffffff"
+                  skipBackendSave={true}
+                  onFilePicked={handleGoogleDriveFileSelected}
+                />
               </div>
-            )}
+              
+              {selectedFile && (
+                <div className="mt-4 inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white border border-gray-200 text-sm text-gray-700">
+                  <FaFileAlt className="text-gray-500" />
+                  <span className="truncate max-w-xs">{selectedFile.name}</span>
+                  {selectedFile.isDriveFile && (
+                    <span className="text-xs text-blue-600">📁 From Google Drive</span>
+                  )}
+                  <button
+                    type="button"
+                    onClick={resetForm}
+                    className="text-red-500 hover:text-red-600 text-xs"
+                  >
+                    Remove
+                  </button>
+                </div>
+              )}
+            </div>
+            <input
+              ref={fileInputRef}
+              type="file"
+              className="hidden"
+              accept=".pdf,.doc,.docx"
+              onChange={(event) => handleFileSelect(event.target.files?.[0])}
+            />
           </div>
-        ))}
+
+          {formError && (
+            <div className="flex items-start gap-2 text-sm text-red-600 bg-red-50 border border-red-200 rounded-md p-3">
+              <FaTimesCircle className="mt-0.5" />
+              <span>{formError}</span>
+            </div>
+          )}
+
+          {formSuccess && (
+            <div className="flex items-start gap-2 text-sm text-green-700 bg-green-50 border border-green-200 rounded-md p-3">
+              <FaCheckCircle className="mt-0.5 text-green-600" />
+              <span>{formSuccess}</span>
+            </div>
+          )}
+
+          <div className="flex items-center justify-end gap-3 pt-2">
+            {selectedFile && (
+              <button
+                type="button"
+                onClick={resetForm}
+                className="px-4 py-2 text-sm font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-md transition-colors"
+                disabled={isUploadingCurrent}
+              >
+                Clear
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={handleUpload}
+              className={`inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white rounded-md transition-colors ${
+                isUploadingCurrent ? "bg-gray-400 cursor-not-allowed" : "bg-[#7C1D23] hover:bg-[#5a1519]"
+              }`}
+              disabled={isUploadingCurrent || !selectedFile}
+            >
+              {isUploadingCurrent ? (
+                "Uploading..."
+              ) : (
+                <>
+                  <FaUpload className="text-xs" />
+                  Upload Chapter
+                </>
+              )}
+            </button>
+          </div>
+        </div>
       </div>
+
+      {chapterError && (
+        <div className="flex items-start gap-2 text-sm text-red-600 bg-red-50 border border-red-200 rounded-md p-3">
+          <FaExclamationTriangle className="mt-0.5" />
+          <span>{chapterError}</span>
+        </div>
+      )}
+
+      {chapterLoading ? (
+        <div className="bg-white border border-gray-200 rounded-lg p-6 text-sm text-gray-500">
+          Loading chapter submissions...
+        </div>
+      ) : chapters.length === 0 ? (
+        <div className="bg-white border border-gray-200 rounded-lg p-6 text-sm text-gray-500">
+          No chapter submissions yet. Upload your first chapter to begin the review process.
+        </div>
+      ) : (
+        <div className="space-y-4">
+          {chapters.map((chapter) => {
+            const latestSubmission = chapter.submissions?.[0];
+            const submissionCount = chapter.submissions?.length || 0;
+            const isExpanded = expanded[chapter.chapterType];
+
+            return (
+              <div
+                key={chapter.chapterType}
+                className="bg-white border border-gray-200 rounded-lg shadow-sm overflow-hidden"
+              >
+                <button
+                  type="button"
+                  onClick={() => toggleChapter(chapter.chapterType)}
+                  className="w-full flex items-center justify-between px-5 py-4 hover:bg-gray-50 transition-colors"
+                >
+                  <div className="text-left">
+                    <p className="text-sm font-semibold text-gray-800">
+                      {defaultTitles[chapter.chapterType]}
+                    </p>
+                    <p className="text-xs text-gray-500">
+                      {submissionCount} submission{submissionCount !== 1 ? "s" : ""}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    {latestSubmission ? (
+                      <span
+                        className={`px-3 py-1 rounded-full text-xs font-medium ${
+                          statusClasses[latestSubmission.status] ||
+                          "bg-gray-100 text-gray-600"
+                        }`}
+                      >
+                        {statusLabels[latestSubmission.status] ||
+                          latestSubmission.status}
+                      </span>
+                    ) : (
+                      <span className="px-3 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-600">
+                        No submissions yet
+                      </span>
+                    )}
+                    {isExpanded ? (
+                      <FaChevronUp className="text-gray-500" />
+                    ) : (
+                      <FaChevronDown className="text-gray-500" />
+                    )}
+                  </div>
+                </button>
+
+                {isExpanded && (
+                  <div className="border-t border-gray-200 px-5 py-4">
+                    {submissionCount === 0 ? (
+                      <p className="text-sm text-gray-500">
+                        No submissions yet for this chapter.
+                      </p>
+                    ) : (
+                      <div className="space-y-4">
+                        {chapter.submissions.map((submission, index) => (
+                          <div
+                            key={submission.id}
+                            className="border border-gray-200 rounded-lg p-4 bg-white shadow-sm"
+                          >
+                            <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-3">
+                              <div>
+                                <div className="flex items-center gap-2">
+                                  <span className="text-sm font-semibold text-gray-800">
+                                    Version {submission.version}
+                                  </span>
+                                  {index === 0 && (
+                                    <span className="px-2 py-0.5 text-xs font-medium bg-blue-100 text-blue-700 rounded-full">
+                                      Latest
+                                    </span>
+                                  )}
+                                </div>
+                                <p className="text-xs text-gray-500 mt-1">
+                                  Uploaded {formatDateTime(submission.uploadedAt)}
+                                  {submission.uploadedBy?.name
+                                    ? ` • ${submission.uploadedBy.name}`
+                                    : ""}
+                                </p>
+                              </div>
+                              <span
+                                className={`self-start px-3 py-1 rounded-full text-xs font-medium ${
+                                  statusClasses[submission.status] ||
+                                  "bg-gray-100 text-gray-600"
+                                }`}
+                              >
+                                {statusLabels[submission.status] || submission.status}
+                              </span>
+                            </div>
+
+                            <div className="mt-3 text-sm text-gray-600 space-y-2">
+                              <p>
+                                <strong>Title:</strong>{" "}
+                                {submission.chapterTitle || "Untitled"}
+                              </p>
+                              <p>
+                                <strong>File name:</strong>{" "}
+                                {submission.file?.filename}
+                              </p>
+                            </div>
+
+                            <div className="mt-4 flex flex-wrap gap-2">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  downloadFile(
+                                    submission.file.downloadUrl,
+                                    submission.file.filename
+                                  )
+                                }
+                                className="inline-flex items-center gap-2 px-3 py-2 text-sm font-medium text-white bg-[#7C1D23] rounded-md hover:bg-[#5a1519] transition-colors"
+                              >
+                                <FaDownload />
+                                Download Submission
+                              </button>
+                            </div>
+
+                            {submission.reviewComment && (
+                              <div className="mt-4 bg-green-50 border border-green-200 rounded-md p-3 text-sm text-green-800">
+                                <div className="flex items-center gap-2 font-semibold">
+                                  <FaInfoCircle />
+                                  Reviewer Comment
+                                </div>
+                                <p className="mt-2 whitespace-pre-line">
+                                  {submission.reviewComment}
+                                </p>
+                                <p className="text-xs text-green-600 mt-2">
+                                  {submission.reviewedBy?.name
+                                    ? `Reviewed by ${submission.reviewedBy.name}`
+                                    : "Reviewed"}
+                                  {submission.reviewedAt
+                                    ? ` • ${formatDateTime(submission.reviewedAt)}`
+                                    : ""}
+                                </p>
+                              </div>
+                            )}
+
+                            {submission.reviewFiles?.length > 0 && (
+                              <div className="mt-3">
+                                <div className="flex items-center gap-2 text-sm font-semibold text-gray-700">
+                                  <FaPaperclip />
+                                  Reviewer Attachments
+                                </div>
+                                <ul className="mt-2 space-y-2">
+                                  {submission.reviewFiles.map((file) => (
+                                    <li
+                                      key={file.id}
+                                      className="flex items-center justify-between text-sm text-gray-600 bg-gray-50 border border-gray-200 rounded-md px-3 py-2"
+                                    >
+                                      <span>{file.filename}</span>
+                                      <button
+                                        type="button"
+                                        className="inline-flex items-center gap-1 text-[#7C1D23] hover:text-[#5a1519]"
+                                        onClick={() =>
+                                          downloadFile(file.downloadUrl, file.filename)
+                                        }
+                                      >
+                                        <FaDownload className="text-xs" />
+                                        Download
+                                      </button>
+                                    </li>
+                                  ))}
+                                </ul>
+                              </div>
+                            )}
+
+                            {submission.feedback?.length > 0 && (
+                              <div className="mt-3">
+                                <div className="flex items-center gap-2 text-sm font-semibold text-gray-700">
+                                  <FaHistory />
+                                  Feedback History
+                                </div>
+                                <div className="mt-2 space-y-2">
+                                  {submission.feedback.map((feedback) => (
+                                    <div
+                                      key={feedback.id}
+                                      className="border border-gray-200 rounded-md px-3 py-2 bg-gray-50 text-sm text-gray-700"
+                                    >
+                                      <div className="flex items-center justify-between">
+                                        <span>{feedback.message}</span>
+                                        <span className="text-xs text-gray-500">
+                                          {feedback.adviser?.name || "Adviser"} •{" "}
+                                          {formatDateTime(feedback.createdAt)}
+                                        </span>
+                                      </div>
+                                      {feedback.hasFile && feedback.downloadUrl && (
+                                        <button
+                                          type="button"
+                                          className="mt-2 inline-flex items-center gap-1 text-[#7C1D23] hover:text-[#5a1519]"
+                                          onClick={() =>
+                                            downloadFile(
+                                              feedback.downloadUrl,
+                                              feedback.filename || "feedback"
+                                            )
+                                          }
+                                        >
+                                          <FaDownload className="text-xs" />
+                                          Download Attachment
+                                        </button>
+                                      )}
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 };
 
 // Compliance Forms Component
-const ComplianceForms = ({ onFormUpload, loading }) => {
-  const handleFileChange = (event) => {
-    const file = event.target.files[0];
-    if (file) {
-      onFormUpload(file);
+const ComplianceForms = ({ myResearch, onFormUpload }) => {
+  const [complianceForms, setComplianceForms] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [selectedFile, setSelectedFile] = useState(null);
+  const [formType, setFormType] = useState("ethics");
+  const [dragActive, setDragActive] = useState(false);
+  const [showUploadModal, setShowUploadModal] = useState(false);
+  const [selectedForm, setSelectedForm] = useState(null);
+  const [showVersionHistory, setShowVersionHistory] = useState(false);
+  const [successMessage, setSuccessMessage] = useState("");
+  const [errorMessage, setErrorMessage] = useState("");
+  const fileInputRef = React.useRef(null);
+
+  useEffect(() => {
+    fetchComplianceForms();
+  }, []);
+
+  const fetchComplianceForms = async () => {
+    setLoading(true);
+    try {
+      const token = localStorage.getItem('token');
+      const res = await axios.get('/api/student/compliance-forms', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      setComplianceForms(res.data);
+    } catch (error) {
+      console.error('Error fetching compliance forms:', error);
+      setErrorMessage('Failed to fetch compliance forms');
+      setTimeout(() => setErrorMessage(""), 4000);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDrag = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.type === "dragenter" || e.type === "dragover") {
+      setDragActive(true);
+    } else if (e.type === "dragleave") {
+      setDragActive(false);
+    }
+  };
+
+  const handleDrop = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragActive(false);
+
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+      handleFileSelect(e.dataTransfer.files[0]);
+    }
+  };
+
+  const handleFileSelect = (file) => {
+    const MAX_SIZE = 10 * 1024 * 1024; // 10MB
+    const ALLOWED_TYPES = ['application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'];
+
+    if (file.size > MAX_SIZE) {
+      setErrorMessage("File size exceeds 10MB limit");
+      setTimeout(() => setErrorMessage(""), 4000);
+      return;
+    }
+
+    if (!ALLOWED_TYPES.includes(file.type)) {
+      setErrorMessage("Unsupported file format. Allowed: PDF, DOC, DOCX");
+      setTimeout(() => setErrorMessage(""), 4000);
+      return;
+    }
+
+    setSelectedFile(file);
+    setShowUploadModal(true);
+  };
+
+  const handleFileInputChange = (e) => {
+    if (e.target.files && e.target.files[0]) {
+      handleFileSelect(e.target.files[0]);
+    }
+  };
+
+  const handleUpload = async () => {
+    if (!selectedFile || !formType || !myResearch || myResearch.length === 0) {
+      setErrorMessage("Please select a file, form type, and ensure you have an active research");
+      setTimeout(() => setErrorMessage(""), 4000);
+      return;
+    }
+
+    setUploading(true);
+    setErrorMessage("");
+    
+    try {
+      const token = localStorage.getItem('token');
+      
+      console.log('Uploading file:', {
+        selectedFile: selectedFile,
+        isDriveFile: selectedFile.isDriveFile,
+        hasDriveFileId: !!selectedFile.driveFileId,
+        hasAccessToken: !!selectedFile.accessToken,
+        isFileInstance: selectedFile instanceof File,
+        formType: formType,
+        researchId: myResearch[0]?._id,
+        researchExists: !!myResearch[0]
+      });
+      
+      // Check if it's a Google Drive file
+      if (selectedFile.isDriveFile && selectedFile.driveFileId && selectedFile.accessToken) {
+        console.log('Uploading from Google Drive...', {
+          driveFileId: selectedFile.driveFileId,
+          fileName: selectedFile.name,
+          formType: formType,
+          researchId: myResearch[0]._id
+        });
+        
+        // Upload from Google Drive
+        // Try proxy first, if it fails with 404, try direct backend URL
+        let endpoint = '/api/student/compliance-form-from-drive';
+        let response;
+        
+        try {
+          console.log('Attempting upload via proxy to:', endpoint);
+          response = await axios.post(endpoint, {
+            driveFileId: selectedFile.driveFileId,
+            accessToken: selectedFile.accessToken,
+            researchId: myResearch[0]._id,
+            formType: formType
+          }, {
+            headers: {
+              Authorization: `Bearer ${token}`,
+              'Content-Type': 'application/json'
+            }
+          });
+        } catch (proxyError) {
+          // If proxy returns 404, try direct backend URL
+          if (proxyError.response?.status === 404) {
+            console.warn('Proxy returned 404, trying direct backend URL...');
+            endpoint = 'http://localhost:5000/api/student/compliance-form-from-drive';
+            console.log('Attempting upload via direct URL to:', endpoint);
+            response = await axios.post(endpoint, {
+              driveFileId: selectedFile.driveFileId,
+              accessToken: selectedFile.accessToken,
+              researchId: myResearch[0]._id,
+              formType: formType
+            }, {
+              headers: {
+                Authorization: `Bearer ${token}`,
+                'Content-Type': 'application/json'
+              }
+            });
+          } else {
+            throw proxyError;
+          }
+        }
+        
+        console.log('Google Drive upload response:', response.data);
+      } else if (selectedFile instanceof File) {
+        console.log('Uploading regular file...', {
+          fileName: selectedFile.name,
+          fileSize: selectedFile.size,
+          fileType: selectedFile.type
+        });
+        
+        // Regular file upload
+        const formData = new FormData();
+        formData.append('file', selectedFile);
+        formData.append('researchId', myResearch[0]._id);
+        formData.append('formType', formType);
+
+        const response = await axios.post('/api/student/compliance-form', formData, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'multipart/form-data'
+          }
+        });
+        console.log('Regular upload response:', response.data);
+      } else {
+        console.error('Invalid file selection:', selectedFile);
+        throw new Error('Invalid file selection. Please select a file again. If using Google Drive, make sure the file was selected correctly.');
+      }
+
+      setSuccessMessage("Compliance form uploaded successfully! You will receive a notification when it is reviewed.");
+      setSelectedFile(null);
+      setFormType("ethics");
+      setShowUploadModal(false);
+      
+      // Refresh compliance forms list
+      await fetchComplianceForms();
+      if (onFormUpload) onFormUpload();
+      
+      setTimeout(() => setSuccessMessage(""), 5000);
+    } catch (error) {
+      console.error('Error uploading compliance form:', error);
+      console.error('Error response:', error.response);
+      console.error('Error details:', {
+        status: error.response?.status,
+        statusText: error.response?.statusText,
+        data: error.response?.data,
+        message: error.message
+      });
+      
+      let errorMessage = 'Error uploading compliance form. Please try again.';
+      if (error.response?.data?.message) {
+        errorMessage = error.response.data.message;
+      } else if (error.message) {
+        errorMessage = error.message;
+      }
+      
+      setErrorMessage(errorMessage);
+      // Keep modal open on error so user can retry
+      setTimeout(() => setErrorMessage(""), 8000);
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const handleDownload = async (formId) => {
+    try {
+      const token = localStorage.getItem('token');
+      const response = await axios.get(`/api/student/compliance-forms/${formId}/download`, {
+        headers: { Authorization: `Bearer ${token}` },
+        responseType: 'blob'
+      });
+
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', response.headers['content-disposition']?.split('filename=')[1] || 'compliance-form.pdf');
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error('Error downloading compliance form:', error);
+      setErrorMessage('Failed to download compliance form');
+      setTimeout(() => setErrorMessage(""), 4000);
+    }
+  };
+
+  const handleView = async (formId) => {
+    try {
+      const token = localStorage.getItem('token');
+      const response = await axios.get(`/api/student/compliance-forms/${formId}/view`, {
+        headers: { Authorization: `Bearer ${token}` },
+        responseType: 'blob'
+      });
+
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      window.open(url, '_blank');
+    } catch (error) {
+      console.error('Error viewing compliance form:', error);
+      setErrorMessage('Failed to view compliance form');
+      setTimeout(() => setErrorMessage(""), 4000);
+    }
+  };
+
+  const handleViewVersionHistory = async (formId) => {
+    try {
+      const token = localStorage.getItem('token');
+      const res = await axios.get(`/api/student/compliance-forms/${formId}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      setSelectedForm(res.data);
+      setShowVersionHistory(true);
+    } catch (error) {
+      console.error('Error fetching version history:', error);
+      setErrorMessage('Failed to fetch version history');
+      setTimeout(() => setErrorMessage(""), 4000);
+    }
+  };
+
+  const handleGoogleDriveFileSelected = async (fileInfo) => {
+    console.log('Google Drive file selected:', fileInfo);
+    
+    if (!fileInfo || !fileInfo.id) {
+      setErrorMessage("Failed to get Google Drive file information. Please try again.");
+      setTimeout(() => setErrorMessage(""), 4000);
+      return;
+    }
+
+    if (!fileInfo.accessToken) {
+      setErrorMessage("Failed to get Google Drive access token. Please try selecting the file again.");
+      setTimeout(() => setErrorMessage(""), 4000);
+      return;
+    }
+
+    // Store the drive file info and show upload modal
+    setSelectedFile({
+      name: fileInfo.name,
+      driveFileId: fileInfo.id,
+      accessToken: fileInfo.accessToken,
+      mimeType: fileInfo.mimeType,
+      size: fileInfo.size,
+      isDriveFile: true
+    });
+    setShowUploadModal(true);
+  };
+
+  const getStatusColor = (status) => {
+    switch (status) {
+      case 'approved':
+        return 'bg-green-100 text-green-700';
+      case 'rejected':
+        return 'bg-red-100 text-red-700';
+      case 'revision':
+        return 'bg-orange-100 text-orange-700';
+      default:
+        return 'bg-yellow-100 text-yellow-700';
+    }
+  };
+
+  const getFormTypeLabel = (type) => {
+    const types = {
+      ethics: 'Ethics',
+      declaration: 'Declaration',
+      consent: 'Consent',
+      authorization: 'Authorization',
+      other: 'Other'
+    };
+    return types[type] || type;
+  };
+
+  // Group forms by type, showing only the current version for each type
+  const groupedForms = complianceForms.reduce((acc, form) => {
+    if (form.isCurrent) {
+      // If we already have a form of this type, keep the one with higher version
+      if (!acc[form.formType] || acc[form.formType].version < form.version) {
+        acc[form.formType] = form;
+      }
+    }
+    return acc;
+  }, {});
+
+  return (
+    <div className="space-y-5">
+      {/* Success/Error Messages */}
+      {successMessage && (
+        <div className="bg-green-50 border-l-4 border-green-500 p-4 rounded-md">
+          <div className="flex items-center">
+            <FaCheckCircle className="h-5 w-5 text-green-500 mr-3" />
+            <p className="text-green-700 font-medium">{successMessage}</p>
+          </div>
+        </div>
+      )}
+
+      {errorMessage && (
+        <div className="bg-red-50 border-l-4 border-red-500 p-4 rounded-md">
+          <div className="flex items-center">
+            <FaTimesCircle className="h-5 w-5 text-red-500 mr-3" />
+            <p className="text-red-700 font-medium">{errorMessage}</p>
+          </div>
+        </div>
+      )}
+
+      <div className="flex justify-between items-center">
+        <h2 className="text-xl font-bold text-gray-800">Compliance Forms</h2>
+      </div>
+
+      {/* Upload Area */}
+      <div className="bg-white rounded-lg border border-gray-200 p-6">
+        <h3 className="text-lg font-semibold text-gray-800 mb-4">Upload Compliance Form</h3>
+        
+        {/* Drag and Drop Area */}
+        <div
+          onDragEnter={handleDrag}
+          onDragLeave={handleDrag}
+          onDragOver={handleDrag}
+          onDrop={handleDrop}
+          className={`border-2 border-dashed rounded-lg p-8 text-center transition-colors ${
+            dragActive ? 'border-[#7C1D23] bg-red-50' : 'border-gray-300 bg-gray-50'
+          }`}
+        >
+          <FaUpload className="mx-auto h-12 w-12 text-gray-400 mb-4" />
+          <p className="text-gray-700 font-medium mb-2">
+            Drag and drop your file here, or click to browse
+          </p>
+          <p className="text-sm text-gray-500 mb-4">
+            Supported formats: PDF, DOC, DOCX (Max 10MB)
+          </p>
+          <div className="flex gap-3 justify-center">
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              className="px-4 py-2 bg-[#7C1D23] text-white rounded-md hover:bg-[#5a1519] transition-colors text-sm font-medium"
+            >
+              Select File from Computer
+            </button>
+            <DriveUploader
+              defaultType="compliance"
+              driveButtonLabel="Upload from Google Drive"
+              buttonBg="#7C1D23"
+              buttonTextColor="#ffffff"
+              skipBackendSave={true}
+              onFilePicked={handleGoogleDriveFileSelected}
+            />
+          </div>
+          <input
+            ref={fileInputRef}
+            type="file"
+            onChange={handleFileInputChange}
+            accept=".pdf,.doc,.docx"
+            className="hidden"
+          />
+        </div>
+      </div>
+
+      {/* Upload Modal */}
+      {showUploadModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
+          <div className="bg-white rounded-lg shadow-lg max-w-md w-full p-6">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-semibold text-gray-800">Upload Compliance Form</h3>
+              <button
+                onClick={() => {
+                  setShowUploadModal(false);
+                  setSelectedFile(null);
+                }}
+                className="text-gray-500 hover:text-gray-700"
+              >
+                <FaClose className="h-6 w-6" />
+              </button>
+            </div>
+
+            {selectedFile && (
+              <div className="mb-4 p-3 bg-gray-50 rounded-lg">
+                <p className="text-sm font-medium text-gray-700">Selected File:</p>
+                <p className="text-sm text-gray-600">{selectedFile.name}</p>
+                {selectedFile.size && (
+                  <p className="text-xs text-gray-500">{(selectedFile.size / 1024 / 1024).toFixed(2)} MB</p>
+                )}
+                {selectedFile.isDriveFile && (
+                  <p className="text-xs text-blue-600 mt-1">📁 From Google Drive</p>
+                )}
+              </div>
+            )}
+
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Form Type <span className="text-red-500">*</span>
+              </label>
+              <select
+                value={formType}
+                onChange={(e) => setFormType(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-[#7C1D23]"
+              >
+                <option value="ethics">Ethics</option>
+                <option value="declaration">Declaration</option>
+                <option value="consent">Consent</option>
+                <option value="authorization">Authorization</option>
+                <option value="other">Other</option>
+              </select>
+            </div>
+
+            <div className="flex justify-end space-x-3">
+              <button
+                onClick={() => {
+                  setShowUploadModal(false);
+                  setSelectedFile(null);
+                }}
+                className="px-4 py-2 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300 transition-colors text-sm font-medium"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleUpload}
+                disabled={uploading || !selectedFile || !formType}
+                className="px-4 py-2 bg-[#7C1D23] text-white rounded-md hover:bg-[#5a1519] transition-colors text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {uploading ? 'Uploading...' : 'Upload Compliance Form'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Submission List */}
+      <div className="bg-white rounded-lg border border-gray-200 p-6">
+        <h3 className="text-lg font-semibold text-gray-800 mb-4">My Submissions</h3>
+        
+        {loading ? (
+          <p className="text-center text-gray-500 py-8">Loading...</p>
+        ) : complianceForms.length === 0 ? (
+          <div className="text-center py-8">
+            <FaFileAlt className="mx-auto h-12 w-12 text-gray-400 mb-3" />
+            <p className="text-gray-500 text-sm">No compliance forms uploaded yet.</p>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {Object.values(groupedForms).map((form) => (
+              <div key={form._id} className="border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow">
+                <div className="flex items-start justify-between">
+                  <div className="flex-1">
+                    <div className="flex items-center gap-3 mb-2">
+                      <h4 className="font-semibold text-gray-800">{getFormTypeLabel(form.formType)}</h4>
+                      <span className={`px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(form.status)}`}>
+                        {form.status.charAt(0).toUpperCase() + form.status.slice(1)}
+                      </span>
+                      {form.version > 1 && (
+                        <span className="px-2 py-1 bg-blue-100 text-blue-700 rounded-full text-xs font-medium">
+                          Version {form.version}
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-sm text-gray-600 mb-1">{form.filename}</p>
+                    <p className="text-xs text-gray-500">
+                      Uploaded: {new Date(form.uploadedAt).toLocaleString()}
+                    </p>
+                    {form.reviewedAt && (
+                      <p className="text-xs text-gray-500">
+                        Reviewed: {new Date(form.reviewedAt).toLocaleString()}
+                      </p>
+                    )}
+                    {form.reviewComments && (
+                      <div className="mt-2 p-2 bg-gray-50 rounded text-sm text-gray-700">
+                        <p className="font-medium">Review Comments:</p>
+                        <p>{form.reviewComments}</p>
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex flex-col gap-2 ml-4">
+                    <button
+                      onClick={() => handleView(form._id)}
+                      className="px-3 py-1 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors text-xs font-medium"
+                    >
+                      View
+                    </button>
+                    <button
+                      onClick={() => handleDownload(form._id)}
+                      className="px-3 py-1 bg-gray-600 text-white rounded-md hover:bg-gray-700 transition-colors text-xs font-medium"
+                    >
+                      Download
+                    </button>
+                    {form.version > 1 && (
+                      <button
+                        onClick={() => handleViewVersionHistory(form._id)}
+                        className="px-3 py-1 bg-purple-600 text-white rounded-md hover:bg-purple-700 transition-colors text-xs font-medium"
+                      >
+                        History
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Version History Modal */}
+      {showVersionHistory && selectedForm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
+          <div className="bg-white rounded-lg shadow-lg max-w-3xl w-full p-6 max-h-[90vh] overflow-y-auto">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-semibold text-gray-800">Version History: {getFormTypeLabel(selectedForm.formType)}</h3>
+              <button
+                onClick={() => {
+                  setShowVersionHistory(false);
+                  setSelectedForm(null);
+                }}
+                className="text-gray-500 hover:text-gray-700"
+              >
+                <FaClose className="h-6 w-6" />
+              </button>
+            </div>
+
+            {(() => {
+              // Combine current form with version history, sorted by version
+              const allVersions = [
+                selectedForm.complianceForm,
+                ...(selectedForm.versionHistory || [])
+              ].sort((a, b) => b.version - a.version);
+              
+              return allVersions.length > 0 ? (
+                <div className="space-y-4">
+                  {allVersions.map((version) => (
+                    <div key={version._id} className="border border-gray-200 rounded-lg p-4">
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center gap-2">
+                          <span className="font-semibold text-gray-800">Version {version.version}</span>
+                          <span className={`px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(version.status)}`}>
+                            {version.status.charAt(0).toUpperCase() + version.status.slice(1)}
+                          </span>
+                          {version.isCurrent && (
+                            <span className="px-2 py-1 bg-green-100 text-green-700 rounded-full text-xs font-medium">
+                              Current
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => handleView(version._id)}
+                            className="px-3 py-1 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors text-xs font-medium"
+                          >
+                            View
+                          </button>
+                          <button
+                            onClick={() => handleDownload(version._id)}
+                            className="px-3 py-1 bg-gray-600 text-white rounded-md hover:bg-gray-700 transition-colors text-xs font-medium"
+                          >
+                            Download
+                          </button>
+                        </div>
+                      </div>
+                      <p className="text-sm text-gray-600 mb-1">{version.filename}</p>
+                      <p className="text-xs text-gray-500">
+                        Uploaded: {new Date(version.uploadedAt).toLocaleString()}
+                      </p>
+                      {version.reviewedAt && (
+                        <p className="text-xs text-gray-500">
+                          Reviewed: {new Date(version.reviewedAt).toLocaleString()}
+                        </p>
+                      )}
+                      {version.reviewComments && (
+                        <div className="mt-2 p-2 bg-gray-50 rounded text-sm text-gray-700">
+                          <p className="font-medium">Review Comments:</p>
+                          <p>{version.reviewComments}</p>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-center text-gray-500 py-8">No version history available</p>
+              );
+            })()}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+// Progress Tracking Component
+const ProgressTracking = ({ data, loading, error, onRefresh, fallback, feedback }) => {
+  const navigate = useNavigate();
+  const [selectedMilestone, setSelectedMilestone] = useState(null);
+
+  useEffect(() => {
+    if (data?.milestones?.length) {
+      const exists = selectedMilestone && data.milestones.some((m) => m.id === selectedMilestone.id);
+      if (!exists) {
+        setSelectedMilestone(data.milestones[0]);
+      }
+    } else if (!loading) {
+      setSelectedMilestone(null);
+    }
+  }, [data, loading, selectedMilestone]);
+
+  const percentage = data?.percentage ?? fallback?.percentage ?? 0;
+  const totalMilestones = data?.totalMilestones ?? fallback?.total ?? 0;
+  const completedCount = data?.completedCount ?? fallback?.completed ?? 0;
+  const researchInfo = data?.research ?? (fallback?.research?.[0] ? {
+    title: fallback.research[0].title,
+    stage: fallback.research[0].stage,
+    status: fallback.research[0].status,
+  } : null);
+  const upcomingDeadlines = data?.upcomingDeadlines ?? [];
+  const notifications = data?.notifications ?? [];
+  const milestones = data?.milestones ?? [];
+
+  const formatDate = (value) => {
+    if (!value) return "Not set";
+    return new Date(value).toLocaleString("en-US", {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    });
+  };
+
+  const statusStyles = {
+    completed: "bg-green-100 text-green-700 border border-green-200",
+    "in-progress": "bg-blue-100 text-blue-700 border border-blue-200",
+    "not-started": "bg-gray-100 text-gray-600 border border-gray-200",
+  };
+
+  const statusLabels = {
+    completed: "Completed",
+    "in-progress": "In Progress",
+    "not-started": "Not Started",
+  };
+
+  if (loading) {
+    return (
+      <div className="bg-white rounded-lg border border-gray-200 p-10 text-center">
+        <p className="text-gray-500 text-sm">Loading your progress overview...</p>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="bg-red-50 border border-red-200 text-red-700 rounded-lg p-6">
+        <div className="flex items-center gap-2 mb-4">
+          <FaExclamationTriangle className="text-red-600" />
+          <h3 className="text-sm font-semibold">Unable to load progress overview</h3>
+        </div>
+        <p className="text-sm mb-4">{error}</p>
+        {onRefresh && (
+          <button
+            onClick={onRefresh}
+            className="px-4 py-2 bg-red-600 text-white rounded-md text-sm font-medium hover:bg-red-700 transition-colors"
+          >
+            Retry
+          </button>
+        )}
+      </div>
+    );
+  }
+
+  if (data && data.hasResearch === false) {
+    return (
+      <div className="bg-white rounded-lg border border-gray-200 p-10 text-center">
+        <FaInfoCircle className="mx-auto text-3xl text-gray-400 mb-3" />
+        <h3 className="text-lg font-semibold text-gray-800 mb-1">No Research Assigned Yet</h3>
+        <p className="text-sm text-gray-500">
+          Once your adviser assigns you to a research group, your progress tracking details will appear here.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-5">
+      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+        <div>
+          <h2 className="text-xl font-bold text-gray-800">Progress Tracking</h2>
+          {researchInfo && (
+            <p className="text-sm text-gray-500">
+              {researchInfo.title}
+              {researchInfo.stage && ` · Stage: ${researchInfo.stage}`}
+            </p>
+          )}
+        </div>
+        <div className="flex items-center gap-3">
+          <span className="text-xs text-gray-400">
+            Last updated: {formatDate(data?.updatedAt || new Date())}
+          </span>
+          {onRefresh && (
+            <button
+              onClick={onRefresh}
+              className="px-3 py-2 bg-[#7C1D23] text-white rounded-md text-xs font-semibold hover:bg-[#5a1519] transition-colors"
+            >
+              Refresh
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
+        <div className="space-y-5 xl:col-span-2">
+          <div className="bg-white rounded-lg border border-gray-200 p-5">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <p className="text-xs uppercase tracking-wide text-gray-400">Overall Completion</p>
+                <p className="text-3xl font-bold text-[#7C1D23]">{Math.min(100, Math.max(0, percentage))}%</p>
+              </div>
+              <div className="text-right">
+                <p className="text-xs uppercase tracking-wide text-gray-400">Milestones</p>
+                <p className="text-lg font-semibold text-gray-700">
+                  {completedCount}/{totalMilestones}
+                </p>
+              </div>
+            </div>
+            <div className="w-full bg-gray-200 rounded-full h-3 mb-4">
+              <div
+                className="bg-[#7C1D23] h-3 rounded-full transition-all duration-500"
+                style={{ width: `${Math.min(100, Math.max(0, percentage))}%` }}
+              ></div>
+            </div>
+            <p className="text-xs text-gray-500">
+              Keep completing milestones to reach 100%. Automatic updates occur when submissions are approved or defenses are completed.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+            <div className="bg-white rounded-lg border border-gray-200 p-5">
+              <div className="flex items-center gap-2 mb-3">
+                <FaClock className="text-[#7C1D23]" />
+                <h3 className="text-sm font-semibold text-gray-800">Upcoming & Overdue Deadlines</h3>
+              </div>
+              {upcomingDeadlines.length === 0 ? (
+                <p className="text-sm text-gray-500">No urgent deadlines in the next 7 days.</p>
+              ) : (
+                <div className="space-y-3">
+                  {upcomingDeadlines.map((deadline) => (
+                    <div
+                      key={deadline.id}
+                      className={`p-3 rounded-lg border ${
+                        deadline.isOverdue
+                          ? "border-red-200 bg-red-50"
+                          : "border-yellow-200 bg-yellow-50"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <p className="text-sm font-semibold text-gray-800">
+                          {deadline.title}
+                        </p>
+                        <span
+                          className={`text-xs font-semibold ${
+                            deadline.isOverdue ? "text-red-600" : "text-yellow-700"
+                          }`}
+                        >
+                          {deadline.isOverdue
+                            ? `Overdue by ${Math.abs(deadline.daysUntilDue)} day(s)`
+                            : `Due in ${deadline.daysUntilDue} day(s)`}
+                        </span>
+                      </div>
+                      <p className="text-xs text-gray-500 mt-1">
+                        Due date: {formatDate(deadline.dueDate)}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="bg-white rounded-lg border border-gray-200 p-5">
+              <div className="flex items-center gap-2 mb-3">
+                <FaInfoCircle className="text-[#7C1D23]" />
+                <h3 className="text-sm font-semibold text-gray-800">Deadline Notifications</h3>
+              </div>
+              {notifications.length === 0 ? (
+                <p className="text-sm text-gray-500">No deadline alerts at this time.</p>
+              ) : (
+                <ul className="space-y-3">
+                  {notifications.map((notification, index) => (
+                    <li
+                      key={`${notification.milestoneId}-${index}`}
+                      className={`p-3 rounded-lg border-l-4 ${
+                        notification.severity === "high"
+                          ? "border-red-500 bg-red-50 text-red-700"
+                          : "border-yellow-500 bg-yellow-50 text-yellow-700"
+                      }`}
+                    >
+                      <p className="text-xs uppercase font-semibold mb-1">
+                        {notification.severity === "high" ? "Urgent" : "Upcoming"}
+                      </p>
+                      <p className="text-sm">{notification.message}</p>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
+
+          <div className="bg-white rounded-lg border border-gray-200 p-5">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold text-gray-800">Milestone Tracker</h3>
+              <span className="text-xs text-gray-400">
+                Click a milestone to view details and submission links
+              </span>
+            </div>
+            {milestones.length === 0 ? (
+              <p className="text-sm text-gray-500">
+                Milestone details are not available yet. Progress will appear as soon as milestones are defined.
+              </p>
+            ) : (
+              <div className="space-y-3">
+                {milestones.map((milestone) => {
+                  const isActive = selectedMilestone?.id === milestone.id;
+                  return (
+                    <button
+                      key={milestone.id}
+                      onClick={() => setSelectedMilestone(milestone)}
+                      className={`w-full text-left p-4 rounded-lg border transition-all ${
+                        isActive
+                          ? "border-[#7C1D23] bg-[#7c1d2310]"
+                          : "border-gray-200 bg-white hover:border-[#7C1D23]/40 hover:bg-gray-50"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="flex items-start gap-3">
+                          <span
+                            className={`px-2 py-1 text-xs font-semibold rounded-full ${statusStyles[milestone.status]}`}
+                          >
+                            {statusLabels[milestone.status]}
+                          </span>
+                          <div>
+                            <p className="text-sm font-semibold text-gray-800">
+                              {milestone.title}
+                            </p>
+                            {milestone.dueDate && (
+                              <p className="text-xs text-gray-500">
+                                Due {formatDate(milestone.dueDate)}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                        <FaChevronRight
+                          className={`text-sm transition-transform ${
+                            isActive ? "text-[#7C1D23] rotate-90" : "text-gray-400"
+                          }`}
+                        />
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="space-y-5">
+          <div className="bg-white rounded-lg border border-gray-200 p-5">
+            <h3 className="text-sm font-semibold text-gray-800 mb-3">Milestone Details</h3>
+            {!selectedMilestone ? (
+              <p className="text-sm text-gray-500">
+                Select a milestone from the list to see its details and recommended actions.
+              </p>
+            ) : (
+              <div className="space-y-4">
+                <div>
+                  <p className="text-xs uppercase text-gray-400">Milestone</p>
+                  <p className="text-lg font-semibold text-gray-900">
+                    {selectedMilestone.title}
+                  </p>
+                  <p className="text-sm text-gray-600 mt-1">
+                    {selectedMilestone.description}
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-1 gap-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-gray-500">Status</span>
+                    <span className={`px-2 py-1 text-xs font-semibold rounded-full ${statusStyles[selectedMilestone.status]}`}>
+                      {statusLabels[selectedMilestone.status]}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-gray-500">Due Date</span>
+                    <span className="text-xs text-gray-700">
+                      {formatDate(selectedMilestone.dueDate)}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-gray-500">Completed</span>
+                    <span className="text-xs text-gray-700">
+                      {selectedMilestone.completedAt
+                        ? formatDate(selectedMilestone.completedAt)
+                        : "Not yet completed"}
+                    </span>
+                  </div>
+                </div>
+
+                {selectedMilestone.submissionLink && (
+                  <button
+                    onClick={() => navigate(selectedMilestone.submissionLink)}
+                    className="w-full px-4 py-2 bg-[#7C1D23] text-white text-sm font-semibold rounded-md hover:bg-[#5a1519] transition-colors"
+                  >
+                    Go to Submission Area
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+
+          <div className="bg-white rounded-lg border border-gray-200 p-5">
+            <h3 className="text-sm font-semibold text-gray-800 mb-3">Recent Adviser Feedback</h3>
+            <div className="space-y-3 max-h-80 overflow-y-auto">
+              {feedback && feedback.length > 0 ? (
+                feedback.slice(0, 5).map((item, index) => (
+                  <div
+                    key={index}
+                    className={`p-3 rounded-lg border-l-4 ${
+                      item.type === "approval"
+                        ? "bg-green-50 border-green-500"
+                        : item.type === "rejection"
+                        ? "bg-red-50 border-red-500"
+                        : item.type === "revision"
+                        ? "bg-orange-50 border-orange-500"
+                        : "bg-blue-50 border-blue-500"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-sm font-semibold text-gray-800">
+                        {item.adviser?.name || "Adviser"}
+                      </span>
+                      <span className="text-xs text-gray-400">
+                        {new Date(item.createdAt).toLocaleDateString()}
+                      </span>
+                    </div>
+                    <p className="text-xs text-gray-500 capitalize mb-1">{item.type}</p>
+                    <p className="text-sm text-gray-700">{item.message}</p>
+                  </div>
+                ))
+              ) : (
+                <p className="text-sm text-gray-500">No feedback yet.</p>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// Completed Thesis Component
+const CompletedThesis = () => {
+  const [completedThesis, setCompletedThesis] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [semesterFilter, setSemesterFilter] = useState("");
+  const [academicYearFilter, setAcademicYearFilter] = useState("");
+  const [selectedThesis, setSelectedThesis] = useState(null);
+  const [showDetails, setShowDetails] = useState(false);
+
+  useEffect(() => {
+    fetchCompletedThesis();
+  }, [semesterFilter, academicYearFilter]);
+
+  const fetchCompletedThesis = async () => {
+    setLoading(true);
+    try {
+      const token = localStorage.getItem('token');
+      const params = new URLSearchParams();
+      if (semesterFilter) params.append('semester', semesterFilter);
+      if (academicYearFilter) params.append('academicYear', academicYearFilter);
+      if (searchQuery) params.append('search', searchQuery);
+
+      const res = await axios.get(`/api/student/completed-thesis?${params.toString()}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      setCompletedThesis(res.data);
+    } catch (error) {
+      console.error('Error fetching completed thesis:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSearch = () => {
+    fetchCompletedThesis();
+  };
+
+  const handleViewDetails = async (thesis) => {
+    try {
+      const token = localStorage.getItem('token');
+      const res = await axios.get(`/api/student/completed-thesis/${thesis._id}/panel-feedback`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      // Backend returns { panel: {...}, feedback: [...] }
+      setSelectedThesis({ ...thesis, panelFeedbackData: res.data });
+      setShowDetails(true);
+    } catch (error) {
+      console.error('Error fetching thesis details:', error);
+      alert('Failed to fetch thesis details');
+    }
+  };
+
+
+  // Get unique academic years for filter
+  const academicYears = [...new Set(completedThesis.map(t => t.academicYear).filter(Boolean))].sort().reverse();
+
+  // Filter by search query
+  const filteredThesis = completedThesis.filter(thesis => {
+    if (!searchQuery) return true;
+    const query = searchQuery.toLowerCase();
+    return thesis.title.toLowerCase().includes(query) ||
+           (thesis.abstract && thesis.abstract.toLowerCase().includes(query));
+  });
+
+  const getEvaluationStatusColor = (status) => {
+    switch (status) {
+      case 'passed':
+      case 'approved':
+        return 'bg-green-100 text-green-700';
+      case 'failed':
+      case 'rejected':
+        return 'bg-red-100 text-red-700';
+      case 'in-review':
+        return 'bg-yellow-100 text-yellow-700';
+      default:
+        return 'bg-gray-100 text-gray-700';
+    }
+  };
+
+  const getRecommendationColor = (recommendation) => {
+    switch (recommendation) {
+      case 'approve':
+        return 'bg-green-100 text-green-700';
+      case 'reject':
+        return 'bg-red-100 text-red-700';
+      case 'revision':
+        return 'bg-orange-100 text-orange-700';
+      default:
+        return 'bg-gray-100 text-gray-700';
     }
   };
 
   return (
     <div className="space-y-5">
       <div className="flex justify-between items-center">
-        <h2 className="text-xl font-bold text-gray-800">Compliance Forms</h2>
-        <div className="flex items-center space-x-3">
-          <input 
-            type="file" 
-            className="text-sm border border-gray-300 rounded-md p-2"
-            accept=".pdf,.doc,.docx"
-            onChange={handleFileChange}
-            disabled={loading}
-          />
-          <button 
-            className={`flex items-center px-4 py-2 text-white rounded-md transition-colors text-sm font-medium ${
-              loading ? 'bg-gray-400 cursor-not-allowed' : 'bg-[#7C1D23] hover:bg-[#5a1519]'
-            }`}
-            disabled={loading}
+        <h2 className="text-xl font-bold text-gray-800">Completed Thesis</h2>
+      </div>
+
+      {/* Filters and Search */}
+      <div className="bg-white rounded-lg border border-gray-200 p-4">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          {/* Search */}
+          <div className="md:col-span-2">
+            <div className="relative">
+              <FaSearch className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" />
+              <input
+                type="text"
+                placeholder="Search by title or abstract..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                onKeyPress={(e) => e.key === 'Enter' && handleSearch()}
+                className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-[#7C1D23]"
+              />
+            </div>
+          </div>
+
+          {/* Semester Filter */}
+          <div>
+            <select
+              value={semesterFilter}
+              onChange={(e) => setSemesterFilter(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-[#7C1D23]"
+            >
+              <option value="">All Semesters</option>
+              <option value="1st">1st Semester</option>
+              <option value="2nd">2nd Semester</option>
+              <option value="Summer">Summer</option>
+            </select>
+          </div>
+
+          {/* Academic Year Filter */}
+          <div>
+            <select
+              value={academicYearFilter}
+              onChange={(e) => setAcademicYearFilter(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-[#7C1D23]"
+            >
+              <option value="">All Academic Years</option>
+              {academicYears.map(year => (
+                <option key={year} value={year}>{year}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        <div className="mt-4 flex justify-end">
+          <button
+            onClick={handleSearch}
+            className="px-4 py-2 bg-[#7C1D23] text-white rounded-md hover:bg-[#5a1519] transition-colors text-sm font-medium flex items-center gap-2"
           >
-            <FaUpload className="mr-2 text-sm" />
-            {loading ? 'Uploading...' : 'Upload Form'}
+            <FaSearch />
+            Search
           </button>
         </div>
       </div>
-      <div className="bg-gray-50 rounded-lg border border-gray-200 p-8">
-        <p className="text-gray-500 text-center text-sm">Upload your compliance forms here. Accepted formats: PDF, DOC, DOCX</p>
-      </div>
-    </div>
-  );
-};
 
-// Progress Tracking Component
-const ProgressTracking = ({ percentage, completed, total, myResearch, feedback }) => {
-  const documentsUploaded = myResearch.length > 0 ? myResearch[0].forms?.length || 0 : 0;
-  
-  return (
-    <div className="space-y-5">
-      <h2 className="text-xl font-bold text-gray-800">Progress Tracking</h2>
-
-      <div className="bg-white rounded-lg border border-gray-200 p-5">
-        <div className="mb-5">
-          <div className="flex justify-between items-center mb-2">
-            <span className="text-sm font-semibold text-gray-700">Overall Completion</span>
-            <span className="text-sm font-bold text-[#7C1D23]">{Math.round(percentage)}%</span>
-          </div>
-          <div className="w-full bg-gray-200 rounded-full h-3">
-            <div
-              className="bg-[#7C1D23] h-3 rounded-full transition-all duration-500"
-              style={{ width: `${percentage}%` }}
-            ></div>
-          </div>
+      {/* Thesis List */}
+      {loading ? (
+        <div className="text-center py-8">
+          <p className="text-gray-500">Loading...</p>
         </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div className="bg-gray-50 rounded-lg p-4 text-center border border-gray-200">
-            <p className="text-3xl font-bold text-green-600">{completed}</p>
-            <p className="text-xs text-gray-600 mt-1 uppercase font-semibold">Chapters Done</p>
-          </div>
-          <div className="bg-gray-50 rounded-lg p-4 text-center border border-gray-200">
-            <p className="text-3xl font-bold text-yellow-600">{total - completed}</p>
-            <p className="text-xs text-gray-600 mt-1 uppercase font-semibold">Chapters Pending</p>
-          </div>
-          <div className="bg-gray-50 rounded-lg p-4 text-center border border-gray-200">
-            <p className="text-3xl font-bold text-[#1E3A8A]">{documentsUploaded}</p>
-            <p className="text-xs text-gray-600 mt-1 uppercase font-semibold">Documents Uploaded</p>
-          </div>
+      ) : filteredThesis.length === 0 ? (
+        <div className="bg-white rounded-lg border border-gray-200 p-8 text-center">
+          <FaFileAlt className="mx-auto h-12 w-12 text-gray-400 mb-3" />
+          <p className="text-gray-500 text-sm">No completed thesis found.</p>
         </div>
-      </div>
+      ) : (
+        <div className="space-y-4">
+          {filteredThesis.map((thesis) => (
+            <div key={thesis._id} className="bg-white rounded-lg border border-gray-200 p-6 hover:shadow-md transition-shadow">
+              <div className="flex items-start justify-between">
+                <div className="flex-1">
+                  <div className="flex items-center gap-3 mb-2">
+                    <h3 className="text-lg font-semibold text-gray-800">{thesis.title}</h3>
+                    <span className={`px-2 py-1 rounded-full text-xs font-medium ${getEvaluationStatusColor(thesis.evaluationStatus)}`}>
+                      {thesis.evaluationStatus || 'N/A'}
+                    </span>
+                    {thesis.finalGrade && (
+                      <span className="px-2 py-1 bg-blue-100 text-blue-700 rounded-full text-xs font-medium">
+                        Grade: {thesis.finalGrade}
+                      </span>
+                    )}
+                  </div>
+                  
+                  {thesis.abstract && (
+                    <p className="text-sm text-gray-600 mb-3 line-clamp-2">{thesis.abstract}</p>
+                  )}
 
-      {/* Research Status */}
-      {myResearch.length > 0 && (
-        <div className="bg-white rounded-lg border border-gray-200 p-5">
-          <h3 className="text-lg font-semibold text-gray-800 mb-4">Research Status</h3>
-          <div className="space-y-3">
-            <div className="flex justify-between items-center">
-              <span className="text-sm text-gray-600">Current Stage:</span>
-              <span className="px-3 py-1 bg-blue-100 text-blue-700 rounded-full text-sm font-medium">
-                {myResearch[0].stage || 'N/A'}
-              </span>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm text-gray-600">
+                    <div>
+                      <span className="font-medium">Submission Date:</span>
+                      <p className="text-gray-800">
+                        {thesis.submissionDate ? new Date(thesis.submissionDate).toLocaleDateString() : 'N/A'}
+                      </p>
+                    </div>
+                    <div>
+                      <span className="font-medium">Finalized Date:</span>
+                      <p className="text-gray-800">
+                        {thesis.finalizedDate ? new Date(thesis.finalizedDate).toLocaleDateString() : 'N/A'}
+                      </p>
+                    </div>
+                    <div>
+                      <span className="font-medium">Semester:</span>
+                      <p className="text-gray-800">{thesis.semester || 'N/A'}</p>
+                    </div>
+                    <div>
+                      <span className="font-medium">Academic Year:</span>
+                      <p className="text-gray-800">{thesis.academicYear || 'N/A'}</p>
+                    </div>
+                  </div>
+
+                  <div className="mt-3 text-sm text-gray-600">
+                    <span className="font-medium">Adviser:</span> {thesis.adviser?.name || 'N/A'}
+                  </div>
+                </div>
+
+                <div className="flex flex-col gap-2 ml-4">
+                  <button
+                    onClick={() => handleViewDetails(thesis)}
+                    className="px-3 py-1 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors text-xs font-medium"
+                  >
+                    View Details
+                  </button>
+                </div>
+              </div>
             </div>
-            <div className="flex justify-between items-center">
-              <span className="text-sm text-gray-600">Status:</span>
-              <span className={`px-3 py-1 rounded-full text-sm font-medium ${
-                myResearch[0].status === 'pending' ? 'bg-yellow-100 text-yellow-700' :
-                myResearch[0].status === 'in-progress' ? 'bg-blue-100 text-blue-700' :
-                myResearch[0].status === 'for-revision' ? 'bg-orange-100 text-orange-700' :
-                myResearch[0].status === 'completed' ? 'bg-green-100 text-green-700' :
-                'bg-gray-100 text-gray-700'
-              }`}>
-                {myResearch[0].status === 'for-revision' ? 'For Revision' : myResearch[0].status}
-              </span>
+          ))}
+        </div>
+      )}
+
+      {/* Thesis Details Modal */}
+      {showDetails && selectedThesis && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
+          <div className="bg-white rounded-lg shadow-lg max-w-4xl w-full p-6 max-h-[90vh] overflow-y-auto">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-semibold text-gray-800">Thesis Details</h3>
+              <button
+                onClick={() => {
+                  setShowDetails(false);
+                  setSelectedThesis(null);
+                }}
+                className="text-gray-500 hover:text-gray-700"
+              >
+                <FaClose className="h-6 w-6" />
+              </button>
+            </div>
+
+            {/* Thesis Information */}
+            <div className="mb-6">
+              <h4 className="text-md font-semibold text-gray-800 mb-2">Title</h4>
+              <p className="text-gray-700 mb-4">{selectedThesis.title}</p>
+
+              {selectedThesis.abstract && (
+                <>
+                  <h4 className="text-md font-semibold text-gray-800 mb-2">Abstract</h4>
+                  <p className="text-gray-700 mb-4">{selectedThesis.abstract}</p>
+                </>
+              )}
+
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+                <div>
+                  <span className="text-sm font-medium text-gray-600">Submission Date:</span>
+                  <p className="text-gray-800">
+                    {selectedThesis.submissionDate ? new Date(selectedThesis.submissionDate).toLocaleDateString() : 'N/A'}
+                  </p>
+                </div>
+                <div>
+                  <span className="text-sm font-medium text-gray-600">Finalized Date:</span>
+                  <p className="text-gray-800">
+                    {selectedThesis.finalizedDate ? new Date(selectedThesis.finalizedDate).toLocaleDateString() : 'N/A'}
+                  </p>
+                </div>
+                <div>
+                  <span className="text-sm font-medium text-gray-600">Final Grade:</span>
+                  <p className="text-gray-800">{selectedThesis.finalGrade || 'N/A'}</p>
+                </div>
+                <div>
+                  <span className="text-sm font-medium text-gray-600">Evaluation Status:</span>
+                  <span className={`inline-block px-2 py-1 rounded-full text-xs font-medium ${getEvaluationStatusColor(selectedThesis.evaluationStatus)}`}>
+                    {selectedThesis.evaluationStatus || 'N/A'}
+                  </span>
+                </div>
+              </div>
+
+              <div className="mb-4">
+                <span className="text-sm font-medium text-gray-600">Student(s):</span>
+                <p className="text-gray-800">
+                  {selectedThesis.students?.map(s => s.name).join(', ') || 'N/A'}
+                </p>
+              </div>
+
+              <div className="mb-4">
+                <span className="text-sm font-medium text-gray-600">Adviser:</span>
+                <p className="text-gray-800">{selectedThesis.adviser?.name || 'N/A'}</p>
+              </div>
+            </div>
+
+            {/* Panel Information */}
+            {selectedThesis.panelFeedbackData?.panel && (
+              <div className="mb-6">
+                <h4 className="text-md font-semibold text-gray-800 mb-4">Panel Information</h4>
+                <div className="bg-gray-50 rounded-lg p-4 mb-4">
+                  <p className="text-sm text-gray-700 mb-2">
+                    <span className="font-medium">Panel Name:</span> {selectedThesis.panelFeedbackData.panel.name}
+                  </p>
+                  <p className="text-sm text-gray-700 mb-2">
+                    <span className="font-medium">Panel Type:</span> {selectedThesis.panelFeedbackData.panel.type}
+                  </p>
+                  <p className="text-sm text-gray-700 mb-2">
+                    <span className="font-medium">Status:</span> {selectedThesis.panelFeedbackData.panel.status}
+                  </p>
+                  {selectedThesis.panelFeedbackData.panel.meetingDate && (
+                    <p className="text-sm text-gray-700 mb-2">
+                      <span className="font-medium">Meeting Date:</span> {new Date(selectedThesis.panelFeedbackData.panel.meetingDate).toLocaleDateString()}
+                    </p>
+                  )}
+                  {selectedThesis.panelFeedbackData.panel.meetingLocation && (
+                    <p className="text-sm text-gray-700">
+                      <span className="font-medium">Meeting Location:</span> {selectedThesis.panelFeedbackData.panel.meetingLocation}
+                    </p>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Panel Feedback */}
+            {selectedThesis.panelFeedbackData?.feedback && selectedThesis.panelFeedbackData.feedback.length > 0 && (
+              <div className="mb-6">
+                <h4 className="text-md font-semibold text-gray-800 mb-4">Panel Feedback</h4>
+                <div className="space-y-4">
+                  {selectedThesis.panelFeedbackData.feedback.map((feedback, index) => (
+                    <div key={index} className="border border-gray-200 rounded-lg p-4">
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium text-gray-800">
+                            {feedback.panelist?.name || 'Unknown Panelist'}
+                          </span>
+                          {feedback.panelist?.isExternal && (
+                            <span className="px-2 py-1 bg-purple-100 text-purple-700 rounded-full text-xs font-medium">
+                              External
+                            </span>
+                          )}
+                        </div>
+                        <span className={`px-2 py-1 rounded-full text-xs font-medium ${getRecommendationColor(feedback.recommendation)}`}>
+                          {feedback.recommendation || 'N/A'}
+                        </span>
+                      </div>
+                      {feedback.comments && (
+                        <p className="text-sm text-gray-700 mt-2">{feedback.comments}</p>
+                      )}
+                      {feedback.submittedAt && (
+                        <p className="text-xs text-gray-500 mt-2">
+                          Submitted: {new Date(feedback.submittedAt).toLocaleString()}
+                        </p>
+                      )}
+                      {feedback.status && (
+                        <p className="text-xs text-gray-500 mt-1">
+                          Status: {feedback.status}
+                        </p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {(!selectedThesis.panelFeedbackData?.feedback || selectedThesis.panelFeedbackData.feedback.length === 0) && (
+              <div className="mb-6">
+                <h4 className="text-md font-semibold text-gray-800 mb-4">Panel Feedback</h4>
+                <div className="bg-gray-50 rounded-lg p-4 text-center">
+                  <p className="text-sm text-gray-500">No panel feedback available.</p>
+                </div>
+              </div>
+            )}
+
+            {/* Action Buttons */}
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => {
+                  setShowDetails(false);
+                  setSelectedThesis(null);
+                }}
+                className="px-4 py-2 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300 transition-colors text-sm font-medium"
+              >
+                Close
+              </button>
             </div>
           </div>
         </div>
       )}
-
-      {/* Adviser Feedback & Notifications */}
-      <div className="bg-white rounded-lg border border-gray-200 p-5">
-        <h3 className="text-lg font-semibold text-gray-800 mb-4">Adviser Feedback & Notifications</h3>
-        <div className="space-y-3 max-h-96 overflow-y-auto">
-          {feedback && feedback.length > 0 ? (
-            feedback.map((item, index) => (
-              <div 
-                key={index} 
-                className={`p-4 rounded-lg border-l-4 ${
-                  item.type === 'approval' ? 'bg-green-50 border-green-500' :
-                  item.type === 'rejection' ? 'bg-red-50 border-red-500' :
-                  item.type === 'revision' ? 'bg-orange-50 border-orange-500' :
-                  'bg-blue-50 border-blue-500'
-                }`}
-              >
-                <div className="flex justify-between items-start mb-2">
-                  <div className="flex items-center space-x-2">
-                    {item.type === 'approval' && <FaCheckCircle className="text-green-600" />}
-                    {item.type === 'rejection' && <FaTimesCircle className="text-red-600" />}
-                    {item.type === 'revision' && <FaFileAlt className="text-orange-600" />}
-                    {item.type === 'feedback' && <FaFileAlt className="text-blue-600" />}
-                    <span className="text-sm font-semibold text-gray-800">
-                      {item.adviser?.name || 'Adviser'}
-                    </span>
-                  </div>
-                  <div className="text-right">
-                    <span className={`inline-block px-2 py-1 rounded-full text-xs font-medium ${
-                      item.type === 'approval' ? 'bg-green-100 text-green-700' :
-                      item.type === 'rejection' ? 'bg-red-100 text-red-700' :
-                      item.type === 'revision' ? 'bg-orange-100 text-orange-700' :
-                      'bg-blue-100 text-blue-700'
-                    }`}>
-                      {item.type}
-                    </span>
-                    <p className="text-xs text-gray-500 mt-1">
-                      {new Date(item.createdAt).toLocaleString()}
-                    </p>
-                  </div>
-                </div>
-                <p className="text-sm text-gray-700 leading-relaxed">{item.message}</p>
-                {item.type === 'rejection' && (
-                  <div className="mt-3 p-3 bg-white rounded border border-red-200">
-                    <p className="text-xs font-semibold text-red-700 mb-1">Action Required:</p>
-                    <p className="text-xs text-gray-600">Please review the feedback and resubmit your work after making the necessary revisions.</p>
-                  </div>
-                )}
-              </div>
-            ))
-          ) : (
-            <div className="text-center py-8">
-              <FaFileAlt className="mx-auto h-12 w-12 text-gray-400 mb-3" />
-              <p className="text-gray-500 text-sm">No feedback or notifications yet.</p>
-              <p className="text-gray-400 text-xs mt-1">Your adviser's feedback will appear here.</p>
-            </div>
-          )}
-        </div>
-      </div>
     </div>
   );
 };

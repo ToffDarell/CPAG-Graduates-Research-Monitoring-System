@@ -16,4 +16,12 @@ export default defineConfig({
       },
     },
   },
+  optimizeDeps: {
+    include: ['react-pdf', 'pdfjs-dist'],
+  },
+  resolve: {
+    alias: {
+      // Ensure CSS imports from react-pdf resolve correctly
+    },
+  },
 })

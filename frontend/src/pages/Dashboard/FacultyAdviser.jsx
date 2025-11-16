@@ -5,13 +5,23 @@ import axios from "axios";
 import { Calendar, momentLocalizer } from 'react-big-calendar';
 import moment from 'moment';
 import 'react-big-calendar/lib/css/react-big-calendar.css';
+import { Document, Page, pdfjs } from 'react-pdf';
+// Import CSS for react-pdf (v10 uses dist/Page/ not dist/esm/Page/)
+import 'react-pdf/dist/Page/AnnotationLayer.css';
+import 'react-pdf/dist/Page/TextLayer.css';
+
+// Configure PDF.js worker - using CDN for compatibility
+pdfjs.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjs.version}/pdf.worker.min.js`;
 
 const localizer = momentLocalizer(moment);
 
 const FacultyAdviserDashboard = ({setUser}) => {
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
-  const [selectedTab, setSelectedTab] = useState("submissions");
+  const [searchParams, setSearchParams] = useSearchParams();
+  
+  // Initialize selectedTab from URL params, default to "submissions"
+  const tabFromUrl = searchParams.get('tab');
+  const [selectedTab, setSelectedTab] = useState(tabFromUrl || "submissions");
   const [students, setStudents] = useState([]);
   const [submissions, setSubmissions] = useState([]);
   const [schedules, setSchedules] = useState([]);
@@ -21,6 +31,26 @@ const FacultyAdviserDashboard = ({setUser}) => {
   // Google Calendar state
   const [calendarConnected, setCalendarConnected] = useState(false);
   const [calendarLoading, setCalendarLoading] = useState(false);
+
+  // Initialize tab from URL on mount (only if URL has tab param and it differs from initial state)
+  useEffect(() => {
+    const tabFromUrl = searchParams.get('tab');
+    if (tabFromUrl && tabFromUrl !== selectedTab) {
+      setSelectedTab(tabFromUrl);
+    } else if (!tabFromUrl && selectedTab) {
+      // If no tab in URL but we have a selectedTab, update URL
+      setSearchParams({ tab: selectedTab }, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Only run on mount
+
+  // Update URL when tab changes (after initial mount)
+  useEffect(() => {
+    const currentTab = searchParams.get('tab');
+    if (selectedTab && currentTab !== selectedTab) {
+      setSearchParams({ tab: selectedTab }, { replace: true });
+    }
+  }, [selectedTab]); 
 
   // Fetch data on component mount
   useEffect(() => {
@@ -33,9 +63,13 @@ const FacultyAdviserDashboard = ({setUser}) => {
     const calendarParam = searchParams.get('calendar');
     if (calendarParam === 'connected') {
       setCalendarConnected(true);
-      navigate('/dashboard/faculty', { replace: true });
+      // Preserve tab param when cleaning up calendar param
+      const currentTab = searchParams.get('tab') || 'submissions';
+      navigate(`/dashboard/faculty?tab=${currentTab}`, { replace: true });
     } else if (calendarParam === 'error') {
-      navigate('/dashboard/faculty', { replace: true });
+      // Preserve tab param when cleaning up calendar param
+      const currentTab = searchParams.get('tab') || 'submissions';
+      navigate(`/dashboard/faculty?tab=${currentTab}`, { replace: true });
     }
   }, []);
 
@@ -100,6 +134,13 @@ const FacultyAdviserDashboard = ({setUser}) => {
       window.location.href = res.data.authUrl;
     } catch (error) {
       console.error('Error getting auth URL:', error);
+      
+      // Show user-friendly error message
+      const errorMessage = error.response?.data?.message || 
+                          error.response?.data?.error || 
+                          'Failed to connect to Google Calendar. Please check server configuration.';
+      
+      alert(`❌ ${errorMessage}\n\n${error.response?.data?.details || ''}`);
     } finally {
       setCalendarLoading(false);
     }
@@ -679,6 +720,19 @@ const FeedbackManagement = () => {
   const [errorMessage, setErrorMessage] = useState("");
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [selectedFeedback, setSelectedFeedback] = useState(null);
+  // Document viewer state
+  const [showDocumentViewer, setShowDocumentViewer] = useState(false);
+  const [viewingFeedback, setViewingFeedback] = useState(null);
+  const [documentBlobUrl, setDocumentBlobUrl] = useState(null);
+  const [comments, setComments] = useState([]);
+  const [numPages, setNumPages] = useState(null);
+  const [pageNumber, setPageNumber] = useState(1);
+  const [selectedText, setSelectedText] = useState('');
+  const [showCommentBox, setShowCommentBox] = useState(false);
+  const [commentPosition, setCommentPosition] = useState(null);
+  const [newComment, setNewComment] = useState('');
+  const [scale, setScale] = useState(1.0);
+  const [loadingComments, setLoadingComments] = useState(false);
 
   useEffect(() => {
     fetchStudents();
@@ -872,6 +926,166 @@ const FeedbackManagement = () => {
     const kb = bytes / 1024;
     if (kb < 1024) return `${kb.toFixed(2)} KB`;
     return `${(kb / 1024).toFixed(2)} MB`;
+  };
+
+  // Handle view feedback
+  const handleViewFeedback = async (feedback) => {
+    try {
+      const token = localStorage.getItem('token');
+      const response = await axios.get(`/api/faculty/feedback/view/${feedback._id}`, {
+        headers: { Authorization: `Bearer ${token}` },
+        responseType: 'blob'
+      });
+      
+      // Use mimetype from feedback.file or default to application/pdf
+      const mimeType = feedback.file?.mimetype || 'application/pdf';
+      const blob = new Blob([response.data], { type: mimeType });
+      const url = URL.createObjectURL(blob);
+      
+      setDocumentBlobUrl(url);
+      setViewingFeedback(feedback);
+      setShowDocumentViewer(true);
+      setPageNumber(1);
+      setScale(1.0);
+      
+      // Fetch comments
+      await fetchComments(feedback._id);
+    } catch (error) {
+      console.error('Error viewing feedback:', error);
+      setErrorMessage("Failed to view document");
+      setTimeout(() => setErrorMessage(""), 4000);
+    }
+  };
+
+  // Fetch comments
+  const fetchComments = async (feedbackId) => {
+    try {
+      setLoadingComments(true);
+      const token = localStorage.getItem('token');
+      const response = await axios.get(`/api/faculty/feedback/${feedbackId}/comments`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      setComments(response.data);
+    } catch (error) {
+      console.error('Error fetching comments:', error);
+    } finally {
+      setLoadingComments(false);
+    }
+  };
+
+  // Handle PDF load
+  const onDocumentLoadSuccess = ({ numPages }) => {
+    setNumPages(numPages);
+  };
+
+  // Handle text selection for PDFs
+  const handleTextSelection = () => {
+    const selection = window.getSelection();
+    const text = selection.toString().trim();
+    
+    if (text && viewingFeedback?.file?.mimetype === 'application/pdf') {
+      setSelectedText(text);
+      // Get selection position
+      const range = selection.getRangeAt(0);
+      const rect = range.getBoundingClientRect();
+      const viewerContainer = document.querySelector('.pdf-viewer-container');
+      const containerRect = viewerContainer ? viewerContainer.getBoundingClientRect() : { left: 0, top: 0 };
+      
+      setCommentPosition({
+        selectedText: text,
+        pageNumber: pageNumber,
+        position: {
+          coordinates: {
+            x: rect.x - containerRect.left,
+            y: rect.y - containerRect.top,
+            width: rect.width,
+            height: rect.height
+          }
+        }
+      });
+      setShowCommentBox(true);
+    }
+  };
+
+  // Add comment
+  const handleAddComment = async () => {
+    if (!newComment.trim() || !commentPosition) return;
+
+    try {
+      const token = localStorage.getItem('token');
+      await axios.post(`/api/faculty/feedback/${viewingFeedback._id}/comments`, {
+        comment: newComment,
+        position: commentPosition.position,
+        pageNumber: commentPosition.pageNumber,
+        selectedText: commentPosition.selectedText,
+        highlightColor: "#ffeb3b"
+      }, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+
+      setNewComment('');
+      setShowCommentBox(false);
+      setCommentPosition(null);
+      setSelectedText('');
+      await fetchComments(viewingFeedback._id);
+      setSuccessMessage("Comment added successfully");
+      setTimeout(() => setSuccessMessage(""), 4000);
+    } catch (error) {
+      console.error('Error adding comment:', error);
+      setErrorMessage("Failed to add comment");
+      setTimeout(() => setErrorMessage(""), 4000);
+    }
+  };
+
+  // Delete comment
+  const handleDeleteComment = async (commentId) => {
+    try {
+      const token = localStorage.getItem('token');
+      await axios.delete(`/api/faculty/feedback/comments/${commentId}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      await fetchComments(viewingFeedback._id);
+      setSuccessMessage("Comment deleted successfully");
+      setTimeout(() => setSuccessMessage(""), 4000);
+    } catch (error) {
+      console.error('Error deleting comment:', error);
+      setErrorMessage("Failed to delete comment");
+      setTimeout(() => setErrorMessage(""), 4000);
+    }
+  };
+
+  // Resolve comment
+  const handleResolveComment = async (commentId, resolved) => {
+    try {
+      const token = localStorage.getItem('token');
+      await axios.put(`/api/faculty/feedback/comments/${commentId}`, {
+        resolved: !resolved
+      }, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      await fetchComments(viewingFeedback._id);
+    } catch (error) {
+      console.error('Error resolving comment:', error);
+      setErrorMessage("Failed to update comment");
+      setTimeout(() => setErrorMessage(""), 4000);
+    }
+  };
+
+  // Close viewer
+  const handleCloseViewer = () => {
+    if (documentBlobUrl) {
+      URL.revokeObjectURL(documentBlobUrl);
+    }
+    setShowDocumentViewer(false);
+    setViewingFeedback(null);
+    setDocumentBlobUrl(null);
+    setComments([]);
+    setPageNumber(1);
+    setNumPages(null);
+    setShowCommentBox(false);
+    setCommentPosition(null);
+    setNewComment('');
+    setSelectedText('');
   };
 
   return (
@@ -1086,12 +1300,20 @@ const FeedbackManagement = () => {
                   </div>
                   <div className="flex flex-col space-y-1 ml-4">
                     {feedback.file && (
-                      <button
-                        onClick={() => handleDownload(feedback._id, feedback.file.filename)}
-                        className="px-3 py-1 bg-blue-100 text-blue-700 rounded-md hover:bg-blue-200 text-xs font-medium"
-                      >
-                        Download
-                      </button>
+                      <>
+                        <button
+                          onClick={() => handleViewFeedback(feedback)}
+                          className="px-3 py-1 bg-green-100 text-green-700 rounded-md hover:bg-green-200 text-xs font-medium"
+                        >
+                          View
+                        </button>
+                        <button
+                          onClick={() => handleDownload(feedback._id, feedback.file.filename)}
+                          className="px-3 py-1 bg-blue-100 text-blue-700 rounded-md hover:bg-blue-200 text-xs font-medium"
+                        >
+                          Download
+                        </button>
+                      </>
                     )}
                     <button
                       onClick={() => handleDeleteClick(feedback)}
@@ -1158,6 +1380,228 @@ const FeedbackManagement = () => {
           </div>
         </div>
       )}
+
+      {/* Document Viewer Modal */}
+      {showDocumentViewer && viewingFeedback && documentBlobUrl && (
+        <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg shadow-xl max-w-7xl w-full h-full flex flex-col">
+            {/* Header */}
+            <div className="bg-gradient-to-r from-[#7C1D23] to-[#5a1519] text-white p-4 rounded-t-lg flex justify-between items-center">
+              <div className="flex items-center space-x-4">
+                <h3 className="text-lg font-bold">
+                  {viewingFeedback.file.filename}
+                </h3>
+                <span className="text-sm opacity-90">
+                  {viewingFeedback.student?.name}
+                </span>
+              </div>
+              <button 
+                onClick={handleCloseViewer}
+                className="text-white hover:text-gray-200 transition-colors"
+              >
+                <FaClose className="h-6 w-6" />
+              </button>
+            </div>
+            
+            {/* Content Area - Split View */}
+            <div className="flex-1 flex overflow-hidden">
+              {/* Document Viewer (Left) */}
+              <div className="flex-1 p-4 overflow-auto relative bg-gray-100 pdf-viewer-container">
+                {viewingFeedback.file.mimetype === 'application/pdf' ? (
+                  <div className="flex flex-col items-center">
+                    {/* PDF Controls */}
+                    <div className="mb-4 flex items-center space-x-4 bg-white p-2 rounded-lg shadow sticky top-0 z-20">
+                      <button
+                        onClick={() => setPageNumber(prev => Math.max(1, prev - 1))}
+                        disabled={pageNumber <= 1}
+                        className="px-3 py-1 bg-gray-200 text-gray-700 rounded hover:bg-gray-300 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+                      >
+                        Previous
+                      </button>
+                      <span className="text-sm text-gray-700">
+                        Page {pageNumber} of {numPages || '--'}
+                      </span>
+                      <button
+                        onClick={() => setPageNumber(prev => Math.min(numPages || 1, prev + 1))}
+                        disabled={pageNumber >= (numPages || 1)}
+                        className="px-3 py-1 bg-gray-200 text-gray-700 rounded hover:bg-gray-300 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+                      >
+                        Next
+                      </button>
+                      <div className="border-l border-gray-300 h-6 mx-2"></div>
+                      <button
+                        onClick={() => setScale(prev => Math.max(0.5, prev - 0.25))}
+                        className="px-3 py-1 bg-gray-200 text-gray-700 rounded hover:bg-gray-300 text-sm"
+                      >
+                        -
+                      </button>
+                      <span className="text-sm text-gray-700 min-w-[60px] text-center">{Math.round(scale * 100)}%</span>
+                      <button
+                        onClick={() => setScale(prev => Math.min(2, prev + 0.25))}
+                        className="px-3 py-1 bg-gray-200 text-gray-700 rounded hover:bg-gray-300 text-sm"
+                      >
+                        +
+                      </button>
+                    </div>
+
+                    {/* PDF Document */}
+                    <div onMouseUp={handleTextSelection} className="shadow-lg bg-white">
+                      <Document
+                        file={documentBlobUrl}
+                        onLoadSuccess={onDocumentLoadSuccess}
+                        loading={<div className="text-center py-8">Loading PDF...</div>}
+                        error={<div className="text-center py-8 text-red-600">Failed to load PDF</div>}
+                      >
+                        <Page
+                          pageNumber={pageNumber}
+                          scale={scale}
+                          renderTextLayer={true}
+                          renderAnnotationLayer={true}
+                        />
+                      </Document>
+                    </div>
+                  </div>
+                ) : viewingFeedback.file.mimetype?.startsWith('image/') ? (
+                  <div className="flex items-center justify-center h-full">
+                    <img 
+                      src={documentBlobUrl} 
+                      alt={viewingFeedback.file.filename}
+                      className="max-w-full max-h-full object-contain shadow-lg"
+                    />
+                  </div>
+                ) : (
+                  <div className="flex items-center justify-center h-full">
+                    <p className="text-gray-500">
+                      Document preview not available for this file type.
+                      <button 
+                        onClick={() => handleDownload(viewingFeedback._id, viewingFeedback.file.filename)}
+                        className="ml-2 text-[#7C1D23] hover:underline"
+                      >
+                        Download to view
+                      </button>
+                    </p>
+                  </div>
+                )}
+
+                {/* Comment Box (appears when text is selected) */}
+                {showCommentBox && commentPosition && (
+                  <div className="absolute top-20 right-4 bg-white border-2 border-[#7C1D23] rounded-lg shadow-xl p-4 z-50 w-80">
+                    <h4 className="font-semibold text-gray-800 mb-2">Add Comment</h4>
+                    {commentPosition.selectedText && (
+                      <p className="text-sm text-gray-600 italic mb-2 p-2 bg-gray-50 rounded">
+                        "{commentPosition.selectedText}"
+                      </p>
+                    )}
+                    <textarea
+                      value={newComment}
+                      onChange={(e) => setNewComment(e.target.value)}
+                      placeholder="Enter your comment..."
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-transparent resize-none"
+                      rows="4"
+                    />
+                    <div className="flex space-x-2 mt-3">
+                      <button
+                        onClick={handleAddComment}
+                        className="flex-1 px-4 py-2 bg-[#7C1D23] text-white rounded-md hover:bg-[#5a1519] text-sm font-medium"
+                      >
+                        Add Comment
+                      </button>
+                      <button
+                        onClick={() => {
+                          setShowCommentBox(false);
+                          setCommentPosition(null);
+                          setNewComment('');
+                          setSelectedText('');
+                        }}
+                        className="px-4 py-2 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300 text-sm font-medium"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Comments Panel (Right) */}
+              <div className="w-96 border-l border-gray-200 flex flex-col bg-white">
+                <div className="p-4 border-b border-gray-200 bg-gray-50">
+                  <h4 className="font-semibold text-gray-800">Comments ({comments.length})</h4>
+                </div>
+                
+                <div className="flex-1 overflow-y-auto p-4 space-y-3">
+                  {loadingComments ? (
+                    <div className="text-center py-8">
+                      <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-[#7C1D23]"></div>
+                      <p className="mt-2 text-gray-500 text-sm">Loading comments...</p>
+                    </div>
+                  ) : comments.length === 0 ? (
+                    <div className="text-center py-8">
+                      <FaFileAlt className="mx-auto h-12 w-12 text-gray-400 mb-3" />
+                      <p className="text-gray-500 text-sm">No comments yet. Select text to add a comment.</p>
+                    </div>
+                  ) : (
+                    comments.map((comment) => (
+                      <div
+                        key={comment._id}
+                        className={`p-3 rounded-lg border ${
+                          comment.resolved
+                            ? 'bg-gray-50 border-gray-200'
+                            : 'bg-yellow-50 border-yellow-200'
+                        }`}
+                      >
+                        <div className="flex items-start justify-between mb-2">
+                          <div className="flex-1">
+                            <span className="font-medium text-sm text-gray-800">
+                              {comment.createdBy.name}
+                            </span>
+                            {comment.position?.pageNumber && (
+                              <span className="text-xs text-gray-500 ml-2">
+                                (Page {comment.position.pageNumber})
+                              </span>
+                            )}
+                          </div>
+                          <span className="text-xs text-gray-500">
+                            {new Date(comment.createdAt).toLocaleDateString()}
+                          </span>
+                        </div>
+                        {comment.position?.selectedText && (
+                          <p className="text-xs text-gray-600 italic mb-2 p-2 bg-white rounded border-l-2 border-yellow-400">
+                            "{comment.position.selectedText}"
+                          </p>
+                        )}
+                        <p className="text-sm text-gray-700 mb-2">{comment.comment}</p>
+                        <div className="flex items-center space-x-2">
+                          <button
+                            onClick={() => handleResolveComment(comment._id, comment.resolved)}
+                            className={`text-xs px-2 py-1 rounded ${
+                              comment.resolved
+                                ? 'bg-green-100 text-green-700 hover:bg-green-200'
+                                : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                            }`}
+                          >
+                            {comment.resolved ? '✓ Resolved' : 'Mark Resolved'}
+                          </button>
+                          <button
+                            onClick={() => handleDeleteComment(comment._id)}
+                            className="text-xs px-2 py-1 rounded bg-red-100 text-red-700 hover:bg-red-200"
+                          >
+                            Delete
+                          </button>
+                        </div>
+                        {comment.resolved && comment.resolvedBy && (
+                          <p className="text-xs text-green-600 mt-2">
+                            Resolved by {comment.resolvedBy.name}
+                          </p>
+                        )}
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
   </div>
 );
 };
@@ -1216,11 +1660,27 @@ const ConsultationSchedule = ({ schedules, onRefresh, calendarConnected, onConne
 
     try {
       const token = localStorage.getItem('token');
-      const response = await axios.post('/api/faculty/schedules', formData, {
+      // Convert datetime-local value to ISO string for proper timezone handling
+      // datetime-local gives us local time, we need to send it as ISO with timezone
+      const datetimeISO = new Date(formData.datetime).toISOString();
+      
+      const response = await axios.post('/api/faculty/schedules', {
+        ...formData,
+        datetime: datetimeISO
+      }, {
         headers: { Authorization: `Bearer ${token}` }
       });
 
-      setSuccessMessage(response.data.message || "Consultation slot created successfully.");
+      // Show appropriate message based on calendar sync status
+      if (response.data.calendarSynced) {
+        setSuccessMessage(response.data.message || "Consultation slot created and synced to Google Calendar!");
+      } else if (response.data.calendarError) {
+        setErrorMessage(response.data.message || `Calendar sync failed: ${response.data.calendarError.message}. Please check your calendar connection.`);
+        setSuccessMessage("Consultation slot created, but Google Calendar sync failed.");
+      } else {
+        setSuccessMessage(response.data.message || "Consultation slot created successfully.");
+      }
+      
       setShowCreateModal(false);
       setFormData({
         title: "",
@@ -1234,7 +1694,10 @@ const ConsultationSchedule = ({ schedules, onRefresh, calendarConnected, onConne
       // Refresh schedules
       if (onRefresh) onRefresh();
       
-      setTimeout(() => setSuccessMessage(""), 4000);
+      setTimeout(() => {
+        setSuccessMessage("");
+        setErrorMessage("");
+      }, 6000);
     } catch (error) {
       console.error("Error creating consultation slot:", error);
       setErrorMessage(error.response?.data?.message || "Failed to create consultation slot. Please try again.");
@@ -1352,7 +1815,16 @@ const ConsultationSchedule = ({ schedules, onRefresh, calendarConnected, onConne
 
   const handleEditClick = (schedule) => {
     setSelectedSchedule(schedule);
-    const datetimeLocal = new Date(schedule.datetime).toISOString().slice(0, 16);
+    // Convert UTC datetime to local time for datetime-local input
+    const date = new Date(schedule.datetime);
+    // Get local time components
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    const hours = String(date.getHours()).padStart(2, '0');
+    const minutes = String(date.getMinutes()).padStart(2, '0');
+    // Format as YYYY-MM-DDTHH:mm (local time, not UTC)
+    const datetimeLocal = `${year}-${month}-${day}T${hours}:${minutes}`;
     setFormData({
       title: schedule.title,
       description: schedule.description || "",
@@ -1370,9 +1842,14 @@ const ConsultationSchedule = ({ schedules, onRefresh, calendarConnected, onConne
 
     try {
       const token = localStorage.getItem('token');
+      // Convert datetime-local value to ISO string for proper timezone handling
+      // datetime-local gives us local time, we need to send it as ISO with timezone
+      const datetimeISO = new Date(formData.datetime).toISOString();
+      
       const response = await axios.put('/api/faculty/schedules/update', {
         scheduleId: selectedSchedule._id,
-        ...formData
+        ...formData,
+        datetime: datetimeISO
       }, {
         headers: { Authorization: `Bearer ${token}` }
       });

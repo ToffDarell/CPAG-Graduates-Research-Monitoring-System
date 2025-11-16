@@ -1,10 +1,15 @@
 import React, { useState, useEffect } from 'react';
 import { FaUsers, FaFolder, FaArchive, FaChartBar, FaUsersCog, FaFileAlt, FaPlus, FaSearch, FaEdit, FaTrash, FaTimes, FaSignOutAlt, FaBars, FaTimes as FaClose, FaDownload, FaEye, FaToggleOn, FaToggleOff, FaExclamationTriangle, FaHistory, FaCheck  } from 'react-icons/fa';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import axios from 'axios';
 
 const DeanDashboard = ({ setUser }) => {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  
+  // Initialize selectedTab from URL params, default to "faculty"
+  const tabFromUrl = searchParams.get('tab');
+  const [selectedTab, setSelectedTab] = useState(tabFromUrl || 'faculty');
   const [facultyList, setFacultyList] = useState([]);
   const [researchList, setResearchList] = useState([]);
   const [researchStats, setResearchStats] = useState({
@@ -13,7 +18,6 @@ const DeanDashboard = ({ setUser }) => {
     pending: 0,
     archived: 0
   });
-  const [selectedTab, setSelectedTab] = useState('faculty');
   const [loading, setLoading] = useState(false);
   const [showAddFacultyModal, setShowAddFacultyModal] = useState(false);
   const [showEditFacultyModal, setShowEditFacultyModal] = useState(false);
@@ -26,6 +30,26 @@ const DeanDashboard = ({ setUser }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [archivedDocuments, setArchivedDocuments] = useState([]);
+
+  // Initialize tab from URL on mount (only if URL has tab param and it differs from initial state)
+  useEffect(() => {
+    const tabFromUrl = searchParams.get('tab');
+    if (tabFromUrl && tabFromUrl !== selectedTab) {
+      setSelectedTab(tabFromUrl);
+    } else if (!tabFromUrl && selectedTab) {
+      // If no tab in URL but we have a selectedTab, update URL
+      setSearchParams({ tab: selectedTab }, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Only run on mount
+
+  // Update URL when tab changes (after initial mount)
+  useEffect(() => {
+    const currentTab = searchParams.get('tab');
+    if (selectedTab && currentTab !== selectedTab) {
+      setSearchParams({ tab: selectedTab }, { replace: true });
+    }
+  }, [selectedTab]); // setSearchParams is stable, doesn't need to be in deps
 
   // Fetch data on component mount
   useEffect(() => {
