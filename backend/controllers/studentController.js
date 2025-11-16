@@ -4,6 +4,7 @@ import Schedule from "../models/Schedule.js";
 import Document from "../models/Document.js";
 import Activity from "../models/Activity.js";
 import ComplianceForm from "../models/ComplianceForm.js";
+import Panel from "../models/Panel.js";
 import User from "../models/User.js";
 import fs from "fs";
 import path from "path";
@@ -47,7 +48,7 @@ export const uploadComplianceForm = async (req, res) => {
     if (!researchId) {
       return res.status(400).json({ message: "Research ID is required" });
     }
-
+    
     if (!formType) {
       return res.status(400).json({ message: "Form type is required" });
     }
@@ -594,16 +595,24 @@ export const uploadChapter = async (req, res) => {
       return res.status(400).json({ message: "No file uploaded" });
     }
 
-    const { researchId, chapterType } = req.body;
+    const { researchId, chapterType, chapterTitle } = req.body;
     
     if (!researchId) {
       return res.status(400).json({ message: "Research ID is required" });
     }
     
-    const research = await Research.findById(researchId);
+    const research = await Research.findById(researchId)
+      .populate("adviser", "name email")
+      .populate("students", "name email");
     
     if (!research) {
       return res.status(404).json({ message: "Research not found" });
+    }
+
+    // Check if student is part of this research
+    const isStudent = research.students.some(s => s._id.toString() === req.user.id.toString());
+    if (!isStudent) {
+      return res.status(403).json({ message: "You are not authorized to upload chapters for this research" });
     }
 
     // Add file to research
@@ -628,8 +637,504 @@ export const uploadChapter = async (req, res) => {
     }
 
     await research.save();
+
+    // Log activity
+    await Activity.create({
+      user: req.user.id,
+      action: "upload",
+      entityType: "research",
+      entityId: research._id,
+      entityName: research.title,
+      description: `Uploaded chapter: ${chapterType}${chapterTitle ? ` - ${chapterTitle}` : ''}`,
+      metadata: {
+        researchId: research._id,
+        chapterType: chapterType,
+        chapterTitle: chapterTitle || null,
+        filename: req.file.originalname,
+        fileSize: req.file.size,
+        source: "local",
+      },
+      ipAddress: req.ip,
+      userAgent: req.get("user-agent"),
+    });
+
+    // Send notification to adviser
+    if (research.adviser && research.adviser.email) {
+      const studentName = req.user.name || "Student";
+      const chapterLabel = chapterType === "chapter1" ? "Chapter 1" : chapterType === "chapter2" ? "Chapter 2" : "Chapter 3";
+      await sendNotificationEmail(
+        research.adviser.email,
+        `New Chapter Uploaded: ${chapterLabel}`,
+        `${studentName} has uploaded a new ${chapterLabel}${chapterTitle ? `: ${chapterTitle}` : ''} for research: ${research.title}. Please review it.`,
+        `
+          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+            <h2 style="color: #7C1D23;">New Chapter Uploaded</h2>
+            <p>Hello ${research.adviser.name},</p>
+            <p><strong>${studentName}</strong> has uploaded a new <strong>${chapterLabel}</strong>${chapterTitle ? `: ${chapterTitle}` : ''} for research: <strong>${research.title}</strong>.</p>
+            <p>Please review the chapter in the system.</p>
+            <hr style="margin: 30px 0; border: none; border-top: 1px solid #ddd;" />
+            <p style="color: #999; font-size: 12px;">This is an automated notification from the Masteral Archive and Monitoring System.</p>
+          </div>
+        `
+      );
+    }
+
     res.json({ message: "Chapter uploaded successfully" });
   } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Upload chapter from Google Drive
+export const uploadChapterFromDrive = async (req, res) => {
+  try {
+    console.log("Upload chapter from Drive - Request received:", {
+      driveFileId: req.body.driveFileId ? "present" : "missing",
+      accessToken: req.body.accessToken ? "present" : "missing",
+      researchId: req.body.researchId,
+      chapterType: req.body.chapterType,
+      chapterTitle: req.body.chapterTitle,
+      userId: req.user.id
+    });
+
+    const { driveFileId, accessToken, researchId, chapterType, chapterTitle } = req.body;
+
+    if (!driveFileId || !accessToken) {
+      console.error("Missing required fields:", { driveFileId: !!driveFileId, accessToken: !!accessToken });
+      return res.status(400).json({ message: "Google Drive file ID and access token are required" });
+    }
+
+    if (!researchId) {
+      return res.status(400).json({ message: "Research ID is required" });
+    }
+
+    if (!chapterType) {
+      return res.status(400).json({ message: "Chapter type is required" });
+    }
+
+    // Import download function and stream utilities
+    const { downloadFileFromDrive } = await import("../utils/googleDrive.js");
+    const { pipeline } = await import("stream/promises");
+
+    // Download file from Google Drive
+    let stream, metadata;
+    try {
+      const result = await downloadFileFromDrive(driveFileId, accessToken);
+      stream = result.stream;
+      metadata = result.metadata;
+    } catch (error) {
+      console.error("Error downloading from Google Drive:", error);
+      return res.status(400).json({ message: `Failed to download file from Google Drive: ${error.message}` });
+    }
+
+    console.log("Downloaded file metadata:", {
+      name: metadata.name,
+      mimeType: metadata.mimeType,
+      size: metadata.size
+    });
+
+    // Validate file type - check MIME type and file extension
+    const allowedMimeTypes = [
+      'application/pdf', 
+      'application/x-pdf',
+      'application/msword', 
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    ];
+    
+    const fileName = metadata.name || '';
+    const fileExtension = fileName.split('.').pop()?.toLowerCase();
+    const allowedExtensions = ['pdf', 'doc', 'docx'];
+    
+    // Check if MIME type is allowed
+    const isValidMimeType = allowedMimeTypes.includes(metadata.mimeType);
+    // Check if file extension is allowed
+    const isValidExtension = fileExtension && allowedExtensions.includes(fileExtension);
+    
+    // Accept if either MIME type or extension is valid
+    if (!isValidMimeType && !isValidExtension) {
+      return res.status(400).json({ 
+        message: `Invalid file type. Only PDF and DOCX files are allowed. Received: ${metadata.mimeType || 'unknown'} (${fileExtension || 'no extension'})` 
+      });
+    }
+
+    // Validate file size (10MB limit) - Google Drive might not always provide size
+    if (metadata.size && metadata.size > 10 * 1024 * 1024) {
+      return res.status(400).json({ message: "File size exceeds 10MB limit" });
+    }
+
+    // Create uploads directory if it doesn't exist
+    const uploadsDir = path.join(process.cwd(), "uploads");
+    if (!fs.existsSync(uploadsDir)) {
+      fs.mkdirSync(uploadsDir, { recursive: true });
+    }
+
+    // Generate file path
+    const cleanName = metadata.name.replace(/[^a-zA-Z0-9.-]/g, "_");
+    const filepath = path.join(uploadsDir, Date.now() + "-" + cleanName);
+
+    // Save file to disk
+    try {
+      const writeStream = fs.createWriteStream(filepath);
+      await pipeline(stream, writeStream);
+      console.log("File saved successfully to:", filepath);
+    } catch (error) {
+      console.error("Error saving file to disk:", error);
+      return res.status(500).json({ message: `Failed to save file: ${error.message}` });
+    }
+
+    // Verify research and authorization
+    const research = await Research.findById(researchId)
+      .populate("adviser", "name email")
+      .populate("students", "name email");
+
+    if (!research) {
+      fs.unlinkSync(filepath); // Clean up file
+      return res.status(404).json({ message: "Research not found" });
+    }
+
+    const isStudent = research.students.some(s => s._id.toString() === req.user.id.toString());
+    if (!isStudent) {
+      fs.unlinkSync(filepath); // Clean up file
+      return res.status(403).json({ message: "You are not authorized to upload chapters for this research" });
+    }
+
+    // Get file stats
+    const stats = fs.statSync(filepath);
+
+    // Add file to research
+    research.forms.push({
+      filename: metadata.name,
+      filepath: filepath,
+      type: chapterType, // "chapter1", "chapter2", "chapter3"
+      status: "pending",
+      uploadedBy: req.user.id,
+      uploadedAt: new Date(),
+    });
+
+    // Update progress based on chapter
+    const chapterProgress = {
+      chapter1: 25,
+      chapter2: 50,
+      chapter3: 75,
+    };
+
+    if (chapterProgress[chapterType]) {
+      research.progress = Math.max(research.progress, chapterProgress[chapterType]);
+    }
+
+    await research.save();
+
+    // Log activity
+    await Activity.create({
+      user: req.user.id,
+      action: "upload",
+      entityType: "research",
+      entityId: research._id,
+      entityName: research.title,
+      description: `Uploaded chapter from Google Drive: ${chapterType}${chapterTitle ? ` - ${chapterTitle}` : ''}`,
+      metadata: {
+        researchId: research._id,
+        chapterType: chapterType,
+        chapterTitle: chapterTitle || null,
+        filename: metadata.name,
+        fileSize: stats.size,
+        source: "google_drive",
+        driveFileId: driveFileId,
+      },
+      ipAddress: req.ip,
+      userAgent: req.get("user-agent"),
+    });
+
+    // Send notification to adviser
+    if (research.adviser && research.adviser.email) {
+      const studentName = req.user.name || "Student";
+      const chapterLabel = chapterType === "chapter1" ? "Chapter 1" : chapterType === "chapter2" ? "Chapter 2" : "Chapter 3";
+      await sendNotificationEmail(
+        research.adviser.email,
+        `New Chapter Uploaded: ${chapterLabel}`,
+        `${studentName} has uploaded a new ${chapterLabel}${chapterTitle ? `: ${chapterTitle}` : ''} from Google Drive for research: ${research.title}. Please review it.`,
+        `
+          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+            <h2 style="color: #7C1D23;">New Chapter Uploaded</h2>
+            <p>Hello ${research.adviser.name},</p>
+            <p><strong>${studentName}</strong> has uploaded a new <strong>${chapterLabel}</strong>${chapterTitle ? `: ${chapterTitle}` : ''} from Google Drive for research: <strong>${research.title}</strong>.</p>
+            <p>Source: Google Drive</p>
+            <p>Please review the chapter in the system.</p>
+            <hr style="margin: 30px 0; border: none; border-top: 1px solid #ddd;" />
+            <p style="color: #999; font-size: 12px;">This is an automated notification from the Masteral Archive and Monitoring System.</p>
+          </div>
+        `
+      );
+    }
+
+    // Send notification to student
+    const student = await User.findById(req.user.id);
+    if (student && student.email) {
+      const chapterLabel = chapterType === "chapter1" ? "Chapter 1" : chapterType === "chapter2" ? "Chapter 2" : "Chapter 3";
+      await sendNotificationEmail(
+        student.email,
+        `Chapter Uploaded Successfully`,
+        `Your ${chapterLabel}${chapterTitle ? `: ${chapterTitle}` : ''} has been uploaded successfully from Google Drive and is pending review.`,
+        `
+          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+            <h2 style="color: #7C1D23;">Chapter Uploaded</h2>
+            <p>Hello ${student.name},</p>
+            <p>Your <strong>${chapterLabel}</strong>${chapterTitle ? `: ${chapterTitle}` : ''} has been uploaded successfully from Google Drive and is pending review.</p>
+            <p>Your adviser will review it and provide feedback.</p>
+            <hr style="margin: 30px 0; border: none; border-top: 1px solid #ddd;" />
+            <p style="color: #999; font-size: 12px;">This is an automated notification from the Masteral Archive and Monitoring System.</p>
+          </div>
+        `
+      );
+    }
+
+    res.json({ message: "Chapter uploaded successfully from Google Drive" });
+  } catch (error) {
+    console.error("Error uploading chapter from Google Drive:", error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Get chapter submissions
+export const getChapterSubmissions = async (req, res) => {
+  try {
+    // Find research for the student
+    const research = await Research.findOne({ students: req.user.id })
+      .populate("adviser", "name email")
+      .populate("students", "name email");
+
+    if (!research) {
+      return res.json({ chapters: [] });
+    }
+
+    // Get unique uploadedBy IDs from forms
+    const uploadedByIds = [...new Set(
+      research.forms
+        .filter(form => form.uploadedBy)
+        .map(form => form.uploadedBy.toString())
+    )];
+
+    // Populate uploadedBy users
+    const uploadedByUsers = await User.find({ _id: { $in: uploadedByIds } })
+      .select("name email");
+
+    // Create a map for quick lookup
+    const uploadedByMap = new Map(
+      uploadedByUsers.map(user => [user._id.toString(), user])
+    );
+
+    // Group forms by chapter type (chapter1, chapter2, chapter3)
+    const chapterTypes = ["chapter1", "chapter2", "chapter3"];
+    const chapters = chapterTypes.map((chapterType) => {
+      // Filter forms for this chapter type and sort by upload date (newest first)
+      const chapterForms = research.forms
+        .filter((form) => form.type === chapterType)
+        .sort((a, b) => new Date(b.uploadedAt) - new Date(a.uploadedAt));
+
+      // Map forms to submissions with version numbers (newest is version 1, older ones have higher versions)
+      const submissions = chapterForms.map((form, index) => {
+        const version = chapterForms.length - index; // Latest submission is version 1
+        const uploadedBy = form.uploadedBy 
+          ? uploadedByMap.get(form.uploadedBy.toString())
+          : null;
+        
+        return {
+          id: form._id.toString(),
+          _id: form._id,
+          version: version,
+          filename: form.filename,
+          filepath: form.filepath,
+          status: form.status || "pending",
+          uploadedAt: form.uploadedAt,
+          uploadedBy: uploadedBy ? {
+            _id: uploadedBy._id,
+            name: uploadedBy.name,
+            email: uploadedBy.email
+          } : null,
+          chapterTitle: form.chapterTitle || null, // May not exist in older records
+          file: {
+            filename: form.filename,
+            filepath: form.filepath,
+          },
+        };
+      });
+
+      return {
+        chapterType,
+        submissions,
+      };
+    });
+
+    // Log activity
+    await Activity.create({
+      user: req.user.id,
+      action: "view",
+      entityType: "research",
+      entityId: research._id,
+      entityName: research.title,
+      description: "Viewed chapter submissions",
+      metadata: {
+        researchId: research._id,
+        chapterCount: chapters.length,
+        totalSubmissions: chapters.reduce((acc, ch) => acc + ch.submissions.length, 0),
+      },
+      ipAddress: req.ip,
+      userAgent: req.get("user-agent"),
+    });
+
+    res.json({ chapters });
+  } catch (error) {
+    console.error("Error fetching chapter submissions:", error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Get progress overview
+export const getProgressOverview = async (req, res) => {
+  try {
+    // Find research for the student
+    const research = await Research.findOne({ students: req.user.id })
+      .populate("adviser", "name email")
+      .populate("students", "name email");
+
+    if (!research) {
+      return res.json({
+        hasResearch: false,
+        percentage: 0,
+        completedCount: 0,
+        totalMilestones: 0,
+        milestones: [],
+        upcomingDeadlines: [],
+        notifications: [],
+        research: null,
+      });
+    }
+
+    // Ensure forms array exists and is an array
+    const forms = Array.isArray(research.forms) ? research.forms : [];
+
+    // Calculate progress based on chapter submissions
+    const chapterTypes = ["chapter1", "chapter2", "chapter3"];
+    const chapterProgress = {
+      chapter1: 25,
+      chapter2: 50,
+      chapter3: 75,
+    };
+
+    // Check which chapters have approved submissions
+    const approvedChapters = chapterTypes.filter((chapterType) => {
+      const chapterForms = forms.filter((form) => form && form.type === chapterType);
+      return chapterForms.some((form) => form && form.status === "approved");
+    });
+
+    // Calculate percentage
+    const completedChapters = approvedChapters.length;
+    let percentage = research.progress || 0;
+    if (completedChapters > 0 && approvedChapters.length > 0) {
+      const lastApprovedChapter = approvedChapters[approvedChapters.length - 1];
+      if (lastApprovedChapter && chapterProgress[lastApprovedChapter]) {
+        percentage = Math.max(percentage, chapterProgress[lastApprovedChapter]);
+      }
+    }
+
+    // Create milestones based on chapters
+    const milestones = chapterTypes.map((chapterType, index) => {
+      const chapterForms = forms.filter((form) => form && form.type === chapterType);
+      const hasApproved = chapterForms.some((form) => form.status === "approved");
+      const hasSubmission = chapterForms.length > 0;
+      
+      let status = "not-started";
+      if (hasApproved) {
+        status = "completed";
+      } else if (hasSubmission) {
+        status = "in-progress";
+      }
+
+      const chapterLabels = {
+        chapter1: "Chapter 1 - Introduction",
+        chapter2: "Chapter 2 - Literature Review",
+        chapter3: "Chapter 3 - Methodology",
+      };
+
+      // Find the approved form for completedAt timestamp
+      let completedAt = null;
+      if (hasApproved) {
+        const approvedForm = chapterForms.find((f) => f.status === "approved");
+        completedAt = approvedForm?.uploadedAt ? new Date(approvedForm.uploadedAt) : null;
+      }
+      
+      // Get the latest submission for startedAt timestamp
+      let startedAt = null;
+      if (hasSubmission && chapterForms.length > 0) {
+        const latestForm = chapterForms[chapterForms.length - 1];
+        startedAt = latestForm?.uploadedAt ? new Date(latestForm.uploadedAt) : null;
+      }
+
+      return {
+        id: chapterType,
+        title: chapterLabels[chapterType],
+        description: `Submit and get approval for ${chapterLabels[chapterType]}`,
+        status,
+        type: "chapter",
+        dueDate: null,
+        completedAt: completedAt,
+        startedAt: startedAt,
+      };
+    });
+
+    // Get upcoming deadlines (empty for now, can be extended)
+    const upcomingDeadlines = [];
+
+    // Get notifications
+    const notifications = [];
+    if (research.status === "for-revision") {
+      notifications.push({
+        type: "revision-required",
+        severity: "high",
+        message: "Your research requires revisions. Please check feedback from your adviser.",
+      });
+    }
+
+    // Log activity (wrap in try-catch to prevent activity logging from breaking the response)
+    try {
+      await Activity.create({
+        user: req.user.id,
+        action: "view",
+        entityType: "progress-dashboard",
+        entityName: "Student Progress Tracking",
+        description: "Viewed thesis progress tracking dashboard",
+        metadata: {
+          milestoneCount: milestones.length,
+          completedCount: approvedChapters.length,
+          percentage,
+        },
+        ipAddress: req.ip || req.connection?.remoteAddress,
+        userAgent: req.get("user-agent") || "Unknown",
+      });
+    } catch (activityError) {
+      // Log the error but don't fail the request
+      console.error("Error logging activity for progress overview:", activityError);
+    }
+
+    res.json({
+      hasResearch: true,
+      percentage,
+      completedCount: approvedChapters.length,
+      totalMilestones: milestones.length,
+      milestones,
+      upcomingDeadlines,
+      notifications,
+      research: {
+        id: research._id,
+        title: research.title,
+        stage: research.stage,
+        status: research.status,
+        adviser: research.adviser || null,
+      },
+      updatedAt: new Date(),
+    });
+  } catch (error) {
+    console.error("Error fetching progress overview:", error);
     res.status(500).json({ message: error.message });
   }
 };
@@ -693,7 +1198,7 @@ export const getMySchedules = async (req, res) => {
       ipAddress: req.ip,
       userAgent: req.get('user-agent'),
     });
-
+    
     res.json(schedules);
   } catch (error) {
     console.error('[Student Schedules] Error:', error);
