@@ -1745,7 +1745,7 @@ const ScheduleManagement = ({ calendarConnected, onConnectCalendar, onDisconnect
           <div className="flex items-center space-x-3">
             <FaGoogle className={`text-2xl ${calendarConnected ? 'text-green-600' : 'text-gray-400'}`} />
             <div>
-              <h3 className="font-semibold text-gray-800">Google Calendar Integration</h3>
+              <h3 className="font-semibold text-gray-800">Google Calendar</h3>
               <p className="text-sm text-gray-600">
                 {calendarConnected 
                   ? '✅ Connected - Schedules sync automatically' 
@@ -3411,17 +3411,17 @@ const FormsManagement = () => {
       {/* Panel Selection */}
       <div className="bg-white border border-gray-200 rounded-lg p-5">
         <label className="block text-sm font-medium text-gray-700 mb-2">
-          Select Panel <span className="text-red-500">*</span>
+          Select Research Title <span className="text-red-500">*</span>
         </label>
         <select
           value={selectedPanel || ''}
           onChange={(e) => setSelectedPanel(e.target.value)}
           className="w-full px-4 py-2 rounded-md border border-gray-300 focus:border-[#7C1D23] focus:ring-2 focus:ring-[#7C1D23]/20"
         >
-          <option value="">-- Select a panel --</option>
+          <option value="">-- Select a research title --</option>
           {panels.map(panel => (
             <option key={panel._id} value={panel._id}>
-              {panel.name} - {panel.type.replace(/_/g, ' ')}
+            {panel.research?.title || 'N/A'} - {panel.type.replace(/_/g, ' ')}
             </option>
           ))}
         </select>
