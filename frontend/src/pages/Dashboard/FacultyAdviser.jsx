@@ -10,8 +10,10 @@ import { Document, Page, pdfjs } from 'react-pdf';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
 
-// Configure PDF.js worker - using CDN for compatibility
-pdfjs.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjs.version}/pdf.worker.min.js`;
+// Configure PDF.js worker - using local file from react-pdf's pdfjs-dist
+// This ensures the worker version matches the API version exactly (both are 5.4.296)
+// The worker file is copied from react-pdf's node_modules to public/pdf.worker.min.js
+pdfjs.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.js';
 
 const localizer = momentLocalizer(moment);
 
@@ -164,10 +166,11 @@ const FacultyAdviserDashboard = ({setUser}) => {
   };
 
   const handleApproveSubmission = async (researchId, fileId) => {
+    console.log('[APPROVE SUBMISSION] Starting approval:', { researchId, fileId });
     setLoading(true);
     try {
       const token = localStorage.getItem('token');
-      await axios.post('/api/faculty/submissions/approve-reject', {
+      const response = await axios.post('/api/faculty/submissions/approve-reject', {
         researchId,
         fileId,
         action: 'approved',
@@ -176,9 +179,11 @@ const FacultyAdviserDashboard = ({setUser}) => {
         headers: { Authorization: `Bearer ${token}` }
       });
       
+      console.log('[APPROVE SUBMISSION] Success:', response.data);
       fetchStudentSubmissions();
     } catch (error) {
-      console.error('Error approving submission:', error);
+      console.error('[APPROVE SUBMISSION] Error:', error);
+      console.error('[APPROVE SUBMISSION] Error response:', error.response?.data);
       alert('Error approving submission');
     } finally {
       setLoading(false);
@@ -932,17 +937,32 @@ const FeedbackManagement = () => {
   const handleViewFeedback = async (feedback) => {
     try {
       const token = localStorage.getItem('token');
-      const response = await axios.get(`/api/faculty/feedback/view/${feedback._id}`, {
+      const url = `/api/faculty/feedback/view/${feedback._id}`;
+      console.log('[VIEW FEEDBACK] Requesting:', {
+        url,
+        feedbackId: feedback._id,
+        hasFile: !!feedback.file,
+        filename: feedback.file?.filename
+      });
+      
+      const response = await axios.get(url, {
         headers: { Authorization: `Bearer ${token}` },
         responseType: 'blob'
+      });
+      
+      console.log('[VIEW FEEDBACK] Response received:', {
+        status: response.status,
+        statusText: response.statusText,
+        contentType: response.headers['content-type'],
+        size: response.data?.size
       });
       
       // Use mimetype from feedback.file or default to application/pdf
       const mimeType = feedback.file?.mimetype || 'application/pdf';
       const blob = new Blob([response.data], { type: mimeType });
-      const url = URL.createObjectURL(blob);
+      const blobUrl = URL.createObjectURL(blob);
       
-      setDocumentBlobUrl(url);
+      setDocumentBlobUrl(blobUrl);
       setViewingFeedback(feedback);
       setShowDocumentViewer(true);
       setPageNumber(1);
@@ -951,8 +971,33 @@ const FeedbackManagement = () => {
       // Fetch comments
       await fetchComments(feedback._id);
     } catch (error) {
-      console.error('Error viewing feedback:', error);
-      setErrorMessage("Failed to view document");
+      console.error('[VIEW FEEDBACK] Error:', error);
+      
+      // If error response is a Blob, convert it to text to read the error message
+      let errorMessage = "Failed to view document";
+      if (error.response?.data instanceof Blob) {
+        try {
+          const text = await error.response.data.text();
+          const json = JSON.parse(text);
+          errorMessage = json.message || errorMessage;
+          console.error('[VIEW FEEDBACK] Server error message:', json);
+        } catch (parseError) {
+          console.error('[VIEW FEEDBACK] Could not parse error response:', parseError);
+          errorMessage = `Server error (${error.response?.status}): ${error.response?.statusText}`;
+        }
+      } else if (error.response?.data?.message) {
+        errorMessage = error.response.data.message;
+      }
+      
+      console.error('[VIEW FEEDBACK] Error details:', {
+        message: error.message,
+        status: error.response?.status,
+        statusText: error.response?.statusText,
+        url: error.config?.url,
+        errorMessage
+      });
+      
+      setErrorMessage(errorMessage);
       setTimeout(() => setErrorMessage(""), 4000);
     }
   };
@@ -984,7 +1029,12 @@ const FeedbackManagement = () => {
     const text = selection.toString().trim();
     
     if (text && viewingFeedback?.file?.mimetype === 'application/pdf') {
-      setSelectedText(text);
+      // Limit selected text to reasonable length (500 characters max)
+      const maxLength = 500;
+      const truncatedText = text.length > maxLength ? text.substring(0, maxLength) + '...' : text;
+      
+      setSelectedText(truncatedText);
+      
       // Get selection position
       const range = selection.getRangeAt(0);
       const rect = range.getBoundingClientRect();
@@ -992,7 +1042,7 @@ const FeedbackManagement = () => {
       const containerRect = viewerContainer ? viewerContainer.getBoundingClientRect() : { left: 0, top: 0 };
       
       setCommentPosition({
-        selectedText: text,
+        selectedText: truncatedText,
         pageNumber: pageNumber,
         position: {
           coordinates: {
@@ -1004,6 +1054,11 @@ const FeedbackManagement = () => {
         }
       });
       setShowCommentBox(true);
+    } else if (!text) {
+      // Clear selection if no text selected
+      setShowCommentBox(false);
+      setCommentPosition(null);
+      setSelectedText('');
     }
   };
 
@@ -2056,7 +2111,7 @@ const ConsultationSchedule = ({ schedules, onRefresh, calendarConnected, onConne
           <div className="flex items-center space-x-3">
             <FaGoogle className={`text-2xl ${calendarConnected ? 'text-green-600' : 'text-gray-400'}`} />
             <div>
-              <h3 className="font-semibold text-gray-800">Google Calendar Integration</h3>
+              <h3 className="font-semibold text-gray-800">Google Calendar</h3>
               <p className="text-sm text-gray-600">
                 {calendarConnected 
                   ? '✅ Connected - Schedules sync automatically' 
