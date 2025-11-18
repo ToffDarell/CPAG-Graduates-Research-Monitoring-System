@@ -1,5 +1,6 @@
 import Research from "../models/Research.js";
 import Feedback from "../models/Feedback.js";
+import FeedbackComment from "../models/FeedbackComment.js";
 import Schedule from "../models/Schedule.js";
 import Document from "../models/Document.js";
 import Activity from "../models/Activity.js";
@@ -1299,8 +1300,152 @@ export const getAdviserFeedback = async (req, res) => {
       .populate("adviser", "name")
       .sort({ createdAt: -1 });
     
-    res.json(feedback);
+    // Get comment counts for each feedback
+    const feedbackWithComments = await Promise.all(
+      feedback.map(async (item) => {
+        const commentCount = await FeedbackComment.countDocuments({ 
+          feedback: item._id,
+          resolved: false 
+        });
+        const totalComments = await FeedbackComment.countDocuments({ 
+          feedback: item._id 
+        });
+        return {
+          ...item.toObject(),
+          commentCount,
+          totalComments
+        };
+      })
+    );
+    
+    res.json(feedbackWithComments);
   } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// View feedback file (for students)
+export const viewFeedbackFile = async (req, res) => {
+  try {
+    const { feedbackId } = req.params;
+
+    const feedback = await Feedback.findById(feedbackId);
+    if (!feedback) {
+      return res.status(404).json({ message: "Feedback not found" });
+    }
+
+    // Verify authorization - student can only view their own feedback
+    if (feedback.student.toString() !== req.user.id.toString()) {
+      return res.status(403).json({ 
+        message: "Unauthorized access. You can only view feedback that is for you." 
+      });
+    }
+
+    // Populate for response
+    await feedback.populate('student', 'name email');
+    await feedback.populate('adviser', 'name email');
+    await feedback.populate('research', 'forms');
+
+    // If feedback doesn't have a file, try to get it from the research form
+    if (!feedback.file || !feedback.file.filepath) {
+      // Try to find the file from research forms
+      if (feedback.research && feedback.research.forms && feedback.research.forms.length > 0) {
+        const formWithFile = feedback.research.forms
+          .filter(f => f.filepath)
+          .sort((a, b) => new Date(b.uploadedAt || 0) - new Date(a.uploadedAt || 0))[0];
+        
+        if (formWithFile) {
+          let filesize = null;
+          let mimetype = null;
+          
+          try {
+            const filePath = path.isAbsolute(formWithFile.filepath) 
+              ? formWithFile.filepath 
+              : path.join(process.cwd(), formWithFile.filepath);
+            
+            if (fs.existsSync(filePath)) {
+              const stats = fs.statSync(filePath);
+              filesize = stats.size;
+              
+              if (formWithFile.filename) {
+                const ext = path.extname(formWithFile.filename).toLowerCase();
+                const mimeTypes = {
+                  '.pdf': 'application/pdf',
+                  '.doc': 'application/msword',
+                  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                  '.jpg': 'image/jpeg',
+                  '.jpeg': 'image/jpeg',
+                  '.png': 'image/png',
+                };
+                mimetype = mimeTypes[ext] || 'application/octet-stream';
+              }
+              
+              feedback.file = {
+                filename: formWithFile.filename || 'document',
+                filepath: formWithFile.filepath,
+                filesize: filesize,
+                mimetype: mimetype,
+                uploadedAt: formWithFile.uploadedAt || new Date()
+              };
+            }
+          } catch (error) {
+            console.error('[STUDENT VIEW FEEDBACK] Error accessing form file:', error);
+          }
+        }
+      }
+      
+      if (!feedback.file || !feedback.file.filepath) {
+        return res.status(404).json({ message: "No file attached to this feedback" });
+      }
+    }
+
+    // Construct file path
+    let filePath;
+    if (path.isAbsolute(feedback.file.filepath)) {
+      filePath = feedback.file.filepath;
+    } else {
+      filePath = path.join(process.cwd(), feedback.file.filepath);
+    }
+
+    // Check if file exists
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ message: "File not found on server" });
+    }
+
+    // Send file for inline viewing
+    res.setHeader('Content-Type', feedback.file.mimetype);
+    res.setHeader('Content-Disposition', `inline; filename="${feedback.file.filename}"`);
+    const fileStream = fs.createReadStream(filePath);
+    fileStream.pipe(res);
+  } catch (error) {
+    console.error("Error viewing feedback file:", error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Get feedback comments (for students)
+export const getFeedbackComments = async (req, res) => {
+  try {
+    const { feedbackId } = req.params;
+
+    const feedback = await Feedback.findById(feedbackId);
+    if (!feedback) {
+      return res.status(404).json({ message: "Feedback not found" });
+    }
+
+    // Verify authorization - student can only view comments on their own feedback
+    if (feedback.student.toString() !== req.user.id.toString()) {
+      return res.status(403).json({ message: "Unauthorized access" });
+    }
+
+    const comments = await FeedbackComment.find({ feedback: feedbackId })
+      .populate('createdBy', 'name email')
+      .populate('resolvedBy', 'name')
+      .sort({ createdAt: -1 });
+
+    res.json(comments);
+  } catch (error) {
+    console.error("Error fetching comments:", error);
     res.status(500).json({ message: error.message });
   }
 };
