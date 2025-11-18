@@ -24,6 +24,8 @@ import {
   getMyResearch,
   getMySchedules,
   getAdviserFeedback,
+  viewFeedbackFile,
+  getFeedbackComments,
   exportScheduleICS
 } from "../controllers/studentController.js";
 
@@ -123,6 +125,8 @@ router.post("/chapter-from-drive", uploadChapterFromDrive);
 router.get("/schedules", getMySchedules);
 router.get("/schedules/:id/export-ics", exportScheduleICS);
 router.get("/feedback", getAdviserFeedback);
+router.get("/feedback/view/:feedbackId", viewFeedbackFile);
+router.get("/feedback/:feedbackId/comments", getFeedbackComments);
 
 // Get available consultation slots from adviser
 router.get("/available-slots", async (req, res) => {
