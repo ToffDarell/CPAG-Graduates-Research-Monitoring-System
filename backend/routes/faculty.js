@@ -63,7 +63,7 @@ router.get("/feedback/research/:researchId", getFeedbackByResearch);
 router.get("/feedback/download/:feedbackId", downloadFeedbackFile);
 
 // IMPORTANT: /feedback/view/:feedbackId must come BEFORE /feedback/:feedbackId/comments
-// to avoid route conflicts
+// to avoid route conflicts where "view" could be mistaken for a feedbackId
 router.get("/feedback/view/:feedbackId", viewFeedbackFile);
 
 router.get("/feedback/:feedbackId/comments", getFeedbackComments);
