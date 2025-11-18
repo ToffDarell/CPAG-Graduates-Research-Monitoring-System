@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { FaUpload, FaCalendar, FaBook, FaCheckCircle, FaClock, FaFileAlt, FaChartLine, FaSignOutAlt, FaBars, FaTimes as FaClose, FaTimesCircle, FaDownload, FaSearch, FaFilter, FaExclamationTriangle, FaChevronRight, FaInfoCircle, FaChevronDown, FaChevronUp, FaPaperclip, FaHistory } from "react-icons/fa";
+import { FaUpload, FaCalendar, FaBook, FaCheckCircle, FaClock, FaFileAlt, FaChartLine, FaSignOutAlt, FaBars, FaTimes as FaClose, FaTimesCircle, FaDownload, FaSearch, FaFilter, FaExclamationTriangle, FaChevronRight, FaInfoCircle, FaChevronDown, FaChevronUp, FaPaperclip, FaHistory, FaComments, FaEye } from "react-icons/fa";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import axios from "axios";
 import MySchedule from "../../components/MyScheduleComponent";
@@ -522,6 +522,7 @@ const GraduateDashboard = ({setUser}) => {
           </div>
         </div>
       </div>
+
     </div>
     </div>
   );
@@ -1139,7 +1140,7 @@ const ResearchChapters = ({
                                 <div className="mt-2 space-y-2">
                                   {submission.feedback.map((feedback) => (
                                     <div
-                                      key={feedback.id}
+                                      key={feedback.id || feedback._id}
                                       className="border border-gray-200 rounded-md px-3 py-2 bg-gray-50 text-sm text-gray-700"
                                     >
                                       <div className="flex items-center justify-between">
@@ -1149,21 +1150,36 @@ const ResearchChapters = ({
                                           {formatDateTime(feedback.createdAt)}
                                         </span>
                                       </div>
-                                      {feedback.hasFile && feedback.downloadUrl && (
-                                        <button
-                                          type="button"
-                                          className="mt-2 inline-flex items-center gap-1 text-[#7C1D23] hover:text-[#5a1519]"
-                                          onClick={() =>
-                                            downloadFile(
-                                              feedback.downloadUrl,
-                                              feedback.filename || "feedback"
-                                            )
-                                          }
-                                        >
-                                          <FaDownload className="text-xs" />
-                                          Download Attachment
-                                        </button>
-                                      )}
+                                      <div className="flex items-center gap-2 mt-2">
+                                        {feedback.file || feedback.hasFile ? (
+                                          <button
+                                            type="button"
+                                            onClick={() => navigate(`/feedback/${feedback._id || feedback.id}/view`)}
+                                            className="inline-flex items-center gap-1 text-xs px-2 py-1 bg-[#7C1D23] text-white rounded hover:bg-[#5a1519] transition-colors font-medium"
+                                          >
+                                            <FaEye className="text-xs" />
+                                            View Document
+                                            {(feedback.commentCount > 0 || feedback.totalComments > 0) && (
+                                              <span className="ml-1">({feedback.commentCount || feedback.totalComments})</span>
+                                            )}
+                                          </button>
+                                        ) : null}
+                                        {feedback.hasFile && feedback.downloadUrl && (
+                                          <button
+                                            type="button"
+                                            className="inline-flex items-center gap-1 text-xs px-2 py-1 text-[#7C1D23] hover:text-[#5a1519] border border-[#7C1D23] rounded hover:bg-[#7C1D23] hover:text-white transition-colors"
+                                            onClick={() =>
+                                              downloadFile(
+                                                feedback.downloadUrl,
+                                                feedback.filename || "feedback"
+                                              )
+                                            }
+                                          >
+                                            <FaDownload className="text-xs" />
+                                            Download
+                                          </button>
+                                        )}
+                                      </div>
                                     </div>
                                   ))}
                                 </div>
@@ -2159,15 +2175,34 @@ const ProgressTracking = ({ data, loading, error, onRefresh, fallback, feedback 
                     }`}
                   >
                     <div className="flex items-center justify-between mb-1">
-                      <span className="text-sm font-semibold text-gray-800">
-                        {item.adviser?.name || "Adviser"}
-                      </span>
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-semibold text-gray-800">
+                          {item.adviser?.name || "Adviser"}
+                        </span>
+                        {item.commentCount > 0 && (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-yellow-100 text-yellow-800 rounded-full text-xs font-medium">
+                            <FaComments className="text-xs" />
+                            {item.commentCount} {item.commentCount === 1 ? 'comment' : 'comments'}
+                          </span>
+                        )}
+                      </div>
                       <span className="text-xs text-gray-400">
                         {new Date(item.createdAt).toLocaleDateString()}
                       </span>
                     </div>
                     <p className="text-xs text-gray-500 capitalize mb-1">{item.type}</p>
-                    <p className="text-sm text-gray-700">{item.message}</p>
+                    <p className="text-sm text-gray-700 mb-2">{item.message}</p>
+                    {item.file && (
+                      <button
+                        onClick={() => navigate(`/feedback/${item._id}/view`)}
+                        className="inline-flex items-center gap-1 text-xs px-3 py-1.5 bg-[#7C1D23] text-white rounded-md hover:bg-[#5a1519] transition-colors font-medium shadow-sm"
+                      >
+                        <FaEye className="text-xs" />
+                        {item.totalComments > 0 || item.commentCount > 0 
+                          ? `View Feedback (${item.totalComments || item.commentCount})`
+                          : 'View Document'}
+                      </button>
+                    )}
                   </div>
                 ))
               ) : (
