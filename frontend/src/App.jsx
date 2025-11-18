@@ -19,6 +19,7 @@ import FacultyAdviserDashboard from "./pages/Dashboard/FacultyAdviser";
 import GraduateDashboard from "./pages/Dashboard/Graduate";
 import ProgramHeadDashboard from "./pages/Dashboard/ProgramHead";
 import PanelReview from "./pages/PanelReview";
+import ViewFeedback from "./pages/ViewFeedback";
 
 function App() {
   const [user, setUser] = useState(null);
@@ -177,6 +178,18 @@ function App() {
           element={
             user?.role === "graduate student" ? (
               <GraduateDashboard setUser={setUser} />
+            ) : (
+              <Navigate to="/login" />
+            )
+          }
+        />
+        
+        {/* View Feedback with Comments Route (Student only) */}
+        <Route
+          path="/feedback/:feedbackId/view"
+          element={
+            user?.role === "graduate student" ? (
+              <ViewFeedback setUser={setUser} />
             ) : (
               <Navigate to="/login" />
             )
