@@ -94,6 +94,61 @@ export const approveRejectSubmission = async (req, res) => {
     form.status = action; // "approved" or "rejected"
     await research.save();
 
+    // Prepare file information from form
+    let fileInfo = null;
+    console.log('[APPROVE SUBMISSION] Form file info:', {
+      hasFilepath: !!form.filepath,
+      filepath: form.filepath,
+      filename: form.filename,
+      formType: form.type
+    });
+    
+    if (form.filepath) {
+      // Get file stats if file exists
+      let filesize = null;
+      try {
+        const filePath = path.isAbsolute(form.filepath) 
+          ? form.filepath 
+          : path.join(process.cwd(), form.filepath);
+        console.log('[APPROVE SUBMISSION] Checking file at:', filePath);
+        if (fs.existsSync(filePath)) {
+          const stats = fs.statSync(filePath);
+          filesize = stats.size;
+          console.log('[APPROVE SUBMISSION] File found, size:', filesize);
+        } else {
+          console.log('[APPROVE SUBMISSION] File not found at path:', filePath);
+        }
+      } catch (error) {
+        console.error('[APPROVE SUBMISSION] Error getting file stats:', error);
+      }
+
+      // Try to determine mimetype from filename
+      let mimetype = null;
+      if (form.filename) {
+        const ext = path.extname(form.filename).toLowerCase();
+        const mimeTypes = {
+          '.pdf': 'application/pdf',
+          '.doc': 'application/msword',
+          '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          '.jpg': 'image/jpeg',
+          '.jpeg': 'image/jpeg',
+          '.png': 'image/png',
+        };
+        mimetype = mimeTypes[ext] || 'application/octet-stream';
+      }
+
+      fileInfo = {
+        filename: form.filename || 'document',
+        filepath: form.filepath,
+        filesize: filesize,
+        mimetype: mimetype,
+        uploadedAt: form.uploadedAt || new Date()
+      };
+      console.log('[APPROVE SUBMISSION] File info prepared:', fileInfo);
+    } else {
+      console.log('[APPROVE SUBMISSION] WARNING: Form has no filepath!');
+    }
+
     // Create feedback record
     const feedback = new Feedback({
       research: researchId,
@@ -101,6 +156,8 @@ export const approveRejectSubmission = async (req, res) => {
       adviser: req.user.id,
       type: action === "approved" ? "approval" : "rejection",
       message,
+      file: fileInfo, // Attach the file information from the form
+      category: action === "approved" ? "approval" : "revision_request"
     });
 
     await feedback.save();
@@ -319,9 +376,18 @@ export const downloadFeedbackFile = async (req, res) => {
 export const viewFeedbackFile = async (req, res) => {
   try {
     const { feedbackId } = req.params;
+    console.log('[VIEW FEEDBACK FILE] Request received:', {
+      feedbackId,
+      method: req.method,
+      path: req.path,
+      originalUrl: req.originalUrl,
+      userId: req.user?.id,
+      userRole: req.user?.role
+    });
 
     // Validate feedbackId format
     if (!feedbackId || feedbackId.length !== 24) {
+      console.log('[VIEW FEEDBACK FILE] Invalid feedbackId format:', feedbackId);
       return res.status(400).json({ message: "Invalid feedback ID format" });
     }
 
@@ -329,25 +395,103 @@ export const viewFeedbackFile = async (req, res) => {
     const feedback = await Feedback.findById(feedbackId);
     
     if (!feedback) {
+      console.log('[VIEW FEEDBACK FILE] Feedback not found:', feedbackId);
       return res.status(404).json({ message: "Feedback not found" });
     }
+
+    console.log('[VIEW FEEDBACK FILE] Feedback found:', {
+      feedbackId: feedback._id.toString(),
+      adviserId: feedback.adviser?.toString(),
+      hasFile: !!feedback.file,
+      filepath: feedback.file?.filepath
+    });
 
     // Verify authorization
     const feedbackAdviserId = feedback.adviser.toString();
     const currentUserId = req.user.id.toString();
 
     if (feedbackAdviserId !== currentUserId) {
+      console.log('[VIEW FEEDBACK FILE] Authorization failed:', {
+        feedbackAdviserId,
+        currentUserId
+      });
       return res.status(403).json({ 
         message: "Unauthorized access. You can only view feedback that you created." 
       });
     }
 
+    console.log('[VIEW FEEDBACK FILE] Authorization passed');
+
     // Now populate for response
     await feedback.populate('student', 'name email');
     await feedback.populate('adviser', 'name email');
+    await feedback.populate('research', 'forms');
 
+    // If feedback doesn't have a file, try to get it from the research form
     if (!feedback.file || !feedback.file.filepath) {
-      return res.status(404).json({ message: "No file attached to this feedback" });
+      console.log('[VIEW FEEDBACK FILE] No file attached to feedback, checking research forms...');
+      
+      // Try to find the file from research forms
+      if (feedback.research && feedback.research.forms && feedback.research.forms.length > 0) {
+        // Find the most recent form with a file
+        const formWithFile = feedback.research.forms
+          .filter(f => f.filepath)
+          .sort((a, b) => new Date(b.uploadedAt || 0) - new Date(a.uploadedAt || 0))[0];
+        
+        if (formWithFile) {
+          console.log('[VIEW FEEDBACK FILE] Found file in research form:', formWithFile.filename);
+          
+          // Get file stats
+          let filesize = null;
+          let mimetype = null;
+          
+          try {
+            const filePath = path.isAbsolute(formWithFile.filepath) 
+              ? formWithFile.filepath 
+              : path.join(process.cwd(), formWithFile.filepath);
+            
+            if (fs.existsSync(filePath)) {
+              const stats = fs.statSync(filePath);
+              filesize = stats.size;
+              
+              // Determine mimetype from extension
+              if (formWithFile.filename) {
+                const ext = path.extname(formWithFile.filename).toLowerCase();
+                const mimeTypes = {
+                  '.pdf': 'application/pdf',
+                  '.doc': 'application/msword',
+                  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                  '.jpg': 'image/jpeg',
+                  '.jpeg': 'image/jpeg',
+                  '.png': 'image/png',
+                };
+                mimetype = mimeTypes[ext] || 'application/octet-stream';
+              }
+              
+              // Use the form's file
+              feedback.file = {
+                filename: formWithFile.filename || 'document',
+                filepath: formWithFile.filepath,
+                filesize: filesize,
+                mimetype: mimetype,
+                uploadedAt: formWithFile.uploadedAt || new Date()
+              };
+              
+              console.log('[VIEW FEEDBACK FILE] Using file from research form:', feedback.file);
+            } else {
+              console.log('[VIEW FEEDBACK FILE] File from form not found on disk:', filePath);
+            }
+          } catch (error) {
+            console.error('[VIEW FEEDBACK FILE] Error accessing form file:', error);
+          }
+        }
+      }
+      
+      // If still no file, return error
+      if (!feedback.file || !feedback.file.filepath) {
+        console.log('[VIEW FEEDBACK FILE] No file found in feedback or research forms');
+        return res.status(404).json({ message: "No file attached to this feedback" });
+      }
     }
 
     // Construct file path
@@ -358,10 +502,15 @@ export const viewFeedbackFile = async (req, res) => {
       filePath = path.join(process.cwd(), feedback.file.filepath);
     }
 
+    console.log('[VIEW FEEDBACK FILE] Checking file at path:', filePath);
+
     // Check if file exists
     if (!fs.existsSync(filePath)) {
+      console.log('[VIEW FEEDBACK FILE] File not found at path:', filePath);
       return res.status(404).json({ message: "File not found on server" });
     }
+
+    console.log('[VIEW FEEDBACK FILE] File found, sending response');
 
     // Send file for inline viewing
     res.setHeader('Content-Type', feedback.file.mimetype);
