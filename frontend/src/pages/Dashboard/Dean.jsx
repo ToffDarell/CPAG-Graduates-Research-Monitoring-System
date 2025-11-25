@@ -1,9 +1,20 @@
-import React, { useState, useEffect } from 'react';
-import { FaUsers, FaFolder, FaArchive, FaChartBar, FaUsersCog, FaFileAlt, FaPlus, FaSearch, FaEdit, FaTrash, FaTimes, FaSignOutAlt, FaBars, FaTimes as FaClose, FaDownload, FaEye, FaToggleOn, FaToggleOff, FaExclamationTriangle, FaHistory, FaCheck  } from 'react-icons/fa';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { FaUsers, FaFolder, FaArchive, FaChartBar, FaUsersCog, FaFileAlt, FaPlus, FaSearch, FaEdit, FaTrash, FaTimes, FaSignOutAlt, FaBars, FaTimes as FaClose, FaDownload, FaEye, FaToggleOn, FaToggleOff, FaExclamationTriangle, FaHistory, FaCheck, FaCog  } from 'react-icons/fa';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import axios from 'axios';
+import Settings from '../Settings';
+import { showSuccess, showError, showWarning, showConfirm, showDangerConfirm } from '../../utils/sweetAlert';
+import { checkPermission } from '../../utils/permissionChecker';
 
-const DeanDashboard = ({ setUser }) => {
+const API_BASE_URL =
+  import.meta.env.VITE_API_BASE_URL ||
+  (typeof window !== 'undefined' && window.location.origin.includes('localhost:5173')
+    ? 'http://localhost:5000'
+    : '');
+
+const buildApiUrl = (path) => `${API_BASE_URL}${path}`;
+
+const DeanDashboard = ({ setUser, user }) => {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   
@@ -30,6 +41,26 @@ const DeanDashboard = ({ setUser }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [archivedDocuments, setArchivedDocuments] = useState([]);
+  const [driveStatus, setDriveStatus] = useState({ connected: false, loading: true });
+  const [driveStatusError, setDriveStatusError] = useState("");
+  const [showSettings, setShowSettings] = useState(false);
+
+  const fetchDriveStatus = useCallback(async () => {
+    const token = localStorage.getItem('token');
+    if (!token) return;
+    setDriveStatus((prev) => ({ ...prev, loading: true }));
+    setDriveStatusError("");
+    try {
+      const res = await axios.get('/api/google-drive/status', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      setDriveStatus({ ...res.data, loading: false });
+    } catch (error) {
+      console.error('Error checking drive status:', error);
+      setDriveStatus((prev) => ({ ...prev, loading: false }));
+      setDriveStatusError(error.response?.data?.message || 'Unable to determine Google Drive connection status.');
+    }
+  }, []);
 
   // Initialize tab from URL on mount (only if URL has tab param and it differs from initial state)
   useEffect(() => {
@@ -51,13 +82,62 @@ const DeanDashboard = ({ setUser }) => {
     }
   }, [selectedTab]); // setSearchParams is stable, doesn't need to be in deps
 
+  // Track permission warnings shown per tab
+  const permissionWarningsRef = useRef({});
+
+  // Check permissions when tab changes
+  useEffect(() => {
+    const checkTabPermissions = async () => {
+      if (!selectedTab || permissionWarningsRef.current[selectedTab]) return;
+
+      const permissionMap = {
+        'faculty': { permissions: ['manage_users', 'view_users'], feature: 'Faculty Management', context: 'You will not be able to invite or manage faculty members.' },
+        'research': { permissions: ['view_research'], feature: 'Research Records', context: 'You will not be able to view research records.' },
+        'archive': { permissions: ['view_archives'], feature: 'Archived Projects', context: 'You will not be able to view archived projects.' },
+        'monitoring': { permissions: ['view_research'], feature: 'Monitoring & Evaluation', context: 'You will not be able to access monitoring features.' },
+        'panels': { permissions: ['manage_panels', 'assign_panels'], feature: 'Panel Assignment', context: 'You will not be able to assign or manage panels.' },
+        'documents': { permissions: ['view_documents'], feature: 'Documents', context: 'You will not be able to view or manage documents.' },
+        'archived-documents': { permissions: ['view_archives'], feature: 'Archived Documents', context: 'You will not be able to view archived documents.' },
+        'activity-logs': { permissions: ['view_activity'], feature: 'Activity Logs', context: 'You will not be able to view activity logs.' },
+      };
+
+      const tabConfig = permissionMap[selectedTab];
+      if (tabConfig) {
+        const hasPermission = await checkPermission(
+          tabConfig.permissions,
+          tabConfig.feature,
+          tabConfig.context
+        );
+        if (!hasPermission) {
+          permissionWarningsRef.current[selectedTab] = true;
+        }
+      }
+    };
+
+    checkTabPermissions();
+  }, [selectedTab]);
+
   // Fetch data on component mount
   useEffect(() => {
       fetchFaculty();
       fetchResearch();
       fetchAnalytics();
       fetchArchivedDocuments();
-    },[]);
+      fetchDriveStatus();
+    },[fetchDriveStatus]);
+
+  useEffect(() => {
+    const handleDriveMessage = (event) => {
+      if (event.origin !== window.location.origin) return;
+      if (event.data?.type === "DRIVE_CONNECT_SUCCESS") {
+        fetchDriveStatus();
+      }
+    };
+    window.addEventListener("message", handleDriveMessage);
+    return () => {
+      window.removeEventListener("message", handleDriveMessage);
+    };
+  }, [fetchDriveStatus]);
 
   const fetchFaculty = async () => {
     try {
@@ -118,9 +198,9 @@ const DeanDashboard = ({ setUser }) => {
       setShowAddFacultyModal(false);
       setNewFaculty({ name: '', email: '', role: 'faculty adviser' });
       fetchFaculty();
-      alert(res.data.message || 'Invitation sent successfully! Faculty member will receive an email to complete registration.');
+      await showSuccess('Invitation Sent', res.data.message || 'Invitation sent successfully! Faculty member will receive an email to complete registration.');
     } catch (error) {
-      alert(error.response?.data?.message || 'Error sending invitation');
+      showError('Error', error.response?.data?.message || 'Error sending invitation');
     } finally {
       setLoading(false);
     }
@@ -149,13 +229,13 @@ const DeanDashboard = ({ setUser }) => {
       setShowEditFacultyModal(false);
       setEditingFaculty(null);
       fetchFaculty();
-      alert('Faculty updated successfully!');
+      await showSuccess('Success', 'Faculty updated successfully!');
     } catch (error) {
       console.error('Update faculty error:', error);
       if (error.response?.data?.errors) {
-        alert('Validation errors:\n ' + error.response?.data?.errors.join('\n'));
+        showWarning('Validation Error', 'Validation errors:\n ' + error.response?.data?.errors.join('\n'));
       } else {
-        alert(error.response?.data?.message || 'Error updating faculty');
+        showError('Error', error.response?.data?.message || 'Error updating faculty');
       } 
     } finally {
       setLoading(false);
@@ -163,21 +243,23 @@ const DeanDashboard = ({ setUser }) => {
   }
 
   const handleDeleteFaculty = async (id) => {
-    if (!window.confirm('Are you sure you want to remove this faculty member?')) return;
+    const result = await showConfirm('Remove Faculty', 'Are you sure you want to remove this faculty member?');
+    if (!result.isConfirmed) return;
     try {
       const token = localStorage.getItem('token');
       await axios.delete(`/api/dean/faculty/${id}`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       fetchFaculty();
-      alert('Faculty removed successfully!');
+      await showSuccess('Success', 'Faculty removed successfully!');
     } catch (error) {
-      alert('Error removing faculty');
+      showError('Error', 'Error removing faculty');
     }
   };
 
   const handleArchiveResearch = async (id) => {
-    if (!window.confirm('Are you sure you want to archive this research?')) return;
+    const result = await showConfirm('Archive Research', 'Are you sure you want to archive this research?', 'Yes', 'Cancel');
+    if (!result.isConfirmed) return;
     try {
       const token = localStorage.getItem('token');
       await axios.put(`/api/dean/archive/${id}`, {}, {
@@ -185,11 +267,12 @@ const DeanDashboard = ({ setUser }) => {
       });
       fetchResearch();
       fetchAnalytics();
-      alert('Research archived successfully!');
+      await showSuccess('Success', 'Research archived successfully!');
     } catch (error) {
-      alert('Error archiving research');
+      showError('Error', error.response?.data?.message || 'Error archiving research');
     }
   };
+
 
   const handleArchiveDocument = async (id) => {
     if (!window.confirm('Are you sure you want to archive this document?')) return;
@@ -207,9 +290,10 @@ const DeanDashboard = ({ setUser }) => {
     }
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
     // Show confirmation dialog
-    if (window.confirm('Are you sure you want to log out?')) {
+    const result = await showConfirm('Log Out', 'Are you sure you want to log out?');
+    if (result.isConfirmed) {
       // Clear session data
       localStorage.removeItem('token');
       sessionStorage.removeItem('selectedRole');
@@ -221,6 +305,13 @@ const DeanDashboard = ({ setUser }) => {
       });
     }
   };
+
+  const handleOpenSettings = () => {
+    setSidebarOpen(false);
+    setShowSettings(true);
+  };
+
+  const handleCloseSettings = () => setShowSettings(false);
 
   const filteredFaculty = facultyList.filter(faculty =>
     faculty.name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -269,6 +360,7 @@ const DeanDashboard = ({ setUser }) => {
         return <ResearchRecords 
           stats={researchStats} 
           research={researchList}
+          driveStatus={driveStatus}
           onRefresh={() => {
             fetchResearch();
             fetchAnalytics();
@@ -287,7 +379,7 @@ const DeanDashboard = ({ setUser }) => {
       case 'panels':
         return <PanelAssignment research={researchList} faculty={facultyList} />;
       case 'documents':
-        return <DocumentManagement onArchive={fetchArchivedDocuments} />;
+        return <DocumentManagement onArchive={fetchArchivedDocuments} driveStatus={driveStatus} />;
       case 'archived-documents':
         return <ArchivedDocuments />;
       case 'activity-logs':
@@ -352,8 +444,21 @@ const DeanDashboard = ({ setUser }) => {
           </ul>
         </nav>
 
-        {/* Logout Button */}
-        <div className="p-4 border-t border-[#5a1519]">
+        {/* Settings & Logout Buttons */}
+        <div className="p-4 border-t border-[#5a1519] space-y-3">
+          <button
+            onClick={showSettings ? handleCloseSettings : handleOpenSettings}
+            className={`flex items-center space-x-3 px-4 py-3 rounded-lg transition-all duration-200 w-full ${
+              showSettings
+                ? "bg-white text-[#7C1D23]"
+                : "text-white bg-[#6e1b20] hover:bg-[#5a1519]"
+            }`}
+          >
+            <FaCog className="h-5 w-5" />
+            <span className="font-medium text-sm">
+              {showSettings ? "Close Settings" : "Settings"}
+            </span>
+          </button>
           <button
             onClick={handleLogout}
             className="flex items-center space-x-3 px-4 py-3 rounded-lg text-white hover:bg-red-600 transition-all duration-200 w-full"
@@ -430,11 +535,21 @@ const DeanDashboard = ({ setUser }) => {
           />
         </div>
 
+
         {/* Main Content Card */}
         <div className="bg-white rounded-lg shadow-md overflow-hidden border border-gray-200">
           {/* Content Area */}
           <div className="p-6 bg-white">
-            {renderContent()}
+            {showSettings ? (
+              <Settings
+                user={user}
+                setUser={setUser}
+                embedded
+                onClose={handleCloseSettings}
+              />
+            ) : (
+              renderContent()
+            )}
           </div>
         </div>
       </div>
@@ -1223,17 +1338,63 @@ const ResearchRecordDetailsModal = ({ research, isOpen, onClose, onDownload }) =
   );
 };
 
-const ResearchRecords = ({ stats, research, onRefresh }) => {
+const ResearchRecords = ({ stats, research, onRefresh, driveStatus }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
+  const [stageFilter, setStageFilter] = useState('all');
+  const [adviserFilter, setAdviserFilter] = useState('all');
   const [academicYearFilter, setAcademicYearFilter] = useState('all');
+  const [startDateFilter, setStartDateFilter] = useState('');
+  const [endDateFilter, setEndDateFilter] = useState('');
   const [filteredResearch, setFilteredResearch] = useState(research);
   const [selectedResearch, setSelectedResearch] = useState(null);
   const [showDetailsModal, setShowDetailsModal] = useState(false);
+  const [selectedResearchIds, setSelectedResearchIds] = useState([]);
+  const [bulkOperating, setBulkOperating] = useState(false);
+  const [showExportModal, setShowExportModal] = useState(false);
+  const [exportFormat, setExportFormat] = useState('pdf');
+  const [selectedFields, setSelectedFields] = useState([
+    'title', 'students', 'adviser', 'status', 'stage', 'progress', 
+    'panelMembers', 'submissionsPerStage', 'totalSubmissions', 'createdAt', 'updatedAt'
+  ]);
+  const [exporting, setExporting] = useState(false);
+  const previousResearchRef = useRef(research);
+
+  const driveConnected = driveStatus?.connected;
+  const adviserOptions = useMemo(() => {
+    const map = new Map();
+    (research || []).forEach((item) => {
+      if (item.adviser?._id && !map.has(item.adviser._id)) {
+        map.set(item.adviser._id, item.adviser);
+      }
+    });
+    return Array.from(map.values());
+  }, [research]);
 
   // Filter research based on search and filters
   useEffect(() => {
-    let filtered = research.filter(item => item.status !== 'archived');
+    // Safety check: ensure research is an array
+    if (!Array.isArray(research)) {
+      // If research becomes invalid but we had data before, keep the previous filtered results
+      // This prevents clearing when data is temporarily unavailable during operations
+      if (research === null || research === undefined) {
+        // Only clear if we never had data
+        if (!previousResearchRef.current || previousResearchRef.current.length === 0) {
+          setFilteredResearch([]);
+        }
+        // Otherwise, keep previous filtered results
+        return;
+      }
+      return;
+    }
+    
+    // Update ref with current research data (only if it's not empty)
+    if (research.length > 0) {
+      previousResearchRef.current = research;
+    }
+    
+    // Start with all non-archived research
+    let filtered = research.filter(item => item && item.status !== 'archived');
     
     // Search filter
     if (searchQuery) {
@@ -1251,16 +1412,124 @@ const ResearchRecords = ({ stats, research, onRefresh }) => {
       filtered = filtered.filter(item => item.status === statusFilter);
     }
     
+    // Stage filter
+    if (stageFilter !== 'all') {
+      filtered = filtered.filter(item => item.stage === stageFilter);
+    }
+    
+    // Adviser filter
+    if (adviserFilter !== 'all') {
+      filtered = filtered.filter(item => item.adviser?._id === adviserFilter);
+    }
+    
     // Academic year filter
     if (academicYearFilter !== 'all') {
       filtered = filtered.filter(item => {
+        if (!item.createdAt) return false;
         const year = new Date(item.createdAt).getFullYear();
         return year.toString() === academicYearFilter;
       });
     }
     
-    setFilteredResearch(filtered);
-  }, [research, searchQuery, statusFilter, academicYearFilter]);
+    // Date range filters - Improved to handle exact date matches and edge cases
+    if (startDateFilter && startDateFilter.trim() !== '') {
+      try {
+        // Parse the date filter string (format: YYYY-MM-DD)
+        const dateParts = startDateFilter.split('-');
+        if (dateParts.length === 3) {
+          const year = parseInt(dateParts[0], 10);
+          const month = parseInt(dateParts[1], 10);
+          const day = parseInt(dateParts[2], 10);
+          
+          if (!isNaN(year) && !isNaN(month) && !isNaN(day)) {
+            const startDateOnly = new Date(year, month - 1, day); // month is 0-indexed
+            
+            filtered = filtered.filter(item => {
+              if (!item.createdAt) return false;
+              try {
+                const itemDate = new Date(item.createdAt);
+                if (isNaN(itemDate.getTime())) return false;
+                
+                // Get date components in local timezone to avoid timezone issues
+                // This ensures we compare the actual calendar date, not the UTC date
+                const itemYear = itemDate.getFullYear();
+                const itemMonth = itemDate.getMonth();
+                const itemDay = itemDate.getDate();
+                
+                // Create date objects in local timezone for both
+                const itemDateOnly = new Date(itemYear, itemMonth, itemDay);
+                const filterDateOnly = new Date(year, month - 1, day);
+                
+                // Compare timestamps - both are in local timezone now
+                const itemTimestamp = itemDateOnly.getTime();
+                const filterTimestamp = filterDateOnly.getTime();
+                
+                return itemTimestamp >= filterTimestamp;
+              } catch (e) {
+                console.error('Error parsing item date:', e, item.createdAt);
+                return false;
+              }
+            });
+          }
+        }
+      } catch (error) {
+        console.error('Error parsing start date filter:', error, startDateFilter);
+      }
+    }
+    
+    if (endDateFilter && endDateFilter.trim() !== '') {
+      try {
+        // Parse the date filter string (format: YYYY-MM-DD)
+        const dateParts = endDateFilter.split('-');
+        if (dateParts.length === 3) {
+          const year = parseInt(dateParts[0], 10);
+          const month = parseInt(dateParts[1], 10);
+          const day = parseInt(dateParts[2], 10);
+          
+          if (!isNaN(year) && !isNaN(month) && !isNaN(day)) {
+            const endDateOnly = new Date(year, month - 1, day); // month is 0-indexed
+            
+            filtered = filtered.filter(item => {
+              if (!item.createdAt) return false;
+              try {
+                const itemDate = new Date(item.createdAt);
+                if (isNaN(itemDate.getTime())) return false;
+                
+                // Get date components in local timezone to avoid timezone issues
+                // This ensures we compare the actual calendar date, not the UTC date
+                const itemYear = itemDate.getFullYear();
+                const itemMonth = itemDate.getMonth();
+                const itemDay = itemDate.getDate();
+                
+                // Create date objects in local timezone for both
+                const itemDateOnly = new Date(itemYear, itemMonth, itemDay);
+                const filterDateOnly = new Date(year, month - 1, day);
+                
+                // Compare timestamps - both are in local timezone now
+                const itemTimestamp = itemDateOnly.getTime();
+                const filterTimestamp = filterDateOnly.getTime();
+                
+                return itemTimestamp <= filterTimestamp;
+              } catch (e) {
+                console.error('Error parsing item date:', e, item.createdAt);
+                return false;
+              }
+            });
+          }
+        }
+      } catch (error) {
+        console.error('Error parsing end date filter:', error, endDateFilter);
+      }
+    }
+    
+    // Update filteredResearch with the filtered results
+    // Only update if we have research data OR if research is explicitly empty (not just undefined)
+    // This prevents clearing the list when research is temporarily unavailable
+    if (Array.isArray(research)) {
+      setFilteredResearch(filtered);
+    }
+    // If research is not an array (null/undefined), we already handled it above
+  }, [research, searchQuery, statusFilter, stageFilter, adviserFilter, academicYearFilter, startDateFilter, endDateFilter]);
 
   const handleViewDetails = (researchItem) => {
     setSelectedResearch(researchItem);
@@ -1269,7 +1538,13 @@ const ResearchRecords = ({ stats, research, onRefresh }) => {
 
   const handleArchiveResearch = async (id, currentStatus) => {
     const action = currentStatus === 'archived' ? 'unarchive' : 'archive';
-    if (!window.confirm(`Are you sure you want to ${action} this research?`)) return;
+    const result = await showConfirm(
+      `${action === 'archive' ? 'Archive' : 'Unarchive'} Research`,
+      `Are you sure you want to ${action} this research?`,
+      'Yes',
+      'Cancel'
+    );
+    if (!result.isConfirmed) return;
     
     try {
       const token = localStorage.getItem('token');
@@ -1279,10 +1554,10 @@ const ResearchRecords = ({ stats, research, onRefresh }) => {
       
       // Refresh the research list
       if (onRefresh) onRefresh();
-      alert(`Research ${action}d successfully!`);
+      await showSuccess('Success', `Research ${action}d successfully!`);
     } catch (error) {
       console.error(`Error ${action}ing research:`, error);
-      alert(`Error ${action}ing research`);
+      showError('Error', error.response?.data?.message || `Error ${action}ing research`);
     }
   };
 
@@ -1304,7 +1579,171 @@ const ResearchRecords = ({ stats, research, onRefresh }) => {
       window.URL.revokeObjectURL(url);
     } catch (error) {
       console.error('Error downloading document:', error);
-      alert('Error downloading document');
+      showError('Error', error.response?.data?.message || 'Error downloading document');
+    }
+  };
+
+  // Bulk operation handlers
+  const handleBulkArchive = async () => {
+    if (selectedResearchIds.length === 0) {
+      showWarning('No Selection', 'Please select at least one research record to archive.');
+      return;
+    }
+
+    const selectedTitles = filteredResearch
+      .filter(r => selectedResearchIds.includes(r._id))
+      .map(r => r.title)
+      .slice(0, 5);
+
+    const result = await showConfirm(
+      'Archive Research Records',
+      `Are you sure you want to archive ${selectedResearchIds.length} research record(s)?\n\n${selectedTitles.join('\n')}${selectedResearchIds.length > 5 ? '\n...' : ''}`,
+      'Yes',
+      'Cancel'
+    );
+
+    if (!result.isConfirmed) return;
+
+    setBulkOperating(true);
+    try {
+      const token = localStorage.getItem('token');
+      const res = await axios.post(
+        '/api/dean/research/bulk-archive',
+        { researchIds: selectedResearchIds },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      await showSuccess('Success', res.data.message || `${res.data.count} research record(s) archived successfully.`);
+      setSelectedResearchIds([]);
+      if (onRefresh) onRefresh();
+    } catch (error) {
+      showError('Error', error.response?.data?.message || 'Failed to archive research records.');
+    } finally {
+      setBulkOperating(false);
+    }
+  };
+
+  const handleBulkApprove = async () => {
+    if (selectedResearchIds.length === 0) {
+      showWarning('No Selection', 'Please select at least one research record to approve.');
+      return;
+    }
+
+    const pendingRecords = filteredResearch.filter(r => 
+      selectedResearchIds.includes(r._id) && r.status === 'pending'
+    );
+
+    if (pendingRecords.length === 0) {
+      showWarning('No Pending Records', 'No pending research records found in the selection.');
+      return;
+    }
+
+    const selectedTitles = pendingRecords.map(r => r.title).slice(0, 5);
+
+    const result = await showConfirm(
+      'Approve Research Records',
+      `Are you sure you want to approve ${pendingRecords.length} research record(s)?\n\n${selectedTitles.join('\n')}${pendingRecords.length > 5 ? '\n...' : ''}`,
+      'Yes',
+      'Cancel'
+    );
+
+    if (!result.isConfirmed) return;
+
+    setBulkOperating(true);
+    try {
+      const token = localStorage.getItem('token');
+      const res = await axios.post(
+        '/api/dean/research/bulk-approve',
+        { researchIds: selectedResearchIds },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      await showSuccess('Success', res.data.message || `${res.data.count} research record(s) approved successfully.`);
+      setSelectedResearchIds([]);
+      if (onRefresh) onRefresh();
+    } catch (error) {
+      showError('Error', error.response?.data?.message || 'Failed to approve research records.');
+    } finally {
+      setBulkOperating(false);
+    }
+  };
+
+  const handleBulkShare = async () => {
+    if (selectedResearchIds.length === 0) {
+      showWarning('No Selection', 'Please select at least one research record to share.');
+      return;
+    }
+
+    setBulkOperating(true);
+    try {
+      const token = localStorage.getItem('token');
+      const res = await axios.post(
+        '/api/dean/research/bulk-share',
+        { researchIds: selectedResearchIds },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      await showSuccess('Success', res.data.message || `${res.data.count} research record(s) shared successfully.`);
+      setSelectedResearchIds([]);
+      if (onRefresh) onRefresh();
+    } catch (error) {
+      showError('Error', error.response?.data?.message || 'Failed to share research records.');
+    } finally {
+      setBulkOperating(false);
+    }
+  };
+
+  // Export handler
+  const handleExport = async () => {
+    if (!driveConnected) {
+      showWarning('Google Drive Not Connected', 'Please connect your Google Drive account in Settings before exporting.');
+      return;
+    }
+
+    setExporting(true);
+    try {
+      const token = localStorage.getItem('token');
+      const filters = {
+        status: statusFilter !== 'all' ? statusFilter : undefined,
+        stage: stageFilter !== 'all' ? stageFilter : undefined,
+        adviserId: adviserFilter !== 'all' ? adviserFilter : undefined,
+        startDate: startDateFilter || undefined,
+        endDate: endDateFilter || undefined,
+        academicYear: academicYearFilter !== 'all' ? academicYearFilter : undefined,
+      };
+
+      // Remove undefined values
+      Object.keys(filters).forEach(key => filters[key] === undefined && delete filters[key]);
+
+      const res = await axios.post(
+        '/api/dean/research/export',
+        {
+          format: exportFormat,
+          fields: selectedFields,
+          filters: filters
+        },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+
+      await showSuccess(
+        'Export Successful',
+        res.data.message || `Research records exported as ${exportFormat.toUpperCase()} and saved to your Google Drive Reports folder.`
+      );
+      setShowExportModal(false);
+    } catch (error) {
+      const errorMessage = error.response?.data?.message || 'Failed to export research records. Please try again.';
+      showError('Export Failed', errorMessage);
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const toggleField = (field) => {
+    if (selectedFields.includes(field)) {
+      if (field === 'title') {
+        showWarning('Required Field', 'Title field cannot be deselected.');
+        return;
+      }
+      setSelectedFields(selectedFields.filter(f => f !== field));
+    } else {
+      setSelectedFields([...selectedFields, field]);
     }
   };
 
@@ -1325,9 +1764,23 @@ const ResearchRecords = ({ stats, research, onRefresh }) => {
 
   return (
     <div className="space-y-5">
-      <div className="flex justify-between items-center">
-        <h2 className="text-xl font-bold text-gray-800">Research Records</h2>
-        <span className="text-sm text-gray-600">{filteredResearch.length} record(s) found</span>
+      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+        <div>
+          <h2 className="text-xl font-bold text-gray-800">Research Records</h2>
+          <p className="text-sm text-gray-500">Monitor submissions and manage research records</p>
+        </div>
+        <div className="flex items-center gap-3">
+          <span className="text-sm text-gray-600">{filteredResearch.length} record(s) found</span>
+          <button
+            onClick={() => setShowExportModal(true)}
+            disabled={!driveConnected || filteredResearch.length === 0}
+            className="px-4 py-2 bg-[#7C1D23] text-white rounded-md hover:bg-[#5a1519] transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm font-medium flex items-center gap-2"
+            title={!driveConnected ? 'Connect Google Drive to export' : 'Export Research Records'}
+          >
+            <FaDownload className="h-4 w-4" />
+            Export
+          </button>
+        </div>
       </div>
 
       {/* Statistics Cards */}
@@ -1397,8 +1850,99 @@ const ResearchRecords = ({ stats, research, onRefresh }) => {
               ))}
             </select>
           </div>
+
+          {/* Stage Filter */}
+          <div className="md:w-48">
+            <select
+              value={stageFilter}
+              onChange={(e) => setStageFilter(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-[#7C1D23] text-sm"
+            >
+              <option value="all">All Stages</option>
+              <option value="proposal">Proposal</option>
+              <option value="chapter1">Chapter 1</option>
+              <option value="chapter2">Chapter 2</option>
+              <option value="chapter3">Chapter 3</option>
+              <option value="defense">Defense</option>
+              <option value="final">Final</option>
+            </select>
+          </div>
+
+          {/* Adviser Filter */}
+          <div className="md:w-48">
+            <select
+              value={adviserFilter}
+              onChange={(e) => setAdviserFilter(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-[#7C1D23] text-sm"
+            >
+              <option value="all">All Advisers</option>
+              {adviserOptions.map(adviser => (
+                <option key={adviser._id} value={adviser._id}>{adviser.name}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        {/* Date Range Filters */}
+        <div className="flex flex-col md:flex-row gap-4 mt-4">
+          <div className="md:w-48">
+            <label className="block text-xs font-medium text-gray-700 mb-1">Start Date</label>
+            <input
+              type="date"
+              value={startDateFilter}
+              onChange={(e) => setStartDateFilter(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-[#7C1D23] text-sm"
+            />
+          </div>
+          <div className="md:w-48">
+            <label className="block text-xs font-medium text-gray-700 mb-1">End Date</label>
+            <input
+              type="date"
+              value={endDateFilter}
+              onChange={(e) => setEndDateFilter(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-[#7C1D23] text-sm"
+            />
+          </div>
         </div>
       </div>
+
+      {/* Bulk Operations Bar */}
+      {selectedResearchIds.length > 0 && (
+        <div className="bg-[#7C1D23] text-white rounded-lg p-4 flex items-center justify-between">
+          <div className="flex items-center gap-4">
+            <span className="font-medium">{selectedResearchIds.length} record(s) selected</span>
+            <button
+              onClick={() => setSelectedResearchIds([])}
+              className="text-sm underline hover:no-underline"
+            >
+              Clear Selection
+            </button>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleBulkArchive}
+              disabled={bulkOperating}
+              className="px-4 py-2 bg-white text-[#7C1D23] rounded-md hover:bg-gray-100 transition-colors disabled:opacity-50 text-sm font-medium"
+            >
+              {bulkOperating ? 'Processing...' : 'Archive Selected'}
+            </button>
+            <button
+              onClick={handleBulkApprove}
+              disabled={bulkOperating || !filteredResearch.filter(r => selectedResearchIds.includes(r._id) && r.status === 'pending').length}
+              className="px-4 py-2 bg-white text-[#7C1D23] rounded-md hover:bg-gray-100 transition-colors disabled:opacity-50 text-sm font-medium"
+            >
+              {bulkOperating ? 'Processing...' : 'Approve Selected'}
+            </button>
+            <button
+              onClick={handleBulkShare}
+              disabled={bulkOperating}
+              className="px-4 py-2 bg-white text-[#7C1D23] rounded-md hover:bg-gray-100 transition-colors disabled:opacity-50 text-sm font-medium"
+            >
+              {bulkOperating ? 'Processing...' : 'Share Selected'}
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Research Records Table/List */}
       <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
@@ -1412,6 +1956,20 @@ const ResearchRecords = ({ stats, research, onRefresh }) => {
             <table className="min-w-full divide-y divide-gray-200">
               <thead className="bg-gray-50">
                 <tr>
+                  <th className="px-6 py-3 text-left">
+                    <input
+                      type="checkbox"
+                      checked={selectedResearchIds.length === filteredResearch.length && filteredResearch.length > 0}
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          setSelectedResearchIds(filteredResearch.map(r => r._id));
+                        } else {
+                          setSelectedResearchIds([]);
+                        }
+                      }}
+                      className="rounded border-gray-300 text-[#7C1D23] focus:ring-[#7C1D23]"
+                    />
+                  </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Research Title
                   </th>
@@ -1431,7 +1989,21 @@ const ResearchRecords = ({ stats, research, onRefresh }) => {
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
                 {filteredResearch.map((item) => (
-                  <tr key={item._id} className="hover:bg-gray-50 transition-colors">
+                  <tr key={item._id} className={`hover:bg-gray-50 transition-colors ${selectedResearchIds.includes(item._id) ? 'bg-blue-50' : ''}`}>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <input
+                        type="checkbox"
+                        checked={selectedResearchIds.includes(item._id)}
+                        onChange={(e) => {
+                          if (e.target.checked) {
+                            setSelectedResearchIds([...selectedResearchIds, item._id]);
+                          } else {
+                            setSelectedResearchIds(selectedResearchIds.filter(id => id !== item._id));
+                          }
+                        }}
+                        className="rounded border-gray-300 text-[#7C1D23] focus:ring-[#7C1D23]"
+                      />
+                    </td>
                     <td className="px-6 py-4">
                       <div className="text-sm font-medium text-gray-900">{item.title}</div>
                       <div className="text-xs text-gray-500">
@@ -1488,6 +2060,199 @@ const ResearchRecords = ({ stats, research, onRefresh }) => {
           onDownload={handleDownloadDocument}
         />
       )}
+
+      {/* Export Modal */}
+      {showExportModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4 py-6">
+          <div className="bg-white rounded-lg shadow-2xl max-w-4xl w-full max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between border-b border-gray-200 px-5 py-4">
+              <div>
+                <h3 className="text-lg font-semibold text-gray-900">Export Research Records</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowExportModal(false)}
+                className="text-gray-500 hover:text-gray-700"
+              >
+                <FaClose className="h-5 w-5" />
+              </button>
+            </div>
+            <div className="px-5 py-6 space-y-6">
+              {!driveConnected && (
+                <div className="rounded-md border border-yellow-200 bg-yellow-50 p-3 text-sm text-yellow-800">
+                  Connect your Google Drive account in the Settings tab to enable exports.
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Export Format</label>
+                  <div className="flex gap-4">
+                    <label className="inline-flex items-center gap-2 text-sm text-gray-700">
+                      <input
+                        type="radio"
+                        name="export-format"
+                        value="pdf"
+                        checked={exportFormat === 'pdf'}
+                        onChange={() => setExportFormat('pdf')}
+                      />
+                      PDF
+                    </label>
+                    <label className="inline-flex items-center gap-2 text-sm text-gray-700">
+                      <input
+                        type="radio"
+                        name="export-format"
+                        value="xlsx"
+                        checked={exportFormat === 'xlsx'}
+                        onChange={() => setExportFormat('xlsx')}
+                      />
+                      Excel (.xlsx)
+                    </label>
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Status</label>
+                  <select
+                    value={statusFilter}
+                    onChange={(e) => setStatusFilter(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
+                  >
+                    <option value="all">All Status</option>
+                    <option value="pending">Pending</option>
+                    <option value="approved">Approved</option>
+                    <option value="under review">Under Review</option>
+                    <option value="rejected">Rejected</option>
+                    <option value="completed">Completed</option>
+                    <option value="archived">Archived</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Stage</label>
+                  <select
+                    value={stageFilter}
+                    onChange={(e) => setStageFilter(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
+                  >
+                    <option value="all">All Stages</option>
+                    <option value="proposal">Proposal</option>
+                    <option value="chapter1">Chapter 1</option>
+                    <option value="chapter2">Chapter 2</option>
+                    <option value="chapter3">Chapter 3</option>
+                    <option value="defense">Defense</option>
+                    <option value="final">Final</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Adviser</label>
+                  <select
+                    value={adviserFilter}
+                    onChange={(e) => setAdviserFilter(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
+                  >
+                    <option value="all">All Advisers</option>
+                    {adviserOptions.map((adviser) => (
+                      <option key={adviser._id} value={adviser._id}>
+                        {adviser.name} {adviser.email ? `(${adviser.email})` : ''}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Academic Year</label>
+                  <select
+                    value={academicYearFilter}
+                    onChange={(e) => setAcademicYearFilter(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
+                  >
+                    <option value="all">All Years</option>
+                    {academicYears.map((year) => (
+                      <option key={year} value={year}>{year}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Start Date</label>
+                    <input
+                      type="date"
+                      value={startDateFilter}
+                      onChange={(e) => setStartDateFilter(e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">End Date</label>
+                    <input
+                      type="date"
+                      value={endDateFilter}
+                      onChange={(e) => setEndDateFilter(e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Data Fields</label>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {[
+                    { key: 'title', label: 'Research Title', required: true },
+                    { key: 'students', label: 'Students' },
+                    { key: 'adviser', label: 'Adviser' },
+                    { key: 'status', label: 'Status' },
+                    { key: 'stage', label: 'Stage' },
+                    { key: 'progress', label: 'Progress (%)' },
+                    { key: 'panelMembers', label: 'Panel Members' },
+                    { key: 'submissionsPerStage', label: 'Submissions per Stage' },
+                    { key: 'totalSubmissions', label: 'Total Submissions' },
+                    { key: 'createdAt', label: 'Created Date' },
+                    { key: 'updatedAt', label: 'Last Updated' },
+                    { key: 'academicYear', label: 'Academic Year' },
+                  ].map((field) => (
+                    <label key={field.key} className="flex items-center gap-2 text-sm text-gray-700 border border-gray-200 rounded-md px-3 py-2">
+                      <input
+                        type="checkbox"
+                        checked={selectedFields.includes(field.key)}
+                        onChange={() => toggleField(field.key)}
+                        disabled={field.required}
+                        className="rounded border-gray-300 text-[#7C1D23] focus:ring-[#7C1D23]"
+                      />
+                      <span>
+                        {field.label}
+                        {field.required && <span className="text-xs text-gray-500 ml-1">(Required)</span>}
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-3 border-t border-gray-200 pt-4">
+                <button
+                  type="button"
+                  onClick={() => setShowExportModal(false)}
+                  className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-md hover:bg-gray-200"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleExport}
+                  disabled={exporting || !driveConnected || selectedFields.length === 0}
+                  className="px-4 py-2 text-sm font-semibold text-white bg-[#7C1D23] rounded-md hover:bg-[#5a1519] disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {exporting ? 'Exporting…' : 'Save to Drive'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
@@ -1498,6 +2263,8 @@ const ArchiveProjects = ({ research, onRefresh }) => {
   const [selectedResearch, setSelectedResearch] = useState(null);
   const [showDetailsModal, setShowDetailsModal] = useState(false);
   const [dateFilter, setDateFilter] = useState('all');
+  const [selectedResearchIds, setSelectedResearchIds] = useState([]);
+  const [bulkOperating, setBulkOperating] = useState(false);
 
   useEffect(() => {
     let filtered = research;
@@ -1537,7 +2304,8 @@ const ArchiveProjects = ({ research, onRefresh }) => {
   }, [research, searchQuery, dateFilter]);
 
   const handleUnarchive = async (id) => {
-    if (!window.confirm('Are you sure you want to unarchive this research?')) return;
+    const result = await showConfirm('Unarchive Research', 'Are you sure you want to unarchive this research?', 'Yes', 'Cancel');
+    if (!result.isConfirmed) return;
     
     try {
       const token = localStorage.getItem('token');
@@ -1546,15 +2314,22 @@ const ArchiveProjects = ({ research, onRefresh }) => {
       });
       
       if (onRefresh) onRefresh();
-      alert('Research unarchived successfully!');
+      setSelectedResearchIds([]);
+      await showSuccess('Success', 'Research unarchived successfully!');
     } catch (error) {
       console.error('Error unarchiving research:', error);
-      alert('Error unarchiving research');
+      showError('Error', error.response?.data?.message || 'Error unarchiving research');
     }
   };
 
   const handlePermanentDeleteResearch = async (id) => {
-    if (!window.confirm('Are you sure you want to permanently delete this project?')) return;
+    const result = await showDangerConfirm(
+      'Permanent Delete',
+      'WARNING: This will PERMANENTLY delete this research project. This cannot be undone!',
+      'Yes',
+      'Cancel'
+    );
+    if (!result.isConfirmed) return;
     
     try {
       const token = localStorage.getItem('token');
@@ -1563,11 +2338,108 @@ const ArchiveProjects = ({ research, onRefresh }) => {
       });
       
       if (onRefresh) onRefresh();
-      alert('Research permanently deleted!');
+      setSelectedResearchIds([]);
+      await showSuccess('Success', 'Research permanently deleted!');
     } catch (error) {
       console.error('Error deleting research:', error);
-      alert(error.response?.data?.message || 'Error deleting research');
+      showError('Error', error.response?.data?.message || 'Error deleting research');
     }
+  };
+
+  const handleBulkUnarchive = async () => {
+    if (selectedResearchIds.length === 0) {
+      showWarning('No Selection', 'Please select at least one research project to unarchive.');
+      return;
+    }
+
+    const selectedTitles = filteredResearch
+      .filter(item => selectedResearchIds.includes(item._id))
+      .map(item => item.title)
+      .slice(0, 5);
+
+    const result = await showConfirm(
+      'Unarchive Research Projects',
+      `Are you sure you want to unarchive ${selectedResearchIds.length} research project(s)?\n\n${selectedTitles.join('\n')}${selectedResearchIds.length > 5 ? '\n...' : ''}`,
+      'Yes',
+      'Cancel'
+    );
+    if (!result.isConfirmed) return;
+
+    try {
+      setBulkOperating(true);
+      const token = localStorage.getItem('token');
+      
+      const promises = selectedResearchIds.map(id =>
+        axios.put(`/api/dean/archive/${id}`, {}, {
+          headers: { Authorization: `Bearer ${token}` }
+        })
+      );
+
+      await Promise.all(promises);
+      await showSuccess('Success', `${selectedResearchIds.length} research project(s) unarchived successfully.`);
+      setSelectedResearchIds([]);
+      if (onRefresh) onRefresh();
+    } catch (error) {
+      console.error('Error unarchiving research projects:', error);
+      showError('Error', error.response?.data?.message || 'Failed to unarchive research projects.');
+    } finally {
+      setBulkOperating(false);
+    }
+  };
+
+  const handleBulkPermanentDelete = async () => {
+    if (selectedResearchIds.length === 0) {
+      showWarning('No Selection', 'Please select at least one research project to delete.');
+      return;
+    }
+
+    const selectedTitles = filteredResearch
+      .filter(item => selectedResearchIds.includes(item._id))
+      .map(item => item.title)
+      .slice(0, 5);
+
+    const result = await showDangerConfirm(
+      'Permanent Delete',
+      `WARNING: This will PERMANENTLY delete ${selectedResearchIds.length} research project(s). This cannot be undone!`,
+      'Yes',
+      'Cancel'
+    );
+    if (!result.isConfirmed) return;
+
+    try {
+      setBulkOperating(true);
+      const token = localStorage.getItem('token');
+      
+      const promises = selectedResearchIds.map(id =>
+        axios.delete(`/api/dean/research/${id}`, {
+          headers: { Authorization: `Bearer ${token}` }
+        })
+      );
+
+      await Promise.all(promises);
+      await showSuccess('Success', `${selectedResearchIds.length} research project(s) permanently deleted.`);
+      setSelectedResearchIds([]);
+      if (onRefresh) onRefresh();
+    } catch (error) {
+      console.error('Error deleting research projects:', error);
+      showError('Error', error.response?.data?.message || 'Failed to delete research projects.');
+    } finally {
+      setBulkOperating(false);
+    }
+  };
+
+  const getStatusColor = (status) => {
+    const colors = {
+      'approved': 'bg-green-100 text-green-700 border-green-300',
+      'pending': 'bg-yellow-100 text-yellow-700 border-yellow-300',
+      'under review': 'bg-blue-100 text-blue-700 border-blue-300',
+      'in-progress': 'bg-blue-100 text-blue-700 border-blue-300',
+      'in progress': 'bg-blue-100 text-blue-700 border-blue-300',
+      'rejected': 'bg-red-100 text-red-700 border-red-300',
+      'completed': 'bg-purple-100 text-purple-700 border-purple-300',
+      'archived': 'bg-gray-100 text-gray-700 border-gray-300'
+    };
+    return colors[status?.toLowerCase()] || 'bg-gray-100 text-gray-700 border-gray-300';
   };
 
   const handleViewDetails = (researchItem) => {
@@ -1593,7 +2465,7 @@ const ArchiveProjects = ({ research, onRefresh }) => {
       window.URL.revokeObjectURL(url);
     } catch (error) {
       console.error('Error downloading document:', error);
-      alert('Error downloading document');
+      showError('Error', error.response?.data?.message || 'Error downloading document');
     }
   };
 
@@ -1638,6 +2510,37 @@ const ArchiveProjects = ({ research, onRefresh }) => {
         </div>
       </div>
 
+      {/* Bulk Operations Bar */}
+      {selectedResearchIds.length > 0 && (
+        <div className="bg-[#7C1D23] text-white rounded-lg p-4 flex items-center justify-between">
+          <div className="flex items-center gap-4">
+            <span className="font-medium">{selectedResearchIds.length} record(s) selected</span>
+            <button
+              onClick={() => setSelectedResearchIds([])}
+              className="text-sm underline hover:no-underline"
+            >
+              Clear Selection
+            </button>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleBulkUnarchive}
+              disabled={bulkOperating}
+              className="px-4 py-2 bg-white text-[#7C1D23] rounded-md hover:bg-gray-100 transition-colors disabled:opacity-50 text-sm font-medium"
+            >
+              {bulkOperating ? 'Processing...' : 'Unarchive Selected'}
+            </button>
+            <button
+              onClick={handleBulkPermanentDelete}
+              disabled={bulkOperating}
+              className="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 transition-colors disabled:opacity-50 text-sm font-medium"
+            >
+              {bulkOperating ? 'Processing...' : 'Permanent Delete'}
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Archived Projects Table */}
       <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
         {filteredResearch.length === 0 ? (
@@ -1650,6 +2553,20 @@ const ArchiveProjects = ({ research, onRefresh }) => {
             <table className="min-w-full divide-y divide-gray-200">
               <thead className="bg-gray-50">
                 <tr>
+                  <th className="px-6 py-3 text-left">
+                    <input
+                      type="checkbox"
+                      checked={selectedResearchIds.length === filteredResearch.length && filteredResearch.length > 0}
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          setSelectedResearchIds(filteredResearch.map(item => item._id));
+                        } else {
+                          setSelectedResearchIds([]);
+                        }
+                      }}
+                      className="rounded border-gray-300 text-[#7C1D23] focus:ring-[#7C1D23]"
+                    />
+                  </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Research Title
                   </th>
@@ -1659,6 +2576,9 @@ const ArchiveProjects = ({ research, onRefresh }) => {
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Archived Date
                   </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Status
+                  </th>
                   <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Actions
                   </th>
@@ -1666,7 +2586,21 @@ const ArchiveProjects = ({ research, onRefresh }) => {
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
                 {filteredResearch.map((item) => (
-                  <tr key={item._id} className="hover:bg-gray-50 transition-colors">
+                  <tr key={item._id} className={`hover:bg-gray-50 transition-colors ${selectedResearchIds.includes(item._id) ? 'bg-blue-50' : ''}`}>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <input
+                        type="checkbox"
+                        checked={selectedResearchIds.includes(item._id)}
+                        onChange={(e) => {
+                          if (e.target.checked) {
+                            setSelectedResearchIds([...selectedResearchIds, item._id]);
+                          } else {
+                            setSelectedResearchIds(selectedResearchIds.filter(id => id !== item._id));
+                          }
+                        }}
+                        className="rounded border-gray-300 text-[#7C1D23] focus:ring-[#7C1D23]"
+                      />
+                    </td>
                     <td className="px-6 py-4">
                       <div className="text-sm font-medium text-gray-900">{item.title}</div>
                       <div className="text-xs text-gray-500">
@@ -1679,6 +2613,18 @@ const ArchiveProjects = ({ research, onRefresh }) => {
                     </td>
                     <td className="px-6 py-4 text-sm text-gray-500">
                       {item.archivedAt ? new Date(item.archivedAt).toLocaleDateString() : new Date(item.updatedAt).toLocaleDateString()}
+                    </td>
+                    <td className="px-6 py-4">
+                      {(() => {
+                        // Display original status if available, otherwise show a fallback
+                        const displayStatus = item.statusBeforeArchive || (item.status === 'archived' ? null : item.status);
+                        const statusToShow = displayStatus || 'pending'; // Default to 'pending' if archived without original status
+                        return (
+                          <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium border ${getStatusColor(statusToShow)}`}>
+                            {statusToShow}
+                          </span>
+                        );
+                      })()}
                     </td>
                     <td className="px-6 py-4 text-right text-sm font-medium">
                       <div className="flex items-center justify-end space-x-2">
@@ -1906,6 +2852,8 @@ const ArchivedDocuments = () => {
   const [loading, setLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('all');
+  const [selectedDocumentIds, setSelectedDocumentIds] = useState([]);
+  const [bulkOperating, setBulkOperating] = useState(false);
 
   useEffect(() => {
     fetchArchivedDocuments();
@@ -1921,14 +2869,15 @@ const ArchivedDocuments = () => {
       setDocuments(res.data);
     } catch (error) {
       console.error('Error fetching archived documents:', error);
-      alert('Error fetching archived documents');
+      showError('Error', 'Error fetching archived documents');
     } finally {
       setLoading(false);
     }
   };
 
   const handleRestoreDocument = async (id) => {
-    if (!window.confirm('Are you sure you want to restore this document?')) return;
+    const result = await showConfirm('Restore Document', 'Are you sure you want to restore this document?', 'Yes', 'Cancel');
+    if (!result.isConfirmed) return;
     
     try {
       const token = localStorage.getItem('token');
@@ -1936,26 +2885,11 @@ const ArchivedDocuments = () => {
         headers: { Authorization: `Bearer ${token}` }
       });
       fetchArchivedDocuments();
-      alert('Document restored successfully!');
+      setSelectedDocumentIds([]);
+      await showSuccess('Success', 'Document restored successfully!');
     } catch (error) {
       console.error('Error restoring document:', error);
-      alert('Error restoring document');
-    }
-  };
-
-  const handlePermanentDelete = async (id) => {
-    if (!window.confirm(' WARNING: This will PERMANENTLY delete the document and file. This cannot be undone! Are you sure?')) return;
-    
-    try {
-      const token = localStorage.getItem('token');
-      await axios.delete(`/api/dean/documents/${id}`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      fetchArchivedDocuments();
-      alert('Document permanently deleted!');
-    } catch (error) {
-      console.error('Error deleting document:', error);
-      alert('Error deleting document');
+      showError('Error', 'Error restoring document');
     }
   };
 
@@ -1965,6 +2899,111 @@ const ArchivedDocuments = () => {
     const matchesCategory = selectedCategory === 'all' || doc.category === selectedCategory;
     return matchesSearch && matchesCategory;
   });
+
+  const handlePermanentDelete = async (id) => {
+    const result = await showDangerConfirm(
+      'Permanent Delete',
+      'WARNING: This will PERMANENTLY delete the document and file. This cannot be undone!\n\nAre you sure you want to permanently delete this document?',
+      'Yes',
+      'Cancel'
+    );
+    if (!result.isConfirmed) return;
+    
+    try {
+      const token = localStorage.getItem('token');
+      await axios.delete(`/api/dean/documents/${id}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      fetchArchivedDocuments();
+      setSelectedDocumentIds([]);
+      await showSuccess('Success', 'Document permanently deleted!');
+    } catch (error) {
+      console.error('Error deleting document:', error);
+      showError('Error', error.response?.data?.message || 'Error deleting document');
+    }
+  };
+
+  const handleBulkRestore = async () => {
+    if (selectedDocumentIds.length === 0) {
+      showWarning('No Selection', 'Please select at least one document to restore.');
+      return;
+    }
+
+    const selectedTitles = filteredDocuments
+      .filter(doc => selectedDocumentIds.includes(doc._id))
+      .map(doc => doc.title)
+      .slice(0, 5);
+
+    const result = await showConfirm(
+      'Restore Documents',
+      `Are you sure you want to restore ${selectedDocumentIds.length} document(s)?\n\n${selectedTitles.join('\n')}${selectedDocumentIds.length > 5 ? '\n...' : ''}`,
+      'Yes',
+      'Cancel'
+    );
+    if (!result.isConfirmed) return;
+
+    try {
+      setBulkOperating(true);
+      const token = localStorage.getItem('token');
+      
+      const promises = selectedDocumentIds.map(id =>
+        axios.put(`/api/dean/documents/${id}/restore`, {}, {
+          headers: { Authorization: `Bearer ${token}` }
+        })
+      );
+
+      await Promise.all(promises);
+      await showSuccess('Success', `${selectedDocumentIds.length} document(s) restored successfully.`);
+      setSelectedDocumentIds([]);
+      fetchArchivedDocuments();
+    } catch (error) {
+      console.error('Error restoring documents:', error);
+      showError('Error', error.response?.data?.message || 'Failed to restore documents.');
+    } finally {
+      setBulkOperating(false);
+    }
+  };
+
+  const handleBulkPermanentDelete = async () => {
+    if (selectedDocumentIds.length === 0) {
+      showWarning('No Selection', 'Please select at least one document to delete.');
+      return;
+    }
+
+    const selectedTitles = filteredDocuments
+      .filter(doc => selectedDocumentIds.includes(doc._id))
+      .map(doc => doc.title)
+      .slice(0, 5);
+
+    const result = await showDangerConfirm(
+      'Permanent Delete',
+      `WARNING: This will PERMANENTLY delete ${selectedDocumentIds.length} document(s) and their files. This cannot be undone!\n\nAre you sure you want to permanently delete these documents?\n\n${selectedTitles.join('\n')}${selectedDocumentIds.length > 5 ? '\n...' : ''}`,
+      'Yes',
+      'Cancel'
+    );
+    if (!result.isConfirmed) return;
+
+    try {
+      setBulkOperating(true);
+      const token = localStorage.getItem('token');
+      
+      const promises = selectedDocumentIds.map(id =>
+        axios.delete(`/api/dean/documents/${id}`, {
+          headers: { Authorization: `Bearer ${token}` }
+        })
+      );
+
+      await Promise.all(promises);
+      await showSuccess('Success', `${selectedDocumentIds.length} document(s) permanently deleted.`);
+      setSelectedDocumentIds([]);
+      fetchArchivedDocuments();
+    } catch (error) {
+      console.error('Error deleting documents:', error);
+      showError('Error', error.response?.data?.message || 'Failed to delete documents.');
+    } finally {
+      setBulkOperating(false);
+    }
+  };
 
   const formatFileSize = (bytes) => {
     if (bytes === 0) return '0 Bytes';
@@ -2024,7 +3063,38 @@ const ArchivedDocuments = () => {
         </div>
       </div>
 
-      {/* Documents List */}
+      {/* Bulk Operations Bar */}
+      {selectedDocumentIds.length > 0 && (
+        <div className="bg-[#7C1D23] text-white rounded-lg p-4 flex items-center justify-between">
+          <div className="flex items-center gap-4">
+            <span className="font-medium">{selectedDocumentIds.length} record(s) selected</span>
+            <button
+              onClick={() => setSelectedDocumentIds([])}
+              className="text-sm underline hover:no-underline"
+            >
+              Clear Selection
+            </button>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleBulkRestore}
+              disabled={bulkOperating}
+              className="px-4 py-2 bg-white text-[#7C1D23] rounded-md hover:bg-gray-100 transition-colors disabled:opacity-50 text-sm font-medium"
+            >
+              {bulkOperating ? 'Processing...' : 'Unarchive Selected'}
+            </button>
+            <button
+              onClick={handleBulkPermanentDelete}
+              disabled={bulkOperating}
+              className="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 transition-colors disabled:opacity-50 text-sm font-medium"
+            >
+              {bulkOperating ? 'Processing...' : 'Permanent Delete'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Documents Table */}
       <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
         {loading ? (
           <div className="p-8 text-center">
@@ -2037,55 +3107,108 @@ const ArchivedDocuments = () => {
             <p className="mt-2 text-gray-500">No archived documents found.</p>
           </div>
         ) : (
-          <div className="divide-y divide-gray-200">
-            {filteredDocuments.map((doc) => (
-              <div key={doc._id} className="p-4 hover:bg-gray-50 transition-colors">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center space-x-4">
-                    <div className="flex-shrink-0">
-                      <div className="h-10 w-10 rounded-lg bg-gray-400 flex items-center justify-center">
-                        <FaFileAlt className="h-5 w-5 text-white" />
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-gray-200">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-6 py-3 text-left">
+                    <input
+                      type="checkbox"
+                      checked={selectedDocumentIds.length === filteredDocuments.length && filteredDocuments.length > 0}
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          setSelectedDocumentIds(filteredDocuments.map(doc => doc._id));
+                        } else {
+                          setSelectedDocumentIds([]);
+                        }
+                      }}
+                      className="rounded border-gray-300 text-[#7C1D23] focus:ring-[#7C1D23]"
+                    />
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Document Title
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Category
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    File Size
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Archived Date
+                  </th>
+                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Actions
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="bg-white divide-y divide-gray-200">
+                {filteredDocuments.map((doc) => (
+                  <tr key={doc._id} className={`hover:bg-gray-50 transition-colors ${selectedDocumentIds.includes(doc._id) ? 'bg-blue-50' : ''}`}>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <input
+                        type="checkbox"
+                        checked={selectedDocumentIds.includes(doc._id)}
+                        onChange={(e) => {
+                          if (e.target.checked) {
+                            setSelectedDocumentIds([...selectedDocumentIds, doc._id]);
+                          } else {
+                            setSelectedDocumentIds(selectedDocumentIds.filter(id => id !== doc._id));
+                          }
+                        }}
+                        className="rounded border-gray-300 text-[#7C1D23] focus:ring-[#7C1D23]"
+                      />
+                    </td>
+                    <td className="px-6 py-4">
+                      <div className="flex items-center space-x-3">
+                        <div className="flex-shrink-0">
+                          <div className="h-10 w-10 rounded-lg bg-gray-400 flex items-center justify-center">
+                            <FaFileAlt className="h-5 w-5 text-white" />
+                          </div>
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="text-sm font-medium text-gray-900 truncate">
+                            {doc.title}
+                          </div>
+                          <div className="text-xs text-gray-500 truncate">
+                            {doc.description || 'No description'}
+                          </div>
+                        </div>
                       </div>
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <h3 className="text-sm font-semibold text-gray-800 truncate">
-                        {doc.title}
-                      </h3>
-                      <p className="text-xs text-gray-600 mt-1">
-                        {doc.description || 'No description'}
-                      </p>
-                      <div className="flex items-center space-x-4 mt-2">
-                        <span className={`inline-block px-2 py-1 rounded-full text-xs font-medium ${getCategoryColor(doc.category)}`}>
-                          {doc.category}
-                        </span>
-                        <span className="text-xs text-gray-500">
-                          {formatFileSize(doc.fileSize)}
-                        </span>
-                        <span className="text-xs text-gray-500">
-                          Archived: {new Date(doc.updatedAt).toLocaleDateString()}
-                        </span>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <span className={`inline-block px-2 py-1 rounded-full text-xs font-medium ${getCategoryColor(doc.category)}`}>
+                        {doc.category}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                      {formatFileSize(doc.fileSize)}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                      {new Date(doc.updatedAt).toLocaleDateString()}
+                    </td>
+                    <td className="px-6 py-4 text-right text-sm font-medium">
+                      <div className="flex items-center justify-end space-x-2">
+                        <button
+                          onClick={() => handleRestoreDocument(doc._id)}
+                          className="text-green-600 hover:text-green-800 transition-colors"
+                          title="Unarchive document"
+                        >
+                          <FaArchive className="h-4 w-4" />
+                        </button>
+                        <button
+                          onClick={() => handlePermanentDelete(doc._id)}
+                          className="text-red-600 hover:text-red-800 transition-colors"
+                          title="Permanently delete"
+                        >
+                          <FaTrash className="h-4 w-4" />
+                        </button>
                       </div>
-                    </div>
-                  </div>
-                  <div className="flex items-center space-x-2">
-                    <button
-                      onClick={() => handleRestoreDocument(doc._id)}
-                      className="p-2 text-green-600 hover:text-green-800 transition-colors"
-                      title="Restore document"
-                    >
-                      <FaArchive className="h-4 w-4" />
-                    </button>
-                    <button
-                      onClick={() => handlePermanentDelete(doc._id)}
-                      className="p-2 text-red-600 hover:text-red-800 transition-colors"
-                      title="Permanently delete"
-                    >
-                      <FaTrash className="h-4 w-4" />
-                    </button>
-                  </div>
-                </div>
-              </div>
-            ))}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         )}
       </div>
@@ -2093,7 +3216,7 @@ const ArchivedDocuments = () => {
   );
 };
 
-const DocumentManagement = ({ onArchive }) => {
+const DocumentManagement = ({ onArchive, driveStatus }) => {
   const [documents, setDocuments] = useState([]);
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -2107,11 +3230,14 @@ const DocumentManagement = ({ onArchive }) => {
     accessibleTo: ['dean']
   });
   const [selectedFile, setSelectedFile] = useState(null);
+  const [selectedDocumentIds, setSelectedDocumentIds] = useState([]);
+  const [bulkOperating, setBulkOperating] = useState(false);
   
   // Add these state variables for document viewer
   const [viewingDocument, setViewingDocument] = useState(null);
   const [showDocumentViewer, setShowDocumentViewer] = useState(false);
   const [documentBlobUrl, setDocumentBlobUrl] = useState(null); 
+  const isDriveConnected = !!driveStatus?.connected;
 
   useEffect(() => {
     fetchDocuments();
@@ -2127,7 +3253,7 @@ const DocumentManagement = ({ onArchive }) => {
       setDocuments(res.data);
     } catch (error) {
       console.error('Error fetching documents:', error);
-      alert('Error fetching documents');
+      showError('Error', 'Error fetching documents');
     } finally {
       setLoading(false);
     }
@@ -2138,7 +3264,7 @@ const DocumentManagement = ({ onArchive }) => {
     if (file) {
       // Validate file size (max 10MB)
       if (file.size > 10 * 1024 * 1024) {
-        alert('File size must be less than 10MB');
+        showWarning('File Too Large', 'File size must be less than 10MB');
         return;
       }
       setSelectedFile(file);
@@ -2148,7 +3274,12 @@ const DocumentManagement = ({ onArchive }) => {
   const handleUpload = async (e) => {
     e.preventDefault();
     if (!selectedFile) {
-      alert('Please select a file to upload');
+      showWarning('No File Selected', 'Please select a file to upload');
+      return;
+    }
+
+    if (!isDriveConnected) {
+      showWarning('Drive Not Connected', 'Please connect your Google Drive account in Settings before uploading documents.');
       return;
     }
 
@@ -2186,59 +3317,161 @@ const DocumentManagement = ({ onArchive }) => {
       });
       setSelectedFile(null);
       fetchDocuments();
-      alert('Document uploaded successfully!');
+      await showSuccess('Success', 'Document uploaded successfully!');
     } catch (error) {
       console.error('Error uploading document:', error);
       console.error('Error response:', error.response?.data); // Debug log
-      alert(error.response?.data?.message || 'Error uploading document');
+      showError('Error', error.response?.data?.message || 'Error uploading document');
     } finally {
       setUploadLoading(false);
     }
   };
 
-// Handle delete with simple confirm dialogs
+// Handle delete with sweet alert dialogs - separate questions
 const handleDeleteDocument = async (doc) => {
-  const choice = window.confirm(
-    'Do you want to ARCHIVE this document (can be restored later)?\n\n' +
-    'Click OK to Archive\n' +
-    'Click Cancel to see Permanent Delete option'
+  // First question: Archive or Delete?
+  const actionResult = await showConfirm(
+    'Delete Document',
+    'What do you want to do with this document?',
+    'Yes',
+    'Cancel'
   );
 
-  if (choice) {
-    // User chose to archive
-    try {
-      const token = localStorage.getItem('token');
-      await axios.put(`/api/dean/documents/${doc._id}/archive`, {}, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      fetchDocuments();
-      if (onArchive) onArchive();
-      alert('Document archived successfully!');
-    } catch (error) {
-      console.error('Error archiving document:', error);
-      alert(error.response?.data?.message || 'Error archiving document');
-    }
-  } else {
-    // Ask if they want to permanently delete
-    const confirmDelete = window.confirm(
-      'WARNING: This will PERMANENTLY delete the document and file. This cannot be undone! Are you sure?'
+  if (actionResult.isConfirmed) {
+    // User clicked "Yes" - ask if they want to archive
+    const archiveResult = await showConfirm(
+      'Archive Document',
+      'Do you want to ARCHIVE this document? It can be restored later.',
+      'Yes',
+      'No, Delete Permanently',
+      true // Show close button (X)
     );
-    
-    if (confirmDelete) {
+
+    if (archiveResult.isConfirmed) {
+      // User chose to archive
       try {
         const token = localStorage.getItem('token');
-        await axios.delete(`/api/dean/documents/${doc._id}`, {
+        await axios.put(`/api/dean/documents/${doc._id}/archive`, {}, {
           headers: { Authorization: `Bearer ${token}` }
         });
         fetchDocuments();
-        alert('Document permanently deleted!');
+        if (onArchive) onArchive();
+        await showSuccess('Success', 'Document archived successfully!');
       } catch (error) {
-        console.error('Error deleting document:', error);
-        alert('Error deleting document');
+        console.error('Error archiving document:', error);
+        showError('Error', error.response?.data?.message || 'Error archiving document');
+      }
+    } else if (archiveResult.dismiss) {
+      // User clicked X button or dismissed the dialog - just close, don't proceed
+      return;
+    } else {
+      // User clicked "No, Delete Permanently" - ask for final confirmation
+      const deleteResult = await showDangerConfirm(
+        'Permanent Delete',
+        'WARNING: This will PERMANENTLY delete the document and file. This cannot be undone!\n\nAre you sure you want to permanently delete this document?',
+        'Yes',
+        'Cancel'
+      );
+      
+      if (deleteResult.isConfirmed) {
+        try {
+          const token = localStorage.getItem('token');
+          await axios.delete(`/api/dean/documents/${doc._id}`, {
+            headers: { Authorization: `Bearer ${token}` }
+          });
+          fetchDocuments();
+          await showSuccess('Success', 'Document permanently deleted!');
+        } catch (error) {
+          console.error('Error deleting document:', error);
+          showError('Error', error.response?.data?.message || 'Error deleting document');
+        }
       }
     }
   }
 };
+
+  const handleBulkArchive = async () => {
+    if (selectedDocumentIds.length === 0) {
+      showWarning('No Selection', 'Please select at least one document to archive.');
+      return;
+    }
+
+    const selectedTitles = filteredDocuments
+      .filter(doc => selectedDocumentIds.includes(doc._id))
+      .map(doc => doc.title)
+      .slice(0, 5);
+
+    const result = await showConfirm(
+      'Archive Documents',
+      `Are you sure you want to archive ${selectedDocumentIds.length} document(s)?\n\n${selectedTitles.join('\n')}${selectedDocumentIds.length > 5 ? '\n...' : ''}`,
+      'Yes',
+      'Cancel'
+    );
+    if (!result.isConfirmed) return;
+
+    try {
+      setBulkOperating(true);
+      const token = localStorage.getItem('token');
+      
+      const promises = selectedDocumentIds.map(id =>
+        axios.put(`/api/dean/documents/${id}/archive`, {}, {
+          headers: { Authorization: `Bearer ${token}` }
+        })
+      );
+
+      await Promise.all(promises);
+      await showSuccess('Success', `${selectedDocumentIds.length} document(s) archived successfully.`);
+      setSelectedDocumentIds([]);
+      fetchDocuments();
+      if (onArchive) onArchive();
+    } catch (error) {
+      console.error('Error archiving documents:', error);
+      showError('Error', error.response?.data?.message || 'Failed to archive documents.');
+    } finally {
+      setBulkOperating(false);
+    }
+  };
+
+  const handleBulkPermanentDelete = async () => {
+    if (selectedDocumentIds.length === 0) {
+      showWarning('No Selection', 'Please select at least one document to delete.');
+      return;
+    }
+
+    const selectedTitles = filteredDocuments
+      .filter(doc => selectedDocumentIds.includes(doc._id))
+      .map(doc => doc.title)
+      .slice(0, 5);
+
+    const result = await showDangerConfirm(
+      'Permanent Delete',
+      `WARNING: This will PERMANENTLY delete ${selectedDocumentIds.length} document(s) and their files. This cannot be undone!\n\nAre you sure you want to permanently delete these documents?\n\n${selectedTitles.join('\n')}${selectedDocumentIds.length > 5 ? '\n...' : ''}`,
+      'Yes',
+      'Cancel'
+    );
+    if (!result.isConfirmed) return;
+
+    try {
+      setBulkOperating(true);
+      const token = localStorage.getItem('token');
+      
+      const promises = selectedDocumentIds.map(id =>
+        axios.delete(`/api/dean/documents/${id}`, {
+          headers: { Authorization: `Bearer ${token}` }
+        })
+      );
+
+      await Promise.all(promises);
+      await showSuccess('Success', `${selectedDocumentIds.length} document(s) permanently deleted.`);
+      setSelectedDocumentIds([]);
+      fetchDocuments();
+    } catch (error) {
+      console.error('Error deleting documents:', error);
+      showError('Error', error.response?.data?.message || 'Failed to delete documents.');
+    } finally {
+      setBulkOperating(false);
+    }
+  };
 
   const handleDownload = async (doc) => {
     try {
@@ -2259,7 +3492,7 @@ const handleDeleteDocument = async (doc) => {
     } catch (error) {
       console.error('Error downloading document:', error);
       console.error('Error response:', error.response?.data);
-      alert('Error downloading document: ' + (error.response?.data?.message || error.message));
+      showError('Error', 'Error downloading document: ' + (error.response?.data?.message || error.message));
     }
   };
 
@@ -2281,7 +3514,7 @@ const handleDeleteDocument = async (doc) => {
       setShowDocumentViewer(true);
     } catch (error) {
       console.error('Error viewing document:', error);
-      alert('Error loading document preview');
+      showError('Error', 'Error loading document preview');
     }
   };
   
@@ -2368,7 +3601,38 @@ const handleDeleteDocument = async (doc) => {
         </div>
       </div>
 
-      {/* Documents List */}
+      {/* Bulk Operations Bar */}
+      {selectedDocumentIds.length > 0 && (
+        <div className="bg-[#7C1D23] text-white rounded-lg p-4 flex items-center justify-between">
+          <div className="flex items-center gap-4">
+            <span className="font-medium">{selectedDocumentIds.length} record(s) selected</span>
+            <button
+              onClick={() => setSelectedDocumentIds([])}
+              className="text-sm underline hover:no-underline"
+            >
+              Clear Selection
+            </button>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleBulkArchive}
+              disabled={bulkOperating}
+              className="px-4 py-2 bg-white text-[#7C1D23] rounded-md hover:bg-gray-100 transition-colors disabled:opacity-50 text-sm font-medium"
+            >
+              {bulkOperating ? 'Processing...' : 'Archive Selected'}
+            </button>
+            <button
+              onClick={handleBulkPermanentDelete}
+              disabled={bulkOperating}
+              className="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 transition-colors disabled:opacity-50 text-sm font-medium"
+            >
+              {bulkOperating ? 'Processing...' : 'Permanent Delete'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Documents Table */}
       <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
         {loading ? (
           <div className="p-8 text-center">
@@ -2381,65 +3645,121 @@ const handleDeleteDocument = async (doc) => {
             <p className="mt-2 text-gray-500">No documents uploaded yet.</p>
           </div>
         ) : (
-          <div className="divide-y divide-gray-200">
-            {filteredDocuments.map((doc) => (
-              <div key={doc._id} className="p-4 hover:bg-gray-50 transition-colors">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center space-x-4">
-                    <div className="flex-shrink-0">
-                      <div className="h-10 w-10 rounded-lg bg-[#7C1D23] flex items-center justify-center">
-                        <FaFileAlt className="h-5 w-5 text-white" />
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-gray-200">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-6 py-3 text-left">
+                    <input
+                      type="checkbox"
+                      checked={selectedDocumentIds.length === filteredDocuments.length && filteredDocuments.length > 0}
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          setSelectedDocumentIds(filteredDocuments.map(doc => doc._id));
+                        } else {
+                          setSelectedDocumentIds([]);
+                        }
+                      }}
+                      className="rounded border-gray-300 text-[#7C1D23] focus:ring-[#7C1D23]"
+                    />
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Document Title
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Category
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    File Size
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Uploaded By
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Upload Date
+                  </th>
+                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Actions
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="bg-white divide-y divide-gray-200">
+                {filteredDocuments.map((doc) => (
+                  <tr key={doc._id} className={`hover:bg-gray-50 transition-colors ${selectedDocumentIds.includes(doc._id) ? 'bg-blue-50' : ''}`}>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <input
+                        type="checkbox"
+                        checked={selectedDocumentIds.includes(doc._id)}
+                        onChange={(e) => {
+                          if (e.target.checked) {
+                            setSelectedDocumentIds([...selectedDocumentIds, doc._id]);
+                          } else {
+                            setSelectedDocumentIds(selectedDocumentIds.filter(id => id !== doc._id));
+                          }
+                        }}
+                        className="rounded border-gray-300 text-[#7C1D23] focus:ring-[#7C1D23]"
+                      />
+                    </td>
+                    <td className="px-6 py-4">
+                      <div className="flex items-center space-x-3">
+                        <div className="flex-shrink-0">
+                          <div className="h-10 w-10 rounded-lg bg-[#7C1D23] flex items-center justify-center">
+                            <FaFileAlt className="h-5 w-5 text-white" />
+                          </div>
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="text-sm font-medium text-gray-900 truncate">
+                            {doc.title}
+                          </div>
+                          <div className="text-xs text-gray-500 truncate">
+                            {doc.description || 'No description'}
+                          </div>
+                        </div>
                       </div>
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <h3 className="text-sm font-semibold text-gray-800 truncate">
-                        {doc.title}
-                      </h3>
-                      <p className="text-xs text-gray-600 mt-1">
-                        {doc.description || 'No description'}
-                      </p>
-                      <div className="flex items-center space-x-4 mt-2">
-                        <span className={`inline-block px-2 py-1 rounded-full text-xs font-medium ${getCategoryColor(doc.category)}`}>
-                          {doc.category}
-                        </span>
-                        <span className="text-xs text-gray-500">
-                          {formatFileSize(doc.fileSize)}
-                        </span>
-                        <span className="text-xs text-gray-500">
-                          Uploaded by {doc.uploadedBy?.name || 'Unknown'}
-                        </span>
-                        <span className="text-xs text-gray-500">
-                          {new Date(doc.createdAt).toLocaleDateString()}
-                        </span>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <span className={`inline-block px-2 py-1 rounded-full text-xs font-medium ${getCategoryColor(doc.category)}`}>
+                        {doc.category}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                      {formatFileSize(doc.fileSize)}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                      {doc.uploadedBy?.name || 'Unknown'}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                      {new Date(doc.createdAt).toLocaleDateString()}
+                    </td>
+                    <td className="px-6 py-4 text-right text-sm font-medium">
+                      <div className="flex items-center justify-end space-x-2">
+                        <button
+                          onClick={() => handleViewDocument(doc)}
+                          className="text-blue-600 hover:text-blue-800 transition-colors"
+                          title="View Document"
+                        >
+                          <FaEye className="h-4 w-4" />
+                        </button>
+                        <button
+                          onClick={() => handleDownload(doc)}
+                          className="text-[#7C1D23] hover:text-[#5a1519] transition-colors"
+                          title="Download"
+                        >
+                          <FaDownload className="h-4 w-4" />
+                        </button>
+                        <button
+                          onClick={() => handleDeleteDocument(doc)}
+                          className="text-red-600 hover:text-red-800 transition-colors"
+                          title="Delete"
+                        >
+                          <FaTrash className="h-4 w-4" />
+                        </button>
                       </div>
-                    </div>
-                  </div>
-                  <div className="flex items-center space-x-2">
-                    <button
-                      onClick={() => handleViewDocument(doc)}
-                      className="p-2 text-gray-600 hover:text-blue-600 transition-colors"
-                      title="View Document"
-                    >
-                      <FaEye className="h-4 w-4" />
-                    </button>
-                    <button
-                      onClick={() => handleDownload(doc)}
-                      className="p-2 text-gray-600 hover:text-[#7C1D23] transition-colors"
-                      title="Download"
-                    >
-                      <FaDownload className="h-4 w-4" />
-                    </button>
-                    <button
-                      onClick={() => handleDeleteDocument(doc)}
-                      className="p-2 text-gray-600 hover:text-red-600 transition-colors"
-                      title="Delete"
-                    >
-                      <FaTrash className="h-4 w-4" />
-                    </button>
-                  </div>
-                </div>
-              </div>
-            ))}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         )}
       </div>
@@ -2558,6 +3878,13 @@ const handleDeleteDocument = async (doc) => {
                       <p className="mt-1 text-sm text-gray-600">
                         Selected: {selectedFile.name} ({formatFileSize(selectedFile.size)})
                       </p>
+                    )}
+                    {!isDriveConnected && (
+                      <div className="mt-3 text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-md p-3">
+                        <span>
+                          Google Drive is not connected. Please connect your Drive account in Settings before uploading documents.
+                        </span>
+                      </div>
                     )}
                   </div>
                 </div>
