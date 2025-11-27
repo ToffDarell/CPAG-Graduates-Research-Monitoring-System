@@ -11,6 +11,7 @@ import Register from "./pages/Register";
 import RoleSelection from "./pages/RoleSelection";
 import ForgotPassword from "./pages/ForgotPassword";
 import ResetPassword from "./pages/ResetPassword";
+import DriveConnectionResult from "./pages/DriveConnectionResult";
 import { useEffect, useState } from "react";
 import axios from "axios";
 import NotFound from "./components/NotFound";
@@ -18,8 +19,10 @@ import DeanDashboard from "./pages/Dashboard/Dean";
 import FacultyAdviserDashboard from "./pages/Dashboard/FacultyAdviser";
 import GraduateDashboard from "./pages/Dashboard/Graduate";
 import ProgramHeadDashboard from "./pages/Dashboard/ProgramHead";
+import AdminDashboard from "./pages/Dashboard/Admin";
 import PanelReview from "./pages/PanelReview";
 import ViewFeedback from "./pages/ViewFeedback";
+import Settings from "./pages/Settings";
 
 function App() {
   const [user, setUser] = useState(null);
@@ -56,6 +59,7 @@ function App() {
   // Helper function to get dashboard path from role
   const getDashboardPath = (role) => {
     const roleMap = {
+      "admin": "admin",
       "dean": "dean",
       "faculty adviser": "faculty",
       "program head": "program-head",
@@ -147,7 +151,7 @@ function App() {
           path="/dashboard/dean"
           element={
             user?.role === "dean" ? (
-              <DeanDashboard setUser={setUser} />
+              <DeanDashboard setUser={setUser} user={user} />
             ) : (
               <Navigate to="/login" />
             )
@@ -157,7 +161,7 @@ function App() {
           path="/dashboard/faculty"
           element={
             user?.role === "faculty adviser" ? (
-              <FacultyAdviserDashboard setUser={setUser} />
+              <FacultyAdviserDashboard setUser={setUser} user={user} />
             ) : (
               <Navigate to="/login" />
             )
@@ -167,7 +171,7 @@ function App() {
           path="/dashboard/program-head"
           element={
             user?.role === "program head" ? (
-              <ProgramHeadDashboard setUser={setUser} />
+              <ProgramHeadDashboard setUser={setUser} user={user} />
             ) : (
               <Navigate to="/login" />
             )
@@ -177,7 +181,17 @@ function App() {
           path="/dashboard/graduate"
           element={
             user?.role === "graduate student" ? (
-              <GraduateDashboard setUser={setUser} />
+              <GraduateDashboard setUser={setUser} user={user} />
+            ) : (
+              <Navigate to="/login" />
+            )
+          }
+        />
+        <Route
+          path="/dashboard/admin"
+          element={
+            user?.role === "admin" ? (
+              <AdminDashboard setUser={setUser} user={user} />
             ) : (
               <Navigate to="/login" />
             )
@@ -200,6 +214,25 @@ function App() {
         <Route
           path="/panel-review/:token"
           element={<PanelReview />}
+        />
+
+        <Route
+          path="/drive/connected"
+          element={<DriveConnectionResult status="success" />}
+        />
+        <Route
+          path="/drive/error"
+          element={<DriveConnectionResult status="error" />}
+        />
+        <Route
+          path="/settings"
+          element={
+            user ? (
+              <Settings user={user} setUser={setUser} />
+            ) : (
+              <Navigate to="/login" />
+            )
+          }
         />
         
         <Route path="*" element={<NotFound />} />
