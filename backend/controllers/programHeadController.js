@@ -9,6 +9,43 @@ import crypto from "crypto";
 import fs from "fs";
 import path from "path";
 import { createConsultationEvent, deleteCalendarEvent } from "../utils/googleCalendar.js";
+import { uploadFileToDrive } from "../utils/googleDrive.js";
+
+const getPanelDriveFolderId = () => {
+  return (
+    process.env.GOOGLE_DRIVE_PANEL_DOCUMENTS_FOLDER_ID ||
+    process.env.GOOGLE_DRIVE_PROGRAM_HEAD_FORMS_FOLDER_ID ||
+    process.env.GOOGLE_DRIVE_DEFAULT_FOLDER_ID ||
+    null
+  );
+};
+
+const buildDriveTokens = (user) => {
+  if (!user) return null;
+  return {
+    access_token: user.driveAccessToken,
+    refresh_token: user.driveRefreshToken,
+    expiry_date: user.driveTokenExpiry ? user.driveTokenExpiry.getTime() : undefined,
+  };
+};
+
+const applyUpdatedDriveTokens = async (user, credentials) => {
+  if (!user || !credentials) return;
+  const updates = {};
+  if (credentials.access_token && credentials.access_token !== user.driveAccessToken) {
+    updates.driveAccessToken = credentials.access_token;
+  }
+  if (credentials.refresh_token && credentials.refresh_token !== user.driveRefreshToken) {
+    updates.driveRefreshToken = credentials.refresh_token;
+  }
+  if (credentials.expiry_date) {
+    updates.driveTokenExpiry = new Date(credentials.expiry_date);
+  }
+  if (Object.keys(updates).length) {
+    await User.findByIdAndUpdate(user._id, updates, { new: false });
+    Object.assign(user, updates);
+  }
+};
 
 // Get panel members
 export const getPanelMembers = async (req, res) => {
@@ -2195,6 +2232,35 @@ export const uploadPanelDocument = async (req, res) => {
       return res.status(404).json({ message: "Panel not found" });
     }
 
+    const uploader = await User.findById(req.user.id);
+    if (!uploader || !uploader.driveAccessToken) {
+      return res.status(400).json({
+        message: "Please connect your Google Drive account before uploading panel documents.",
+      });
+    }
+
+    const driveTokens = buildDriveTokens(uploader);
+    const driveFolderId = getPanelDriveFolderId();
+    let driveFileData = null;
+
+    try {
+      const { file: driveFile, tokens: updatedTokens } = await uploadFileToDrive(
+        req.file.path,
+        req.file.originalname,
+        req.file.mimetype,
+        driveTokens,
+        { parentFolderId: driveFolderId }
+      );
+      driveFileData = driveFile;
+      await applyUpdatedDriveTokens(uploader, updatedTokens);
+    } catch (driveError) {
+      console.error("Error uploading panel document to Google Drive:", driveError);
+      return res.status(500).json({
+        message:
+          "Failed to upload the document to Google Drive. Please reconnect your Drive account and try again.",
+      });
+    }
+
     // Check if document with same title exists (for versioning)
     const existingDocIndex = panel.documents.findIndex(doc => 
       doc.title.toLowerCase() === title.toLowerCase() && doc.isActive
@@ -2210,6 +2276,12 @@ export const uploadPanelDocument = async (req, res) => {
       uploadedBy: req.user.id,
       version: 1,
       isActive: true,
+      driveFileId: driveFileData?.id,
+      driveFileLink: driveFileData?.webViewLink,
+      driveFileName: driveFileData?.name,
+      driveMimeType: driveFileData?.mimeType,
+      driveFolderId: driveFolderId || null,
+      storageLocation: driveFileData ? "local+google-drive" : "local",
       versions: [{
         version: 1,
         filename: req.file.originalname,
@@ -2218,6 +2290,12 @@ export const uploadPanelDocument = async (req, res) => {
         uploadedBy: req.user.id,
         uploadedAt: new Date(),
         changeDescription: "Initial upload",
+        driveFileId: driveFileData?.id,
+        driveFileLink: driveFileData?.webViewLink,
+        driveFileName: driveFileData?.name,
+        driveMimeType: driveFileData?.mimeType,
+        driveFolderId: driveFolderId || null,
+        storageLocation: driveFileData ? "local+google-drive" : "local",
       }],
       uploadedAt: new Date(),
     };
@@ -2241,6 +2319,12 @@ export const uploadPanelDocument = async (req, res) => {
           uploadedBy: req.user.id,
           uploadedAt: new Date(),
           changeDescription: description?.trim() || "Document replaced",
+          driveFileId: driveFileData?.id,
+          driveFileLink: driveFileData?.webViewLink,
+          driveFileName: driveFileData?.name,
+          driveMimeType: driveFileData?.mimeType,
+          driveFolderId: driveFolderId || null,
+          storageLocation: driveFileData ? "local+google-drive" : "local",
         }
       ];
     }
@@ -2558,6 +2642,35 @@ export const replacePanelDocument = async (req, res) => {
       return res.status(404).json({ message: "Panel not found" });
     }
 
+    const uploader = await User.findById(req.user.id);
+    if (!uploader || !uploader.driveAccessToken) {
+      return res.status(400).json({
+        message: "Please connect your Google Drive account before replacing panel documents.",
+      });
+    }
+
+    const driveTokens = buildDriveTokens(uploader);
+    const driveFolderId = getPanelDriveFolderId();
+    let driveFileData = null;
+
+    try {
+      const { file: driveFile, tokens: updatedTokens } = await uploadFileToDrive(
+        req.file.path,
+        req.file.originalname,
+        req.file.mimetype,
+        driveTokens,
+        { parentFolderId: driveFolderId }
+      );
+      driveFileData = driveFile;
+      await applyUpdatedDriveTokens(uploader, updatedTokens);
+    } catch (driveError) {
+      console.error("Error replacing panel document in Google Drive:", driveError);
+      return res.status(500).json({
+        message:
+          "Failed to upload the updated document to Google Drive. Please reconnect your Drive account and try again.",
+      });
+    }
+
     const documentIndex = panel.documents.findIndex(
       doc => doc._id.toString() === documentId && doc.isActive
     );
@@ -2583,6 +2696,12 @@ export const replacePanelDocument = async (req, res) => {
       uploadedBy: req.user.id,
       version: newVersion,
       isActive: true,
+      driveFileId: driveFileData?.id,
+      driveFileLink: driveFileData?.webViewLink,
+      driveFileName: driveFileData?.name,
+      driveMimeType: driveFileData?.mimeType,
+      driveFolderId: driveFolderId || null,
+      storageLocation: driveFileData ? "local+google-drive" : "local",
       versions: [
         ...existingDoc.versions,
         {
@@ -2593,6 +2712,12 @@ export const replacePanelDocument = async (req, res) => {
           uploadedBy: req.user.id,
           uploadedAt: new Date(),
           changeDescription: description?.trim() || "Document updated",
+          driveFileId: driveFileData?.id,
+          driveFileLink: driveFileData?.webViewLink,
+          driveFileName: driveFileData?.name,
+          driveMimeType: driveFileData?.mimeType,
+          driveFolderId: driveFolderId || null,
+          storageLocation: driveFileData ? "local+google-drive" : "local",
         }
       ],
       uploadedAt: new Date(),
