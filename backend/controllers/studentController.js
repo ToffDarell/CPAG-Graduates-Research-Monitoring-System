@@ -7,8 +7,10 @@ import Activity from "../models/Activity.js";
 import ComplianceForm from "../models/ComplianceForm.js";
 import Panel from "../models/Panel.js";
 import User from "../models/User.js";
+import mongoose from "mongoose";
 import fs from "fs";
 import path from "path";
+import { uploadFileToDrive } from "../utils/googleDrive.js";
 
 // Helper function to send email notification
 const sendNotificationEmail = async (to, subject, message, html) => {
@@ -34,6 +36,53 @@ const sendNotificationEmail = async (to, subject, message, html) => {
   } catch (error) {
     console.error("Error sending notification email:", error);
     // Don't throw error, just log it
+  }
+};
+
+const getChapterDriveFolderId = (chapterType) => {
+  if (!chapterType) return process.env.GOOGLE_DRIVE_CHAPTERS_FOLDER_ID || null;
+  const envKey = `GOOGLE_DRIVE_${chapterType.toUpperCase()}_FOLDER_ID`;
+  return (
+    process.env[envKey] ||
+    process.env.GOOGLE_DRIVE_CHAPTERS_FOLDER_ID ||
+    null
+  );
+};
+
+const getComplianceDriveFolderId = (formType) => {
+  if (!formType) return process.env.GOOGLE_DRIVE_COMPLIANCE_FOLDER_ID || null;
+  const envKey = `GOOGLE_DRIVE_COMPLIANCE_${formType.toUpperCase()}_FOLDER_ID`;
+  return (
+    process.env[envKey] ||
+    process.env.GOOGLE_DRIVE_COMPLIANCE_FOLDER_ID ||
+    null
+  );
+};
+
+const buildDriveTokens = (user) => {
+  if (!user) return null;
+  return {
+    access_token: user.driveAccessToken,
+    refresh_token: user.driveRefreshToken,
+    expiry_date: user.driveTokenExpiry ? user.driveTokenExpiry.getTime() : undefined,
+  };
+};
+
+const applyUpdatedDriveTokens = async (user, credentials) => {
+  if (!user || !credentials) return;
+  const updates = {};
+  if (credentials.access_token && credentials.access_token !== user.driveAccessToken) {
+    updates.driveAccessToken = credentials.access_token;
+  }
+  if (credentials.refresh_token && credentials.refresh_token !== user.driveRefreshToken) {
+    updates.driveRefreshToken = credentials.refresh_token;
+  }
+  if (credentials.expiry_date) {
+    updates.driveTokenExpiry = new Date(credentials.expiry_date);
+  }
+  if (Object.keys(updates).length) {
+    await User.findByIdAndUpdate(user._id, updates, { new: false });
+    Object.assign(user, updates);
   }
 };
 
@@ -68,6 +117,35 @@ export const uploadComplianceForm = async (req, res) => {
       return res.status(403).json({ message: "You are not authorized to upload forms for this research" });
     }
 
+    const studentUser = await User.findById(req.user.id);
+    if (!studentUser || !studentUser.driveAccessToken) {
+      return res.status(400).json({ message: "Please connect your Google Drive account before uploading compliance forms." });
+    }
+
+    const driveFolderId = getComplianceDriveFolderId(formType);
+    const driveTokens = buildDriveTokens(studentUser);
+    if (!driveTokens?.access_token) {
+      return res.status(400).json({ message: "Google Drive access token missing. Please reconnect your Drive account." });
+    }
+
+    let driveFileData = null;
+    try {
+      const { file: driveFile, tokens: updatedTokens } = await uploadFileToDrive(
+        req.file.path,
+        req.file.originalname,
+        req.file.mimetype,
+        driveTokens,
+        { parentFolderId: driveFolderId }
+      );
+      driveFileData = driveFile;
+      await applyUpdatedDriveTokens(studentUser, updatedTokens);
+    } catch (driveError) {
+      console.error("Error uploading compliance form to Google Drive:", driveError);
+      return res.status(500).json({
+        message: "Failed to upload the compliance form to Google Drive. Please reconnect your Drive account and try again.",
+      });
+    }
+
     // Find previous version of this form type for this student/research
     const previousForm = await ComplianceForm.findOne({
       student: req.user.id,
@@ -95,6 +173,12 @@ export const uploadComplianceForm = async (req, res) => {
       version: previousForm ? previousForm.version + 1 : 1,
       isCurrent: true,
       uploadedBy: req.user.id,
+      driveFileId: driveFileData?.id,
+      driveFileLink: driveFileData?.webViewLink,
+      driveFileName: driveFileData?.name,
+      driveMimeType: driveFileData?.mimeType,
+      driveFolderId: driveFolderId || null,
+      storageLocation: driveFileData ? "local+google-drive" : "local",
       previousVersion: previousForm ? previousForm._id : null,
     });
 
@@ -115,6 +199,7 @@ export const uploadComplianceForm = async (req, res) => {
         version: complianceForm.version,
         filename: req.file.originalname,
         fileSize: req.file.size,
+        driveFileId: driveFileData?.id,
       },
       ipAddress: req.ip,
       userAgent: req.get('user-agent'),
@@ -203,6 +288,21 @@ export const uploadComplianceFormFromDrive = async (req, res) => {
 
     if (!formType) {
       return res.status(400).json({ message: "Form type is required" });
+    }
+
+    const studentUser = await User.findById(req.user.id);
+    if (!studentUser || !studentUser.driveAccessToken) {
+      return res.status(400).json({
+        message: "Please connect your Google Drive account before uploading compliance forms.",
+      });
+    }
+
+    const driveFolderId = getComplianceDriveFolderId(formType);
+    const driveTokens = buildDriveTokens(studentUser);
+    if (!driveTokens?.access_token) {
+      return res.status(400).json({
+        message: "Google Drive access token missing. Please reconnect your Drive account.",
+      });
     }
 
     // Import download function and stream utilities
@@ -307,6 +407,26 @@ export const uploadComplianceFormFromDrive = async (req, res) => {
     // Get file stats
     const stats = fs.statSync(filepath);
 
+    // Upload (or copy) the file into the designated Google Drive folder
+    let driveFileData = null;
+    try {
+      const { file: driveFile, tokens: updatedTokens } = await uploadFileToDrive(
+        filepath,
+        metadata.name,
+        metadata.mimeType,
+        driveTokens,
+        { parentFolderId: driveFolderId }
+      );
+      driveFileData = driveFile;
+      await applyUpdatedDriveTokens(studentUser, updatedTokens);
+    } catch (driveError) {
+      console.error("Error saving compliance form to Google Drive folder:", driveError);
+      return res.status(500).json({
+        message:
+          "Failed to store the compliance form in Google Drive. Please reconnect your Drive account and try again.",
+      });
+    }
+
     // Create new compliance form
     const complianceForm = new ComplianceForm({
       student: req.user.id,
@@ -320,6 +440,12 @@ export const uploadComplianceFormFromDrive = async (req, res) => {
       version: previousForm ? previousForm.version + 1 : 1,
       isCurrent: true,
       uploadedBy: req.user.id,
+      driveFileId: driveFileData?.id,
+      driveFileLink: driveFileData?.webViewLink || metadata.webViewLink || null,
+      driveFileName: driveFileData?.name || metadata.name,
+      driveMimeType: driveFileData?.mimeType || metadata.mimeType,
+      driveFolderId: driveFolderId || null,
+      storageLocation: driveFileData ? "local+google-drive" : "local",
       previousVersion: previousForm ? previousForm._id : null,
     });
 
@@ -341,6 +467,10 @@ export const uploadComplianceFormFromDrive = async (req, res) => {
         filename: metadata.name,
         fileSize: stats.size,
         source: "google_drive",
+        driveFileId: driveFileData?.id,
+        driveFileLink: driveFileData?.webViewLink || metadata.webViewLink || null,
+        driveFolderId: driveFolderId || null,
+        copiedFromDriveFileId: driveFileId,
       },
       ipAddress: req.ip,
       userAgent: req.get("user-agent"),
@@ -418,6 +548,39 @@ export const uploadComplianceFormFromDrive = async (req, res) => {
       message: errorMessage,
       error: process.env.NODE_ENV === 'development' ? error.stack : undefined
     });
+  }
+};
+
+// Get Google Drive connection status for the current student
+export const getDriveStatus = async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id).select(
+      "driveConnected driveAccessToken driveRefreshToken driveTokenExpiry email name"
+    );
+
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    const hasAccessToken = Boolean(user.driveAccessToken);
+    const hasRefreshToken = Boolean(user.driveRefreshToken);
+    const tokenExpiresAt = user.driveTokenExpiry || null;
+    const connected = Boolean(user.driveConnected && hasAccessToken);
+    const needsReconnect =
+      connected && tokenExpiresAt ? tokenExpiresAt.getTime() < Date.now() : false;
+
+    res.json({
+      connected,
+      driveConnected: user.driveConnected,
+      hasAccessToken,
+      hasRefreshToken,
+      tokenExpiresAt,
+      needsReconnect,
+      email: user.email,
+    });
+  } catch (error) {
+    console.error("Error fetching drive status:", error);
+    res.status(500).json({ message: error.message });
   }
 };
 
@@ -616,6 +779,35 @@ export const uploadChapter = async (req, res) => {
       return res.status(403).json({ message: "You are not authorized to upload chapters for this research" });
     }
 
+    const studentUser = await User.findById(req.user.id);
+    if (!studentUser || !studentUser.driveAccessToken) {
+      return res.status(400).json({ message: "Please connect your Google Drive account before uploading chapters." });
+    }
+
+    const driveFolderId = getChapterDriveFolderId(chapterType);
+    const driveTokens = buildDriveTokens(studentUser);
+    if (!driveTokens?.access_token) {
+      return res.status(400).json({ message: "Google Drive access token missing. Please reconnect your Drive account." });
+    }
+
+    let driveFileData = null;
+    try {
+      const { file: driveFile, tokens: updatedTokens } = await uploadFileToDrive(
+        req.file.path,
+        req.file.originalname,
+        req.file.mimetype,
+        driveTokens,
+        { parentFolderId: driveFolderId }
+      );
+      driveFileData = driveFile;
+      await applyUpdatedDriveTokens(studentUser, updatedTokens);
+    } catch (driveError) {
+      console.error("Error uploading chapter to Google Drive:", driveError);
+      return res.status(500).json({
+        message: "Failed to upload the chapter to Google Drive. Please reconnect your Drive account and try again.",
+      });
+    }
+
     // Add file to research
     research.forms.push({
       filename: req.file.originalname,
@@ -624,6 +816,12 @@ export const uploadChapter = async (req, res) => {
       status: "pending",
       uploadedBy: req.user.id,
       uploadedAt: new Date(),
+      driveFileId: driveFileData?.id,
+      driveFileLink: driveFileData?.webViewLink,
+      driveFileName: driveFileData?.name,
+      driveMimeType: driveFileData?.mimeType,
+      driveFolderId: driveFolderId || null,
+      storageLocation: driveFileData ? "local+google-drive" : "local",
     });
 
     // Update progress based on chapter
@@ -653,7 +851,9 @@ export const uploadChapter = async (req, res) => {
         chapterTitle: chapterTitle || null,
         filename: req.file.originalname,
         fileSize: req.file.size,
-        source: "local",
+        source: "local+google-drive",
+        driveFileId: driveFileData?.id,
+        driveFileLink: driveFileData?.webViewLink,
       },
       ipAddress: req.ip,
       userAgent: req.get("user-agent"),
@@ -711,6 +911,21 @@ export const uploadChapterFromDrive = async (req, res) => {
 
     if (!chapterType) {
       return res.status(400).json({ message: "Chapter type is required" });
+    }
+
+    const studentUser = await User.findById(req.user.id);
+    if (!studentUser || !studentUser.driveAccessToken) {
+      return res.status(400).json({
+        message: "Please connect your Google Drive account before uploading chapters.",
+      });
+    }
+
+    const driveFolderId = getChapterDriveFolderId(chapterType);
+    const driveTokens = buildDriveTokens(studentUser);
+    if (!driveTokens?.access_token) {
+      return res.status(400).json({
+        message: "Google Drive access token missing. Please reconnect your Drive account.",
+      });
     }
 
     // Import download function and stream utilities
@@ -802,94 +1017,240 @@ export const uploadChapterFromDrive = async (req, res) => {
     // Get file stats
     const stats = fs.statSync(filepath);
 
-    // Add file to research
-    research.forms.push({
+    // Upload (or copy) the file into the designated Google Drive folder
+    let driveFileData = null;
+    try {
+      const { file: driveFile, tokens: updatedTokens } = await uploadFileToDrive(
+        filepath,
+        metadata.name,
+        metadata.mimeType,
+        driveTokens,
+        { parentFolderId: driveFolderId }
+      );
+      driveFileData = driveFile;
+      await applyUpdatedDriveTokens(studentUser, updatedTokens);
+    } catch (driveError) {
+      console.error("Error saving chapter to Google Drive folder:", driveError);
+      return res.status(500).json({
+        message: "Failed to store the chapter in Google Drive. Please reconnect your Drive account and try again.",
+      });
+    }
+
+    // Prepare new form object
+    // Ensure uploadedBy is a proper ObjectId (Mongoose will handle conversion, but be explicit)
+    const uploadedById = typeof req.user.id === 'string' 
+      ? new mongoose.Types.ObjectId(req.user.id)
+      : req.user.id;
+    
+    const newForm = {
       filename: metadata.name,
       filepath: filepath,
       type: chapterType, // "chapter1", "chapter2", "chapter3"
       status: "pending",
-      uploadedBy: req.user.id,
+      uploadedBy: uploadedById,
       uploadedAt: new Date(),
-    });
+      driveFileId: driveFileData?.id,
+      driveFileLink: driveFileData?.webViewLink || metadata.webViewLink || null,
+      driveFileName: driveFileData?.name || metadata.name,
+      driveMimeType: driveFileData?.mimeType || metadata.mimeType,
+      driveFolderId: driveFolderId || null,
+      storageLocation: driveFileData ? "local+google-drive" : "local",
+    };
 
-    // Update progress based on chapter
+    // Calculate progress update
     const chapterProgress = {
       chapter1: 25,
       chapter2: 50,
       chapter3: 75,
     };
+    const newProgress = chapterProgress[chapterType] 
+      ? Math.max(research.progress || 0, chapterProgress[chapterType])
+      : research.progress || 0;
 
-    if (chapterProgress[chapterType]) {
-      research.progress = Math.max(research.progress, chapterProgress[chapterType]);
+    // Use findByIdAndUpdate with $push for atomic operation
+    // This is more reliable than modifying a populated document and saving
+    try {
+      const updateData = {
+        $push: { forms: newForm }
+      };
+      
+      // Update progress if needed
+      if (newProgress !== (research.progress || 0)) {
+        updateData.$set = { progress: newProgress };
+      }
+
+      console.log("Updating research with form:", {
+        researchId: researchId,
+        updateData: {
+          $push: { forms: { ...newForm, uploadedBy: req.user.id.toString() } },
+          ...(updateData.$set ? { $set: updateData.$set } : {})
+        }
+      });
+
+      const savedResearch = await Research.findByIdAndUpdate(
+        researchId,
+        updateData,
+        { new: true, runValidators: true }
+      );
+
+      if (!savedResearch) {
+        throw new Error("Research not found after update");
+      }
+
+      console.log("Research updated successfully. Forms count:", savedResearch.forms.length);
+
+      // Get the newly added form (should be the last one)
+      const savedForm = savedResearch.forms[savedResearch.forms.length - 1];
+      
+      if (!savedForm || !savedForm._id) {
+        throw new Error("Form was not saved to database properly - no _id assigned");
+      }
+
+      console.log("Form saved successfully with ID:", savedForm._id.toString(), {
+        filename: savedForm.filename,
+        type: savedForm.type,
+        status: savedForm.status
+      });
+
+      // Verify it's actually in the database by querying again
+      const verifyResearch = await Research.findById(researchId);
+      const verifyForm = verifyResearch.forms.find(
+        f => f._id && f._id.toString() === savedForm._id.toString()
+      );
+      
+      if (!verifyForm) {
+        console.error("WARNING: Form not found in database after save!");
+        throw new Error("Form was not persisted to database");
+      }
+
+      console.log("Form verified in database:", verifyForm._id.toString());
+    } catch (saveError) {
+      console.error("Error saving research to database:", saveError);
+      console.error("Save error details:", {
+        message: saveError.message,
+        stack: saveError.stack,
+        name: saveError.name
+      });
+      // Clean up file if save fails
+      if (fs.existsSync(filepath)) {
+        try {
+          fs.unlinkSync(filepath);
+        } catch (cleanupError) {
+          console.error("Error cleaning up file:", cleanupError);
+        }
+      }
+      return res.status(500).json({ 
+        message: `Failed to save chapter to database: ${saveError.message}`,
+        error: process.env.NODE_ENV === 'development' ? saveError.stack : undefined
+      });
     }
 
-    await research.save();
+    // Reload research with populated fields for notifications
+    const savedResearch = await Research.findById(researchId)
+      .populate("adviser", "name email")
+      .populate("students", "name email");
+    const savedForm = savedResearch.forms[savedResearch.forms.length - 1];
 
-    // Log activity
-    await Activity.create({
-      user: req.user.id,
-      action: "upload",
-      entityType: "research",
-      entityId: research._id,
-      entityName: research.title,
-      description: `Uploaded chapter from Google Drive: ${chapterType}${chapterTitle ? ` - ${chapterTitle}` : ''}`,
-      metadata: {
-        researchId: research._id,
-        chapterType: chapterType,
-        chapterTitle: chapterTitle || null,
-        filename: metadata.name,
-        fileSize: stats.size,
-        source: "google_drive",
-        driveFileId: driveFileId,
+    // Log activity - don't let this fail the request
+    try {
+      await Activity.create({
+        user: req.user.id,
+        action: "upload",
+        entityType: "research",
+        entityId: research._id,
+        entityName: research.title,
+        description: `Uploaded chapter from Google Drive: ${chapterType}${chapterTitle ? ` - ${chapterTitle}` : ''}`,
+        metadata: {
+          researchId: research._id,
+          chapterType: chapterType,
+          chapterTitle: chapterTitle || null,
+          filename: metadata.name,
+          fileSize: stats.size,
+          source: "google_drive",
+          driveFileId: driveFileData?.id,
+          driveFileLink: driveFileData?.webViewLink || metadata.webViewLink || null,
+          driveFolderId: driveFolderId || null,
+          copiedFromDriveFileId: driveFileId,
+          formId: savedForm._id.toString(),
+        },
+        ipAddress: req.ip || req.connection?.remoteAddress,
+        userAgent: req.get("user-agent") || "Unknown",
+      });
+    } catch (activityError) {
+      console.error("Error logging activity (non-critical):", activityError);
+      // Don't fail the request if activity logging fails
+    }
+
+    // Send notification to adviser - don't let this fail the request
+    try {
+      if (research.adviser && research.adviser.email) {
+        const studentName = req.user.name || "Student";
+        const chapterLabel = chapterType === "chapter1" ? "Chapter 1" : chapterType === "chapter2" ? "Chapter 2" : "Chapter 3";
+        await sendNotificationEmail(
+          research.adviser.email,
+          `New Chapter Uploaded: ${chapterLabel}`,
+          `${studentName} has uploaded a new ${chapterLabel}${chapterTitle ? `: ${chapterTitle}` : ''} from Google Drive for research: ${research.title}. Please review it.`,
+          `
+            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+              <h2 style="color: #7C1D23;">New Chapter Uploaded</h2>
+              <p>Hello ${research.adviser.name},</p>
+              <p><strong>${studentName}</strong> has uploaded a new <strong>${chapterLabel}</strong>${chapterTitle ? `: ${chapterTitle}` : ''} from Google Drive for research: <strong>${research.title}</strong>.</p>
+              <p>Source: Google Drive</p>
+              <p>Please review the chapter in the system.</p>
+              <hr style="margin: 30px 0; border: none; border-top: 1px solid #ddd;" />
+              <p style="color: #999; font-size: 12px;">This is an automated notification from the Masteral Archive and Monitoring System.</p>
+            </div>
+          `
+        );
+      }
+    } catch (emailError) {
+      console.error("Error sending notification email (non-critical):", emailError);
+      // Don't fail the request if email fails
+    }
+
+    // Send notification to student - don't let this fail the request
+    try {
+      const student = await User.findById(req.user.id);
+      if (student && student.email) {
+        const chapterLabel = chapterType === "chapter1" ? "Chapter 1" : chapterType === "chapter2" ? "Chapter 2" : "Chapter 3";
+        await sendNotificationEmail(
+          student.email,
+          `Chapter Uploaded Successfully`,
+          `Your ${chapterLabel}${chapterTitle ? `: ${chapterTitle}` : ''} has been uploaded successfully from Google Drive and is pending review.`,
+          `
+            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+              <h2 style="color: #7C1D23;">Chapter Uploaded</h2>
+              <p>Hello ${student.name},</p>
+              <p>Your <strong>${chapterLabel}</strong>${chapterTitle ? `: ${chapterTitle}` : ''} has been uploaded successfully from Google Drive and is pending review.</p>
+              <p>Your adviser will review it and provide feedback.</p>
+              <hr style="margin: 30px 0; border: none; border-top: 1px solid #ddd;" />
+              <p style="color: #999; font-size: 12px;">This is an automated notification from the Masteral Archive and Monitoring System.</p>
+            </div>
+          `
+        );
+      }
+    } catch (emailError) {
+      console.error("Error sending student notification email (non-critical):", emailError);
+      // Don't fail the request if email fails
+    }
+
+    // Return success response with the saved form data
+    res.json({ 
+      message: "Chapter uploaded successfully from Google Drive",
+      form: {
+        id: savedForm._id,
+        filename: savedForm.filename,
+        filepath: savedForm.filepath,
+        type: savedForm.type,
+        status: savedForm.status,
+        uploadedAt: savedForm.uploadedAt
       },
-      ipAddress: req.ip,
-      userAgent: req.get("user-agent"),
+      research: {
+        id: savedResearch._id,
+        title: savedResearch.title,
+        progress: savedResearch.progress
+      }
     });
-
-    // Send notification to adviser
-    if (research.adviser && research.adviser.email) {
-      const studentName = req.user.name || "Student";
-      const chapterLabel = chapterType === "chapter1" ? "Chapter 1" : chapterType === "chapter2" ? "Chapter 2" : "Chapter 3";
-      await sendNotificationEmail(
-        research.adviser.email,
-        `New Chapter Uploaded: ${chapterLabel}`,
-        `${studentName} has uploaded a new ${chapterLabel}${chapterTitle ? `: ${chapterTitle}` : ''} from Google Drive for research: ${research.title}. Please review it.`,
-        `
-          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-            <h2 style="color: #7C1D23;">New Chapter Uploaded</h2>
-            <p>Hello ${research.adviser.name},</p>
-            <p><strong>${studentName}</strong> has uploaded a new <strong>${chapterLabel}</strong>${chapterTitle ? `: ${chapterTitle}` : ''} from Google Drive for research: <strong>${research.title}</strong>.</p>
-            <p>Source: Google Drive</p>
-            <p>Please review the chapter in the system.</p>
-            <hr style="margin: 30px 0; border: none; border-top: 1px solid #ddd;" />
-            <p style="color: #999; font-size: 12px;">This is an automated notification from the Masteral Archive and Monitoring System.</p>
-          </div>
-        `
-      );
-    }
-
-    // Send notification to student
-    const student = await User.findById(req.user.id);
-    if (student && student.email) {
-      const chapterLabel = chapterType === "chapter1" ? "Chapter 1" : chapterType === "chapter2" ? "Chapter 2" : "Chapter 3";
-      await sendNotificationEmail(
-        student.email,
-        `Chapter Uploaded Successfully`,
-        `Your ${chapterLabel}${chapterTitle ? `: ${chapterTitle}` : ''} has been uploaded successfully from Google Drive and is pending review.`,
-        `
-          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-            <h2 style="color: #7C1D23;">Chapter Uploaded</h2>
-            <p>Hello ${student.name},</p>
-            <p>Your <strong>${chapterLabel}</strong>${chapterTitle ? `: ${chapterTitle}` : ''} has been uploaded successfully from Google Drive and is pending review.</p>
-            <p>Your adviser will review it and provide feedback.</p>
-            <hr style="margin: 30px 0; border: none; border-top: 1px solid #ddd;" />
-            <p style="color: #999; font-size: 12px;">This is an automated notification from the Masteral Archive and Monitoring System.</p>
-          </div>
-        `
-      );
-    }
-
-    res.json({ message: "Chapter uploaded successfully from Google Drive" });
   } catch (error) {
     console.error("Error uploading chapter from Google Drive:", error);
     res.status(500).json({ message: error.message });
