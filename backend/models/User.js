@@ -26,6 +26,7 @@ const userSchema = new mongoose.Schema(
     role: {
       type: String,
       enum: [
+        "admin",
         "dean",
         "faculty adviser",
         "program head",
@@ -88,6 +89,13 @@ const userSchema = new mongoose.Schema(
       type: String,
     },
     resetPasswordExpires: {
+      type: Date,
+    },
+    // Change password code (for authenticated users changing password)
+    changePasswordCode: {
+      type: String,
+    },
+    changePasswordCodeExpires: {
       type: Date,
     }
   },
