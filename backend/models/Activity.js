@@ -12,7 +12,7 @@ const activitySchema = new mongoose.Schema(
       enum: [
         "upload", "delete", "archive", "restore", "download", "view",
         "create", "update", "approve", "reject", "invite", "activate", 
-        "deactivate", "assign", "remove", "share", "send_email", "add_remark"
+        "deactivate", "assign", "remove", "share", "send_email", "add_remark", "export"
       ],
       required: true,
     },
