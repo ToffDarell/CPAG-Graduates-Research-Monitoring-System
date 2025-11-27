@@ -65,6 +65,16 @@ const complianceFormSchema = new mongoose.Schema(
       type: Date,
       default: Date.now,
     },
+    driveFileId: { type: String },
+    driveFileLink: { type: String },
+    driveFileName: { type: String },
+    driveMimeType: { type: String },
+    driveFolderId: { type: String },
+    storageLocation: {
+      type: String,
+      enum: ["local", "google-drive", "local+google-drive"],
+      default: "local",
+    },
     previousVersion: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "ComplianceForm",
