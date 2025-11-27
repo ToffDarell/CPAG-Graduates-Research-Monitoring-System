@@ -28,6 +28,16 @@ const documentSchema = new mongoose.Schema(
       type: String,
       required: true,
     },
+    driveFileId: String,
+    driveFileLink: String,
+    driveFileName: String,
+    driveMimeType: String,
+    driveFolderId: String,
+    storageLocation: {
+      type: String,
+      enum: ["local", "google-drive", "local+google-drive"],
+      default: "local",
+    },
     uploadedBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
