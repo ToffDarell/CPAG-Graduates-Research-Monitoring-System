@@ -35,6 +35,10 @@ import {
   getArchivedDocuments,
   getActivityLogs,
   getActivityStats,
+  bulkArchiveResearch,
+  bulkApproveResearch,
+  bulkShareResearch,
+  exportResearchRecords,
     } from "../controllers/deanController.js";
 
 
@@ -98,6 +102,10 @@ router.put("/faculty/:id/toggle-status", toggleFacultyActivation);
 
 // Research records and analytics     
 router.get("/research", getResearchRecords);
+router.post("/research/export", exportResearchRecords);
+router.post("/research/bulk-archive", bulkArchiveResearch);
+router.post("/research/bulk-approve", bulkApproveResearch);
+router.post("/research/bulk-share", bulkShareResearch);
 router.get("/analytics", getAnalytics);
 
 // Archive projects
