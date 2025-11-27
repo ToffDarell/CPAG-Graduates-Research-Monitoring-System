@@ -21,6 +21,7 @@ import {
   uploadChapterFromDrive,
   getChapterSubmissions,
   getProgressOverview,
+  getDriveStatus,
   getMyResearch,
   getMySchedules,
   getAdviserFeedback,
@@ -118,6 +119,7 @@ router.get("/compliance-forms/:id/view", viewComplianceForm);
 router.get("/research", getMyResearch);
 router.get("/chapters", getChapterSubmissions);
 router.get("/progress", getProgressOverview);
+router.get("/drive-status", getDriveStatus);
 router.post("/chapter", upload.single("file"), uploadChapter);
 router.post("/chapter-from-drive", uploadChapterFromDrive);
 
