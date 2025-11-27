@@ -7,6 +7,7 @@ import facultyRoutes from "./routes/faculty.js";
 import googleCalendarRoutes from "./routes/googleCalendar.js";
 import panelReviewRoutes from "./routes/panelReview.js";
 import googleDriveRoutes from "./routes/googleDrive.js";
+import adminRoutes from "./routes/admin.js";
 
 
 import express from 'express';
@@ -49,6 +50,7 @@ app.use("/api/dean", deanRoutes);
 app.use("/api/faculty", facultyRoutes);
 app.use("/api/google-calendar", googleCalendarRoutes);
 app.use("/api/google-drive", googleDriveRoutes);
+app.use("/api/admin", adminRoutes);
 
 // Error handling middleware
 app.use((err, req, res, next) => {
