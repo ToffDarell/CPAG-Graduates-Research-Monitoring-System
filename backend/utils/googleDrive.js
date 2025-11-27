@@ -33,12 +33,15 @@ export const getDriveAuthUrl = () => {
 };
 
 // Upload File to Google Drive
-export const uploadFileToDrive = async (filePath, fileName, mimeType, tokens) => {
+export const uploadFileToDrive = async (filePath, fileName, mimeType, tokens, options = {}) => {
+  const { parentFolderId } = options;
   const oauth2Client = createDriveOAuthClient();
   oauth2Client.setCredentials(tokens);
   const drive = google.drive({ version: "v3", auth: oauth2Client });
 
-  const fileMetadata = { name: fileName };
+  const fileMetadata = parentFolderId
+    ? { name: fileName, parents: [parentFolderId] }
+    : { name: fileName };
   const media = { mimeType: mimeType, body: fs.createReadStream(filePath) };
 
   const response = await drive.files.create({
@@ -47,7 +50,10 @@ export const uploadFileToDrive = async (filePath, fileName, mimeType, tokens) =>
     fields: "id, webViewLink, iconLink, thumbnailLink, name, mimeType",
   });
 
-  return response.data;
+  return {
+    file: response.data,
+    tokens: oauth2Client.credentials,
+  };
 };
 
 // Download File from Google Drive
