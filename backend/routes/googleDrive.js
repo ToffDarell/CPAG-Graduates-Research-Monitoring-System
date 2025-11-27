@@ -81,21 +81,34 @@ router.post('/upload', protect, upload.single('file'), async (req, res) => {
       refresh_token: user.driveRefreshToken,
       expiry_date: user.driveTokenExpiry ? user.driveTokenExpiry.getTime() : undefined,
     };
-    const driveResult = await uploadFileToDrive(
+    const { file: driveResult, tokens: updatedTokens } = await uploadFileToDrive(
       req.file.path,
       req.file.originalname,
       req.file.mimetype,
       tokens
     );
 
+    if (updatedTokens) {
+      const updates = {};
+      if (updatedTokens.access_token && updatedTokens.access_token !== user.driveAccessToken) {
+        updates.driveAccessToken = updatedTokens.access_token;
+      }
+      if (updatedTokens.expiry_date) {
+        updates.driveTokenExpiry = new Date(updatedTokens.expiry_date);
+      }
+      if (Object.keys(updates).length) {
+        await User.findByIdAndUpdate(user._id, updates, { new: false });
+      }
+    }
+
     const record = await DriveUpload.create({
-      name: driveResult.name || req.file.originalname,
-      mimeType: driveResult.mimeType || req.file.mimetype,
+      name: driveResult?.name || req.file.originalname,
+      mimeType: driveResult?.mimeType || req.file.mimetype,
       size: req.file.size,
-      driveFileId: driveResult.id,
-      webViewLink: driveResult.webViewLink,
-      iconLink: driveResult.iconLink,
-      thumbnailLink: driveResult.thumbnailLink,
+      driveFileId: driveResult?.id,
+      webViewLink: driveResult?.webViewLink,
+      iconLink: driveResult?.iconLink,
+      thumbnailLink: driveResult?.thumbnailLink,
       type: req.body.type || 'other',
       ownerEmail: user.email,
       owner: user._id,
@@ -147,6 +160,79 @@ router.post('/save-picker', protect, async (req, res) => {
   } catch (error) {
     console.error('Save Picker error:', error);
     res.status(500).json({ message: error.message || 'Failed to save file' });
+  }
+});
+
+// Get current user's Drive status
+router.get('/status', protect, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id).select(
+      'driveConnected driveAccessToken driveRefreshToken driveTokenExpiry email name role'
+    );
+
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    const hasAccessToken = Boolean(user.driveAccessToken);
+    const hasRefreshToken = Boolean(user.driveRefreshToken);
+    const tokenExpiresAt = user.driveTokenExpiry || null;
+    const connected = Boolean(user.driveConnected && hasAccessToken);
+    const needsReconnect =
+      connected && tokenExpiresAt ? tokenExpiresAt.getTime() < Date.now() : false;
+
+    res.json({
+      connected,
+      driveConnected: user.driveConnected,
+      hasAccessToken,
+      hasRefreshToken,
+      tokenExpiresAt,
+      needsReconnect,
+      email: user.email,
+      role: user.role,
+    });
+  } catch (error) {
+    console.error('Error fetching drive status:', error);
+    res.status(500).json({ message: error.message || 'Failed to fetch drive status' });
+  }
+});
+
+// Disconnect Drive
+router.post('/disconnect', protect, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id);
+
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    // Clear Drive-related fields using $unset to properly remove them
+    // Using $unset with empty string removes the field from the document
+    await User.findByIdAndUpdate(
+      req.user.id,
+      {
+        $unset: {
+          driveAccessToken: '',
+          driveRefreshToken: '',
+          driveTokenExpiry: ''
+        },
+        $set: {
+          driveConnected: false
+        }
+      },
+      { 
+        new: true,
+        runValidators: false // Skip validation to avoid password requirement issues
+      }
+    );
+
+    res.json({ message: 'Google Drive disconnected successfully' });
+  } catch (error) {
+    console.error('Drive disconnect error:', error);
+    res.status(500).json({ 
+      message: 'Failed to disconnect Google Drive',
+      error: error.message 
+    });
   }
 });
 
