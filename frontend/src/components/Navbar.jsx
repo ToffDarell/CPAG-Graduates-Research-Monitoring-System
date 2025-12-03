@@ -18,17 +18,16 @@ const Navbar = ({ user, setUser }) => {
           to={user ? `/dashboard/${user.role.toLowerCase().replace(/\s+/g, "-")}` : "/"} 
           className="flex items-center space-x-3 text-white text-lg font-bold hover:opacity-80 transition-opacity"
         >
-          {/* logo */}
+          {/* logo (image only, no label text) */}
           <img 
             src="/logo.jpg" 
-            alt="Department Logo" 
+            alt="" 
             className="h-10 w-10 object-contain"
             onError={(e) => {
               // Hide image if logo doesn't exist
               e.target.style.display = 'none';
             }}
           />
-          <span>Masteral Archive System</span>
         </Link>
         <div>
           {user ? (

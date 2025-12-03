@@ -141,7 +141,7 @@ function App() {
             user ? (
               <Navigate to={`/dashboard/${getDashboardPath(user.role)}`} />
             ) : (
-              <><Navbar user={user} setUser={setUser} /><Register setUser={setUser} /></>
+              <Register setUser={setUser} />
             )
           }
         />
