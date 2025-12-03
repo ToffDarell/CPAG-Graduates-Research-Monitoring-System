@@ -1,7 +1,10 @@
-import React, { useState, useEffect, useCallback } from "react";
-import { FaCheckCircle, FaTimesCircle, FaUsers, FaClipboardList, FaCalendar, FaFileAlt, FaClock, FaSignOutAlt, FaBars, FaTimes as FaClose, FaUpload, FaGoogle, FaVideo } from "react-icons/fa";
+import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { FaCheckCircle, FaTimesCircle, FaUsers, FaClipboardList, FaCalendar, FaFileAlt, FaClock, FaSignOutAlt, FaBars, FaTimes as FaClose, FaUpload, FaGoogle, FaVideo, FaCog, FaChevronDown, FaChevronUp, FaTrash, FaEye, FaFilter, FaSearch } from "react-icons/fa";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import axios from "axios";
+import { renderAsync } from 'docx-preview';
+import { showSuccess, showError, showWarning, showConfirm, showDangerConfirm } from "../../utils/sweetAlert";
+import { checkPermission } from "../../utils/permissionChecker";
 import { Calendar, momentLocalizer } from 'react-big-calendar';
 import moment from 'moment';
 import 'react-big-calendar/lib/css/react-big-calendar.css';
@@ -9,6 +12,8 @@ import { Document, Page, pdfjs } from 'react-pdf';
 // Import CSS for react-pdf (v10 uses dist/Page/ not dist/esm/Page/)
 import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
+import Settings from "../Settings";
+import DriveUploader from "../../components/DriveUploader";
 
 // Configure PDF.js worker - using local file from react-pdf's pdfjs-dist
 // This ensures the worker version matches the API version exactly (both are 5.4.296)
@@ -17,7 +22,7 @@ pdfjs.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.js';
 
 const localizer = momentLocalizer(moment);
 
-const FacultyAdviserDashboard = ({setUser}) => {
+const FacultyAdviserDashboard = ({ setUser, user }) => {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   
@@ -33,6 +38,7 @@ const FacultyAdviserDashboard = ({setUser}) => {
   // Google Calendar state
   const [calendarConnected, setCalendarConnected] = useState(false);
   const [calendarLoading, setCalendarLoading] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
 
   // Initialize tab from URL on mount (only if URL has tab param and it differs from initial state)
   useEffect(() => {
@@ -52,6 +58,39 @@ const FacultyAdviserDashboard = ({setUser}) => {
     if (selectedTab && currentTab !== selectedTab) {
       setSearchParams({ tab: selectedTab }, { replace: true });
     }
+  }, [selectedTab]);
+
+  // Track permission warnings shown per tab
+  const permissionWarningsRef = useRef({});
+
+  // Check permissions when tab changes
+  useEffect(() => {
+    const checkTabPermissions = async () => {
+      if (!selectedTab || permissionWarningsRef.current[selectedTab]) return;
+
+      const permissionMap = {
+        'submissions': { permissions: ['view_research'], feature: 'Student Submissions', context: 'You will not be able to view student submissions.' },
+        'feedback': { permissions: ['create_feedback', 'view_feedback'], feature: 'Feedback Management', context: 'You will not be able to create or view feedback.' },
+        'panels': { permissions: ['review_panels'], feature: 'Panel Reviews', context: 'You will not be able to review panels.' },
+        'schedule': { permissions: ['view_schedules', 'manage_schedules'], feature: 'Consultation Schedule', context: 'You will not be able to view or manage consultation schedules.' },
+        'students': { permissions: ['view_users'], feature: 'My Students', context: 'You will not be able to view your students.' },
+        'documents': { permissions: ['view_documents'], feature: 'Documents', context: 'You will not be able to view documents.' },
+      };
+
+      const tabConfig = permissionMap[selectedTab];
+      if (tabConfig) {
+        const hasPermission = await checkPermission(
+          tabConfig.permissions,
+          tabConfig.feature,
+          tabConfig.context
+        );
+        if (!hasPermission) {
+          permissionWarningsRef.current[selectedTab] = true;
+        }
+      }
+    };
+
+    checkTabPermissions();
   }, [selectedTab]); 
 
   // Fetch data on component mount
@@ -142,14 +181,15 @@ const FacultyAdviserDashboard = ({setUser}) => {
                           error.response?.data?.error || 
                           'Failed to connect to Google Calendar. Please check server configuration.';
       
-      alert(`❌ ${errorMessage}\n\n${error.response?.data?.details || ''}`);
+      showError('Connection Error', `${errorMessage}\n\n${error.response?.data?.details || ''}`);
     } finally {
       setCalendarLoading(false);
     }
   };
 
   const disconnectGoogleCalendar = async () => {
-    if (!window.confirm('Are you sure you want to disconnect Google Calendar?')) return;
+    const result = await showConfirm('Disconnect Google Calendar?', 'Are you sure you want to disconnect Google Calendar?');
+    if (!result.isConfirmed) return;
     
     try {
       setCalendarLoading(true);
@@ -184,7 +224,7 @@ const FacultyAdviserDashboard = ({setUser}) => {
     } catch (error) {
       console.error('[APPROVE SUBMISSION] Error:', error);
       console.error('[APPROVE SUBMISSION] Error response:', error.response?.data);
-      alert('Error approving submission');
+      showError('Error', 'Error approving submission');
     } finally {
       setLoading(false);
     }
@@ -206,7 +246,7 @@ const FacultyAdviserDashboard = ({setUser}) => {
       fetchStudentSubmissions();
     } catch (error) {
       console.error('Error rejecting submission:', error);
-      alert('Error rejecting submission');
+      showError('Error', 'Error rejecting submission');
     } finally {
       setLoading(false);
     }
@@ -225,18 +265,19 @@ const FacultyAdviserDashboard = ({setUser}) => {
       });
       
       fetchMyStudents();
-      alert('Thesis status updated successfully!');
+      await showSuccess('Success', 'Thesis status updated successfully!');
     } catch (error) {
       console.error('Error updating thesis status:', error);
-      alert('Error updating thesis status');
+      showError('Error', 'Error updating thesis status');
     } finally {
       setLoading(false);
     }
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
     // Show confirmation dialog
-    if (window.confirm('Are you sure you want to log out?')) {
+    const result = await showConfirm('Log Out', 'Are you sure you want to log out?');
+    if (result.isConfirmed) {
       // Clear session data
       localStorage.removeItem('token');
       sessionStorage.removeItem('selectedRole');
@@ -248,6 +289,13 @@ const FacultyAdviserDashboard = ({setUser}) => {
       });
     }
   };
+
+  const handleOpenSettings = () => {
+    setSidebarOpen(false);
+    setShowSettings(true);
+  };
+
+  const handleCloseSettings = () => setShowSettings(false);
 
   const tabs = [
     { id: "submissions", label: "Student Submissions", icon: <FaClipboardList /> },
@@ -265,6 +313,7 @@ const FacultyAdviserDashboard = ({setUser}) => {
           submissions={submissions} 
           onApprove={handleApproveSubmission}
           onReject={handleRejectSubmission}
+          onRefresh={fetchStudentSubmissions}
           loading={loading}
         />;
       case "feedback":
@@ -275,10 +324,6 @@ const FacultyAdviserDashboard = ({setUser}) => {
         return <ConsultationSchedule 
           schedules={schedules} 
           onRefresh={fetchSchedules}
-          calendarConnected={calendarConnected}
-          onConnectCalendar={connectGoogleCalendar}
-          onDisconnectCalendar={disconnectGoogleCalendar}
-          calendarLoading={calendarLoading}
         />;
       case "students":
         return <StudentList 
@@ -348,8 +393,21 @@ const FacultyAdviserDashboard = ({setUser}) => {
           </ul>
         </nav>
 
-        {/* Logout Button */}
-        <div className="p-4 border-t border-[#5a1519]">
+        {/* Settings & Logout Buttons */}
+        <div className="p-4 border-t border-[#5a1519] space-y-3">
+          <button
+            onClick={showSettings ? handleCloseSettings : handleOpenSettings}
+            className={`flex items-center space-x-3 px-4 py-3 rounded-lg transition-all duration-200 w-full ${
+              showSettings
+                ? "bg-white text-[#7C1D23]"
+                : "text-white bg-[#6e1b20] hover:bg-[#5a1519]"
+            }`}
+          >
+            <FaCog className="h-5 w-5" />
+            <span className="font-medium text-sm">
+              {showSettings ? "Close Settings" : "Settings"}
+            </span>
+          </button>
           <button
             onClick={handleLogout}
             className="flex items-center space-x-3 px-4 py-3 rounded-lg text-white hover:bg-red-600 transition-all duration-200 w-full"
@@ -430,7 +488,16 @@ const FacultyAdviserDashboard = ({setUser}) => {
         <div className="bg-white rounded-lg shadow-md overflow-hidden border border-gray-200">
           {/* Content Area */}
           <div className="p-6 bg-white">
-            {renderContent()}
+            {showSettings ? (
+              <Settings
+                user={user}
+                setUser={setUser}
+                embedded
+                onClose={handleCloseSettings}
+              />
+            ) : (
+              renderContent()
+            )}
           </div>
         </div>
       </div>
@@ -465,15 +532,252 @@ const StatCard = ({ title, value, icon, color }) => {
   );
 };
 
+// DOCX Viewer Component using docx-preview
+const DocxViewer = ({ blob, containerRef, onError }) => {
+  useEffect(() => {
+    if (blob && containerRef.current) {
+      // Clear previous content
+      containerRef.current.innerHTML = '';
+      
+      // Render DOCX using docx-preview
+      renderAsync(
+        blob, // document: ArrayBuffer | Blob | Uint8Array
+        containerRef.current, // bodyContainer: HTMLElement
+        null, // styleContainer: HTMLElement (null = use bodyContainer)
+        {
+          className: "docx",
+          inWrapper: true,
+          ignoreWidth: false,
+          ignoreHeight: false,
+          ignoreFonts: false,
+          breakPages: true,
+          ignoreLastRenderedPageBreak: true,
+          experimental: false,
+          trimXmlDeclaration: true,
+          useBase64URL: false,
+          renderChanges: false,
+          renderHeaders: true,
+          renderFooters: true,
+          renderFootnotes: true,
+          renderEndnotes: true,
+          renderComments: false,
+          renderAltChunks: true,
+          debug: false,
+        }
+      )
+      .then(() => {
+        console.log("DOCX: finished rendering");
+      })
+      .catch((error) => {
+        console.error("Error rendering DOCX:", error);
+        if (onError) {
+          onError(error);
+        }
+      });
+    }
+    
+    // Cleanup function
+    return () => {
+      if (containerRef.current) {
+        containerRef.current.innerHTML = '';
+      }
+    };
+  }, [blob, containerRef, onError]);
+  
+  return null; // This component doesn't render anything itself
+};
+
 // Student Submissions Component
-const StudentSubmissions = ({ submissions, onApprove, onReject, loading }) => {
+const StudentSubmissions = ({ submissions, onApprove, onReject, onRefresh, loading }) => {
   const [selectedSubmission, setSelectedSubmission] = useState(null);
   const [showRejectModal, setShowRejectModal] = useState(false);
   const [showApproveModal, setShowApproveModal] = useState(false);
   const [rejectionReason, setRejectionReason] = useState("");
+  const [rejectionReasonType, setRejectionReasonType] = useState("predefined"); // "predefined" or "custom"
   const [showSuccessMessage, setShowSuccessMessage] = useState(false);
   const [successMessage, setSuccessMessage] = useState("");
   const [selectedForm, setSelectedForm] = useState(null);
+  const [expandedChapters, setExpandedChapters] = useState({
+    chapter1: false,
+    chapter2: false,
+    chapter3: false
+  });
+  const [viewDocumentUrl, setViewDocumentUrl] = useState(null);
+  const [viewDocumentFilename, setViewDocumentFilename] = useState(null);
+  const [viewDocumentType, setViewDocumentType] = useState(null);
+  const [docxBlob, setDocxBlob] = useState(null);
+  const docxContainerRef = useRef(null);
+  // Filters state
+  const [filters, setFilters] = useState({
+    chapter: '',
+    partName: '',
+    status: '',
+    startDate: '',
+    endDate: '',
+    search: ''
+  });
+
+  // Chapter titles mapping
+  const chapterTitles = useMemo(() => ({
+    chapter1: "Chapter 1 - Introduction",
+    chapter2: "Chapter 2 - Literature Review",
+    chapter3: "Chapter 3 - Methodology",
+  }), []);
+
+  // Group submissions by chapter type, filter, and show only latest version per part
+  const groupedSubmissions = useMemo(() => {
+    const groups = {
+      chapter1: [],
+      chapter2: [],
+      chapter3: []
+    };
+
+    // First, collect all submissions
+    const allSubmissions = [];
+    submissions.forEach(research => {
+      const student = research.students?.[0];
+      research.forms?.forEach(form => {
+        if (form.type === 'chapter1' || form.type === 'chapter2' || form.type === 'chapter3') {
+          allSubmissions.push({
+            ...form,
+            research: research,
+            student: student,
+            studentId: student?._id || student?.id
+          });
+        }
+      });
+    });
+
+    // Apply filters
+    let filtered = allSubmissions;
+    
+    // Filter by chapter
+    if (filters.chapter) {
+      filtered = filtered.filter(s => s.type === filters.chapter);
+    }
+    
+    // Filter by part name
+    if (filters.partName) {
+      const partNameLower = filters.partName.toLowerCase();
+      filtered = filtered.filter(s => {
+        const partName = s.partName || '';
+        return partName.toLowerCase().includes(partNameLower);
+      });
+    }
+    
+    // Filter by status
+    if (filters.status) {
+      filtered = filtered.filter(s => s.status === filters.status);
+    }
+    
+    // Filter by date range
+    if (filters.startDate) {
+      const startDate = new Date(filters.startDate);
+      startDate.setHours(0, 0, 0, 0);
+      filtered = filtered.filter(s => {
+        const uploadDate = new Date(s.uploadedAt);
+        return uploadDate >= startDate;
+      });
+    }
+    
+    if (filters.endDate) {
+      const endDate = new Date(filters.endDate);
+      endDate.setHours(23, 59, 59, 999);
+      filtered = filtered.filter(s => {
+        const uploadDate = new Date(s.uploadedAt);
+        return uploadDate <= endDate;
+      });
+    }
+    
+    // Filter by search (part name, filename, chapter title)
+    if (filters.search) {
+      const searchLower = filters.search.toLowerCase();
+      filtered = filtered.filter(s => {
+        const partName = (s.partName || '').toLowerCase();
+        const filename = (s.filename || '').toLowerCase();
+        const chapterTitle = chapterTitles[s.type]?.toLowerCase() || '';
+        return partName.includes(searchLower) || 
+               filename.includes(searchLower) || 
+               chapterTitle.includes(searchLower);
+      });
+    }
+
+    // Group by chapter type
+    filtered.forEach(submission => {
+      if (submission.type === 'chapter1' || submission.type === 'chapter2' || submission.type === 'chapter3') {
+        groups[submission.type].push(submission);
+      }
+    });
+
+    // For each chapter, group by student and partName, then get latest version
+    Object.keys(groups).forEach(chapterType => {
+      // Group by student first
+      const byStudent = {};
+      groups[chapterType].forEach(submission => {
+        const studentId = submission.studentId?.toString() || 'unknown';
+        if (!byStudent[studentId]) {
+          byStudent[studentId] = [];
+        }
+        byStudent[studentId].push(submission);
+      });
+      
+      // For each student, group by partName and get latest version
+      const latestSubmissions = [];
+      Object.keys(byStudent).forEach(studentId => {
+        const studentSubs = byStudent[studentId];
+        
+        // Group by partName (null/undefined/empty = 'full-chapter')
+        const byPart = {};
+        studentSubs.forEach(submission => {
+          const partKey = (submission.partName && submission.partName.trim()) 
+            ? submission.partName.trim() 
+            : 'full-chapter';
+          if (!byPart[partKey]) {
+            byPart[partKey] = [];
+          }
+          byPart[partKey].push(submission);
+        });
+        
+        // For each part, get the latest version (highest version number, or newest date)
+        Object.keys(byPart).forEach(partKey => {
+          const partSubs = byPart[partKey];
+          // Sort by version (descending) then by date (newest first)
+          partSubs.sort((a, b) => {
+            const versionA = a.version || 1;
+            const versionB = b.version || 1;
+            if (versionA !== versionB) {
+              return versionB - versionA; // Higher version first
+            }
+            const dateA = new Date(a.uploadedAt || 0);
+            const dateB = new Date(b.uploadedAt || 0);
+            return dateB - dateA; // Newer first
+          });
+          
+          // Take only the latest (first in sorted array)
+          if (partSubs.length > 0) {
+            latestSubmissions.push(partSubs[0]);
+          }
+        });
+      });
+      
+      // Sort by date (newest first) for display
+      groups[chapterType] = latestSubmissions.sort((a, b) => {
+        const dateA = new Date(a.uploadedAt || 0);
+        const dateB = new Date(b.uploadedAt || 0);
+        return dateB - dateA; // Newest first
+      });
+    });
+
+    return groups;
+  }, [submissions, filters, chapterTitles]);
+
+  // Toggle chapter expansion
+  const toggleChapter = useCallback((chapterType) => {
+    setExpandedChapters(prev => ({
+      ...prev,
+      [chapterType]: !prev[chapterType]
+    }));
+  }, []);
 
   const handleApproveClick = (research, form) => {
     setSelectedSubmission(research);
@@ -486,6 +790,134 @@ const StudentSubmissions = ({ submissions, onApprove, onReject, loading }) => {
     setSelectedForm(form);
     setShowRejectModal(true);
     setRejectionReason("");
+    setRejectionReasonType("predefined");
+  };
+
+  const handleDeleteClick = async (research, form) => {
+    const versionText = form.version ? `Version ${form.version}` : 'this submission';
+    const partText = form.partName ? ` (${form.partName})` : '';
+    const studentName = research.students?.[0]?.name || 'Student';
+    const statusText = form.status === 'approved' ? ' (APPROVED)' : '';
+    
+    // Get the submission ID - handle both _id and id fields
+    const submissionId = form._id || form.id;
+    
+    if (!submissionId) {
+      showError('Error', 'Submission ID not found');
+      console.error('Form object:', form);
+      return;
+    }
+    
+    const result = await showDangerConfirm('Delete Submission', `Are you sure you want to delete ${versionText}${partText}${statusText} from ${studentName}? This action cannot be undone.`);
+    if (result.isConfirmed) {
+      try {
+        const token = localStorage.getItem('token');
+        console.log('Deleting submission:', submissionId);
+        const response = await axios.delete(`/api/faculty/submissions/${submissionId}`, {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        console.log('Delete response:', response.data);
+        // Refresh submissions if callback provided
+        if (onRefresh) {
+          onRefresh();
+        }
+      } catch (error) {
+        console.error('Delete error:', error);
+        console.error('Error response:', error.response);
+        showError('Error', error.response?.data?.message || 'Failed to delete submission. Please check the console for details.');
+      }
+    }
+  };
+
+  const handleViewDocument = async (research, form) => {
+    try {
+      const token = localStorage.getItem('token');
+      const submissionId = form._id || form.id;
+      
+      if (!submissionId) {
+        showError('Error', 'Submission ID not found');
+        return;
+      }
+      
+      // Get file extension to determine file type
+      const filename = form.filename || 'document';
+      const fileExtension = filename.split('.').pop()?.toLowerCase();
+      
+      // Store filename and type
+      setViewDocumentFilename(filename);
+      setViewDocumentType(fileExtension);
+      
+      // Use the faculty view endpoint
+      const viewUrl = `/api/faculty/submissions/${submissionId}/view`;
+      
+      if (fileExtension === 'docx' || fileExtension === 'doc') {
+        // For DOCX files, fetch as blob first, then convert to arraybuffer
+        // This ensures proper handling of the streamed response
+        const response = await axios.get(viewUrl, {
+          headers: { Authorization: `Bearer ${token}` },
+          responseType: 'blob'
+        });
+        
+        // Check if response is valid
+        if (!response.data || response.data.size === 0) {
+          throw new Error('File is empty or invalid');
+        }
+        
+        // Check content type first (before consuming the blob)
+        const contentType = response.headers['content-type'] || '';
+        if (contentType.includes('text/html') || contentType.includes('application/json')) {
+          // Might be an error page - clone blob before reading
+          const clonedBlob = response.data.slice();
+          const text = await clonedBlob.text();
+          try {
+            const errorData = JSON.parse(text);
+            throw new Error(errorData.message || 'Server error');
+          } catch {
+            throw new Error('Received HTML instead of document file. Please check the file on the server.');
+          }
+        }
+        
+        // Convert blob to arraybuffer for docx-preview
+        const arrayBuffer = await response.data.arrayBuffer();
+        
+        // Verify file signature
+        const uint8Array = new Uint8Array(arrayBuffer);
+        
+        // DOCX files are ZIP archives and start with PK (0x50 0x4B)
+        // Old .doc files use OLE format and start with different bytes (0xD0 0xCF 0x11 0xE0)
+        const isDocx = uint8Array.length >= 2 && uint8Array[0] === 0x50 && uint8Array[1] === 0x4B;
+        const isOldDoc = uint8Array.length >= 4 && 
+          uint8Array[0] === 0xD0 && uint8Array[1] === 0xCF && 
+          uint8Array[2] === 0x11 && uint8Array[3] === 0xE0;
+        
+        if (isDocx || isOldDoc) {
+          // Valid DOCX or old DOC file
+          setDocxBlob(arrayBuffer);
+          setViewDocumentUrl(null); // Clear URL for DOCX
+        } else {
+          // File doesn't match expected signatures, but try to render anyway
+          console.warn('File signature check failed, but attempting to render anyway. First bytes:', 
+            Array.from(uint8Array.slice(0, 8)).map(b => '0x' + b.toString(16).toUpperCase()).join(' '));
+          setDocxBlob(arrayBuffer);
+          setViewDocumentUrl(null);
+        }
+      } else {
+        // For PDF and other files, fetch as blob for iframe
+        const response = await axios.get(viewUrl, {
+          headers: { Authorization: `Bearer ${token}` },
+          responseType: 'blob'
+        });
+        
+        const contentType = response.headers['content-type'] || 'application/pdf';
+        const blob = new Blob([response.data], { type: contentType });
+        const url = window.URL.createObjectURL(blob);
+        setViewDocumentUrl(url);
+        setDocxBlob(null); // Clear DOCX blob
+      }
+    } catch (error) {
+      console.error('Error viewing document:', error);
+      showError('Error', error.response?.data?.message || error.message || 'Failed to open document. Please try again.');
+    }
   };
 
   const confirmApprove = async () => {
@@ -498,7 +930,7 @@ const StudentSubmissions = ({ submissions, onApprove, onReject, loading }) => {
 
   const confirmReject = async () => {
     if (!rejectionReason.trim()) {
-      alert("Please provide a rejection reason.");
+      showWarning('Validation Error', 'Please provide a rejection reason.');
       return;
     }
     await onReject(selectedSubmission._id, selectedForm._id, rejectionReason);
@@ -507,6 +939,7 @@ const StudentSubmissions = ({ submissions, onApprove, onReject, loading }) => {
     setShowSuccessMessage(true);
     setTimeout(() => setShowSuccessMessage(false), 4000);
     setRejectionReason("");
+    setRejectionReasonType("predefined");
   };
 
   return (
@@ -528,94 +961,333 @@ const StudentSubmissions = ({ submissions, onApprove, onReject, loading }) => {
       </span>
     </div>
 
+    {/* Filters and Search */}
+    <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-5">
+      <div className="flex items-center gap-2 mb-4">
+        <FaFilter className="text-[#7C1D23]" />
+        <h3 className="text-lg font-semibold text-gray-800">Filters & Search</h3>
+      </div>
+      
+      <div className="space-y-4">
+        {/* Search Bar */}
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">
+            <FaSearch className="inline mr-1" />
+            Search
+          </label>
+          <input
+            type="text"
+            value={filters.search || ''}
+            onChange={(e) => setFilters({ ...filters, search: e.target.value })}
+            placeholder="Search by part name, filename, or chapter title..."
+            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23]/20 focus:border-[#7C1D23]"
+          />
+        </div>
+
+        {/* Filter Row */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Chapter
+            </label>
+            <select
+              value={filters.chapter || ''}
+              onChange={(e) => setFilters({ ...filters, chapter: e.target.value })}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23]/20 focus:border-[#7C1D23]"
+            >
+              <option value="">All Chapters</option>
+              <option value="chapter1">Chapter 1</option>
+              <option value="chapter2">Chapter 2</option>
+              <option value="chapter3">Chapter 3</option>
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Part Name
+            </label>
+            <input
+              type="text"
+              value={filters.partName || ''}
+              onChange={(e) => setFilters({ ...filters, partName: e.target.value })}
+              placeholder="Filter by part name..."
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23]/20 focus:border-[#7C1D23]"
+            />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Status
+            </label>
+            <select
+              value={filters.status || ''}
+              onChange={(e) => setFilters({ ...filters, status: e.target.value })}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23]/20 focus:border-[#7C1D23]"
+            >
+              <option value="">All Statuses</option>
+              <option value="pending">Pending</option>
+              <option value="approved">Approved</option>
+              <option value="rejected">Rejected</option>
+              <option value="revision">Revision</option>
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Date Range
+            </label>
+            <div className="flex gap-2">
+              <input
+                type="date"
+                value={filters.startDate || ''}
+                onChange={(e) => setFilters({ ...filters, startDate: e.target.value })}
+                className="flex-1 px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23]/20 focus:border-[#7C1D23] text-sm"
+                placeholder="Start"
+              />
+              <input
+                type="date"
+                value={filters.endDate || ''}
+                onChange={(e) => setFilters({ ...filters, endDate: e.target.value })}
+                className="flex-1 px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23]/20 focus:border-[#7C1D23] text-sm"
+                placeholder="End"
+              />
+            </div>
+          </div>
+        </div>
+
+        {/* Clear Filters Button */}
+        {(filters.chapter || filters.partName || filters.status || filters.startDate || filters.endDate || filters.search) && (
+          <div className="flex justify-end">
+            <button
+              type="button"
+              onClick={() => setFilters({
+                chapter: '',
+                partName: '',
+                status: '',
+                startDate: '',
+                endDate: '',
+                search: ''
+              })}
+              className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-md transition-colors"
+            >
+              Clear All Filters
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+
     <div className="space-y-4">
       {submissions.length === 0 ? (
         <div className="bg-gray-50 rounded-lg border border-gray-200 p-8">
           <p className="text-gray-500 text-center text-sm">No submissions to review yet.</p>
         </div>
       ) : (
-        submissions.map((research) => (
-          <div key={research._id} className="bg-white border border-gray-200 rounded-lg p-5 hover:shadow-md transition-shadow">
-              <div className="mb-4 pb-4 border-b border-gray-200">
-                <div className="flex items-center space-x-3">
-                  <div className="h-12 w-12 rounded-full bg-[#7C1D23] flex items-center justify-center text-white font-semibold text-lg">
-                    {research.students?.[0]?.name?.charAt(0) || 'S'}
-                  </div>
-                  <div>
-                    <h3 className="text-base font-semibold text-gray-800">{research.students?.[0]?.name || 'Student'}</h3>
-                    <p className="text-sm text-gray-600 mt-1">
-                      {research.title} • Stage: {research.stage}
-                    </p>
-                  </div>
-                </div>
-              </div>
+        // Group by chapter type
+        ['chapter1', 'chapter2', 'chapter3'].map((chapterType) => {
+          const chapterSubmissions = groupedSubmissions[chapterType];
+          const submissionCount = chapterSubmissions.length;
+          const reviewedCount = chapterSubmissions.filter(s => s.status === 'approved' || s.status === 'rejected').length;
+          const isExpanded = expandedChapters[chapterType];
+          const allReviewed = reviewedCount === submissionCount && submissionCount > 0;
 
-              {/* All Submitted Forms */}
-              <div className="space-y-3">
-                {research.forms?.filter(f => f.status === 'pending' || f.status === 'approved' || f.status === 'rejected').map((form, idx) => (
-                  <div key={form._id} className="bg-gray-50 rounded-lg p-4 border border-gray-200">
-                    <div className="flex items-start justify-between">
-                      <div className="flex-1">
-                        <div className="flex items-center space-x-2">
-                          <FaFileAlt className="text-gray-600" />
-                          <h4 className="font-medium text-gray-800">{form.filename || `Document ${idx + 1}`}</h4>
-                        </div>
-                        <div className="mt-2 space-y-1">
-                          <p className="text-xs text-gray-500">
-                            <span className="font-medium">Type:</span> {form.type || 'N/A'}
-                          </p>
-                          <p className="text-xs text-gray-500">
-                            <span className="font-medium">Date of Submission:</span>{" "}
-                            {form.uploadedAt ? new Date(form.uploadedAt).toLocaleString() : 'N/A'}
-                          </p>
-                          <p className="text-xs text-gray-500">
-                            <span className="font-medium">Current Status:</span>{" "}
-                            <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
-                              form.status === "pending" ? "bg-yellow-100 text-yellow-700" :
-                              form.status === "approved" ? "bg-green-100 text-green-700" :
-                              form.status === "rejected" ? "bg-red-100 text-red-700" :
-                              "bg-gray-100 text-gray-700"
-                            }`}>
-                              {form.status}
-                  </span>
-                          </p>
+          if (submissionCount === 0) return null;
+
+          return (
+            <div
+              key={chapterType}
+              className="bg-white border border-gray-200 rounded-lg shadow-sm overflow-hidden"
+            >
+              <button
+                type="button"
+                onClick={() => toggleChapter(chapterType)}
+                className="w-full flex items-center justify-between px-5 py-4 hover:bg-gray-50 transition-colors"
+              >
+                <div className="text-left">
+                  <p className="text-sm font-semibold text-gray-800">
+                    {chapterTitles[chapterType]}
+                  </p>
+                  <p className="text-xs text-gray-500 mt-1">
+                    {submissionCount} submission{submissionCount !== 1 ? "s" : ""}
+                  </p>
                 </div>
-              </div>
-                      {form.status === 'pending' && (
-                        <div className="flex space-x-2 ml-4">
-                <button 
-                            onClick={() => handleApproveClick(research, form)}
-                  disabled={loading}
-                  className="flex items-center px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors text-sm font-medium disabled:opacity-50"
-                >
-                  <FaCheckCircle className="mr-2 text-sm" />
-                  Approve
-                </button>
-                <button 
-                            onClick={() => handleRejectClick(research, form)}
-                  disabled={loading}
-                  className="flex items-center px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 transition-colors text-sm font-medium disabled:opacity-50"
-                >
-                  <FaTimesCircle className="mr-2 text-sm" />
-                  Reject
-                </button>
-              </div>
-                      )}
+                <div className="flex items-center gap-3">
+                  <span className={`px-3 py-1 rounded-full text-xs font-medium ${
+                    reviewedCount === submissionCount ? "bg-green-100 text-green-700" : "bg-yellow-100 text-yellow-700"
+                  }`}>
+                    {reviewedCount === submissionCount ? "Reviewed" : "Pending"}
+                  </span>
+                  {isExpanded ? (
+                    <FaChevronUp className="text-gray-500" />
+                  ) : (
+                    <FaChevronDown className="text-gray-500" />
+                  )}
+                </div>
+              </button>
+
+              {isExpanded && (
+                <div className="border-t border-gray-200 px-5 py-4">
+                  {chapterSubmissions.length === 0 ? (
+                    <p className="text-sm text-gray-500">No submissions found matching the filters.</p>
+                  ) : (
+                    <div className="space-y-4">
+                      {(() => {
+                        // Group submissions by partName (null for full chapter, string for specific part)
+                        const groupedSubmissions = new Map();
+                        
+                        chapterSubmissions.forEach((submission) => {
+                          // Normalize partName: null, undefined, or empty string all become 'full-chapter'
+                          const partKey = (submission.partName && submission.partName.trim()) 
+                            ? submission.partName.trim() 
+                            : 'full-chapter';
+                          if (!groupedSubmissions.has(partKey)) {
+                            groupedSubmissions.set(partKey, []);
+                          }
+                          groupedSubmissions.get(partKey).push(submission);
+                        });
+                        
+                        // Convert to array and render
+                        const groups = Array.from(groupedSubmissions.entries());
+                        
+                        return (
+                          <>
+                            {groups.map(([partKey, submissions]) => (
+                              <div key={partKey} className="space-y-3">
+                                {groups.length > 1 && (
+                                  <div className="text-xs font-semibold text-gray-600 uppercase tracking-wide px-2">
+                                    {partKey === 'full-chapter' ? 'Full Chapter Submissions' : `${submissions[0].partName} Submissions`}
+                                  </div>
+                                )}
+                                {submissions.map((submission, index) => (
+                                  <div
+                                    key={submission._id || submission.id}
+                                    className={`border rounded-lg p-4 shadow-sm ${
+                                      index === 0 
+                                        ? 'border-blue-300 bg-blue-50' 
+                                        : 'border-gray-200 bg-white'
+                                    }`}
+                                  >
+                                    <div className="mb-3 pb-3 border-b border-gray-200">
+                                      <div className="flex items-center space-x-3">
+                                        <div className="h-10 w-10 rounded-full bg-[#7C1D23] flex items-center justify-center text-white font-semibold text-sm">
+                                          {submission.student?.name?.charAt(0) || 'S'}
+                                        </div>
+                                        <div>
+                                          <h4 className="font-medium text-gray-800">{submission.student?.name || 'Student'}</h4>
+                                          <p className="text-xs text-gray-600">{submission.research?.title}</p>
+                                        </div>
+                                      </div>
+                                    </div>
+                                    
+                                    <div className="flex items-start justify-between">
+                                      <div className="flex-1">
+                                        <div className="flex items-center space-x-2 mb-2 flex-wrap">
+                                          <span className="text-sm font-semibold text-gray-800">
+                                            Version {submission.version || 1}
+                                          </span>
+                                          {submission.partName && (
+                                            <span className="px-2 py-0.5 text-xs font-medium bg-purple-100 text-purple-700 rounded-full">
+                                              {submission.partName}
+                                            </span>
+                                          )}
+                                          {!submission.partName && (
+                                            <span className="px-2 py-0.5 text-xs font-medium bg-gray-100 text-gray-600 rounded-full">
+                                              Full Chapter
+                                            </span>
+                                          )}
+                                          {index === 0 && (
+                                            <span className="px-2 py-0.5 text-xs font-medium bg-blue-100 text-blue-700 rounded-full">
+                                              Latest
+                                            </span>
+                                          )}
+                                        </div>
+                                        <div className="flex items-center space-x-2">
+                                          <FaFileAlt className="text-gray-600" />
+                                          <h5 className="font-medium text-gray-800">{submission.filename || 'Document'}</h5>
+                                        </div>
+                                        <div className="mt-2 space-y-1">
+                                          <p className="text-xs text-gray-500">
+                                            <span className="font-medium">Date of Submission:</span>{" "}
+                                            {submission.uploadedAt ? new Date(submission.uploadedAt).toLocaleString() : 'N/A'}
+                                          </p>
+                                          <p className="text-xs text-gray-500">
+                                            <span className="font-medium">Current Status:</span>{" "}
+                                            <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
+                                              submission.status === "pending" ? "bg-yellow-100 text-yellow-700" :
+                                              submission.status === "approved" ? "bg-green-100 text-green-700" :
+                                              submission.status === "rejected" ? "bg-red-100 text-red-700" :
+                                              "bg-gray-100 text-gray-700"
+                                            }`}>
+                                              {submission.status}
+                                            </span>
+                                          </p>
+                                        </div>
+                                      </div>
+                                    </div>
+                                    
+                                    <div className="flex space-x-2 mt-4 flex-wrap gap-2">
+                                      {/* View Document Button */}
+                                      <button 
+                                        onClick={() => handleViewDocument(submission.research, submission)}
+                                        disabled={loading}
+                                        className="flex items-center px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors text-sm font-medium disabled:opacity-50"
+                                        title="View Document"
+                                      >
+                                        <FaEye className="mr-2 text-sm" />
+                                        View Document
+                                      </button>
+                                      {submission.status === 'pending' && (
+                                        <>
+                                          <button 
+                                            onClick={() => handleApproveClick(submission.research, submission)}
+                                            disabled={loading}
+                                            className="flex items-center px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors text-sm font-medium disabled:opacity-50"
+                                          >
+                                            <FaCheckCircle className="mr-2 text-sm" />
+                                            Approve
+                                          </button>
+                                          <button 
+                                            onClick={() => handleRejectClick(submission.research, submission)}
+                                            disabled={loading}
+                                            className="flex items-center px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 transition-colors text-sm font-medium disabled:opacity-50"
+                                          >
+                                            <FaTimesCircle className="mr-2 text-sm" />
+                                            Reject
+                                          </button>
+                                        </>
+                                      )}
+                                      {/* Delete button - Faculty can delete any submission including approved ones */}
+                                      <button 
+                                        onClick={() => handleDeleteClick(submission.research, submission)}
+                                        disabled={loading}
+                                        className="flex items-center px-4 py-2 bg-gray-600 text-white rounded-md hover:bg-gray-700 transition-colors text-sm font-medium disabled:opacity-50"
+                                        title="Delete this submission (including approved versions)"
+                                      >
+                                        <FaTrash className="mr-2 text-sm" />
+                                        Delete
+                                      </button>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            ))}
+                          </>
+                        );
+                      })()}
                     </div>
-                  </div>
-                ))}
-                {!research.forms || research.forms.length === 0 && (
-                  <p className="text-sm text-gray-500 italic">No documents submitted yet.</p>
-                )}
+                  )}
+                </div>
+              )}
             </div>
-          </div>
-        ))
+          );
+        })
       )}
     </div>
 
       {/* Approve Confirmation Modal */}
       {showApproveModal && selectedSubmission && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
+        // Match Dean / Export PDF-Excel overlay
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4 py-6">
           <div className="bg-white rounded-lg shadow-lg max-w-md w-full p-6">
             <div className="flex items-center mb-4">
               <div className="h-12 w-12 rounded-full bg-green-100 flex items-center justify-center mr-4">
@@ -656,7 +1328,8 @@ const StudentSubmissions = ({ submissions, onApprove, onReject, loading }) => {
 
       {/* Reject Modal with Reason Input */}
       {showRejectModal && selectedSubmission && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
+        // Match Dean / Export PDF-Excel overlay
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4 py-6">
           <div className="bg-white rounded-lg shadow-lg max-w-md w-full p-6">
             <div className="flex items-center mb-4">
               <div className="h-12 w-12 rounded-full bg-red-100 flex items-center justify-center mr-4">
@@ -676,19 +1349,76 @@ const StudentSubmissions = ({ submissions, onApprove, onReject, loading }) => {
                 <span className="font-medium">Research:</span> {selectedSubmission.title}
               </p>
             </div>
-            <textarea
-              value={rejectionReason}
-              onChange={(e) => setRejectionReason(e.target.value)}
-              placeholder="Enter rejection reason (required)..."
-              rows="4"
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-transparent resize-none"
-              required
-            />
+
+            {/* Reason Type Selection */}
+            <div className="mb-4">
+              <div className="flex space-x-4 mb-3">
+                <label className="flex items-center">
+                  <input
+                    type="radio"
+                    value="predefined"
+                    checked={rejectionReasonType === "predefined"}
+                    onChange={(e) => {
+                      setRejectionReasonType(e.target.value);
+                      setRejectionReason("");
+                    }}
+                    className="mr-2"
+                  />
+                  <span className="text-sm text-gray-700">Select a reason</span>
+                </label>
+                <label className="flex items-center">
+                  <input
+                    type="radio"
+                    value="custom"
+                    checked={rejectionReasonType === "custom"}
+                    onChange={(e) => {
+                      setRejectionReasonType(e.target.value);
+                      setRejectionReason("");
+                    }}
+                    className="mr-2"
+                  />
+                  <span className="text-sm text-gray-700">Custom message</span>
+                </label>
+              </div>
+
+              {/* Predefined Reasons */}
+              {rejectionReasonType === "predefined" && (
+                <select
+                  value={rejectionReason}
+                  onChange={(e) => setRejectionReason(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-transparent"
+                >
+                  <option value="">Select a reason...</option>
+                  <option value="Incomplete content - Missing required sections or information">Incomplete content - Missing required sections or information</option>
+                  <option value="Formatting issues - Document does not meet formatting requirements">Formatting issues - Document does not meet formatting requirements</option>
+                  <option value="Quality concerns - Content needs significant improvement">Quality concerns - Content needs significant improvement</option>
+                  <option value="Citation errors - Incorrect or missing citations">Citation errors - Incorrect or missing citations</option>
+                  <option value="Grammar and language - Multiple grammatical errors or unclear writing">Grammar and language - Multiple grammatical errors or unclear writing</option>
+                  <option value="Research methodology - Issues with research design or methodology">Research methodology - Issues with research design or methodology</option>
+                  <option value="Data analysis - Problems with data presentation or analysis">Data analysis - Problems with data presentation or analysis</option>
+                  <option value="Needs major revision - Significant changes required before approval">Needs major revision - Significant changes required before approval</option>
+                </select>
+              )}
+
+              {/* Custom Message */}
+              {rejectionReasonType === "custom" && (
+                <textarea
+                  value={rejectionReason}
+                  onChange={(e) => setRejectionReason(e.target.value)}
+                  placeholder="Enter your custom rejection reason (required)..."
+                  rows="4"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-transparent resize-none"
+                  required
+                />
+              )}
+            </div>
+
             <div className="flex justify-end space-x-3 mt-4">
               <button
                 onClick={() => {
                   setShowRejectModal(false);
                   setRejectionReason("");
+                  setRejectionReasonType("predefined");
                 }}
                 className="px-4 py-2 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300 transition-colors text-sm font-medium"
               >
@@ -701,6 +1431,97 @@ const StudentSubmissions = ({ submissions, onApprove, onReject, loading }) => {
               >
                 {loading ? "Rejecting..." : "Confirm Rejection"}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Document Viewer Modal (Documents tab - view document) */}
+      {(viewDocumentUrl || (viewDocumentFilename && (viewDocumentType === 'docx' || viewDocumentType === 'doc'))) && (
+        // Match Dean / Export PDF-Excel overlay
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4 py-6" onClick={() => {
+          // Clean up blob URL if it's a local file
+          if (viewDocumentUrl && viewDocumentUrl.startsWith('blob:')) {
+            window.URL.revokeObjectURL(viewDocumentUrl);
+          }
+          setViewDocumentUrl(null);
+          setViewDocumentFilename(null);
+          setViewDocumentType(null);
+          setDocxBlob(null);
+          if (docxContainerRef.current) {
+            docxContainerRef.current.innerHTML = '';
+          }
+        }}>
+          <div className="relative w-full h-full flex flex-col bg-white" onClick={(e) => e.stopPropagation()}>
+            {/* Modal Header */}
+            <div className="flex items-center justify-between p-4 border-b border-gray-200 bg-[#7C1D23] text-white">
+              <h3 className="text-lg font-semibold truncate flex-1 mr-4">
+                {viewDocumentFilename || 'Document Viewer'}
+              </h3>
+              <button
+                type="button"
+                onClick={() => {
+                  // Clean up blob URL if it's a local file
+                  if (viewDocumentUrl && viewDocumentUrl.startsWith('blob:')) {
+                    window.URL.revokeObjectURL(viewDocumentUrl);
+                  }
+                  setViewDocumentUrl(null);
+                  setViewDocumentFilename(null);
+                  setViewDocumentType(null);
+                  setDocxBlob(null);
+                  if (docxContainerRef.current) {
+                    docxContainerRef.current.innerHTML = '';
+                  }
+                }}
+                className="p-2 hover:bg-[#5a1519] rounded-md transition-colors"
+                aria-label="Close"
+              >
+                <FaClose className="text-xl" />
+              </button>
+            </div>
+
+            {/* Document Viewer */}
+            <div className="flex-1 overflow-hidden">
+              {viewDocumentType === 'docx' || viewDocumentType === 'doc' ? (
+                // For DOCX files, use docx-preview
+                <div className="w-full h-full overflow-auto bg-white">
+                  <div 
+                    ref={docxContainerRef}
+                    className="docx-wrapper p-4"
+                    style={{ minHeight: '100%' }}
+                  />
+                  {docxBlob && (
+                    <DocxViewer 
+                      blob={docxBlob} 
+                      containerRef={docxContainerRef}
+                      onError={(error) => {
+                        console.error('Error rendering DOCX:', error);
+                        if (docxContainerRef.current) {
+                          docxContainerRef.current.innerHTML = `
+                            <div class="p-8 text-center">
+                              <p class="text-red-600 mb-4">Error rendering document. Please try downloading it instead.</p>
+                              <button 
+                                onclick="window.location.reload()" 
+                                class="px-6 py-3 bg-[#7C1D23] text-white rounded-md hover:bg-[#5a1519] transition-colors"
+                              >
+                                Download Document
+                              </button>
+                            </div>
+                          `;
+                        }
+                      }}
+                    />
+                  )}
+                </div>
+              ) : viewDocumentUrl ? (
+                // For PDF and other files, use iframe
+                <iframe
+                  src={viewDocumentUrl}
+                  className="w-full h-full border-0"
+                  title="Document Viewer"
+                  style={{ minHeight: '100%' }}
+                />
+              ) : null}
             </div>
           </div>
         </div>
@@ -738,11 +1559,28 @@ const FeedbackManagement = () => {
   const [newComment, setNewComment] = useState('');
   const [scale, setScale] = useState(1.0);
   const [loadingComments, setLoadingComments] = useState(false);
+  const commentTextareaRef = useRef(null);
+  const fileInputRef = useRef(null);
+  const [isDriveConnected, setIsDriveConnected] = useState(false);
 
   useEffect(() => {
     fetchStudents();
     fetchAllFeedback();
+    checkDriveStatus();
   }, []);
+
+  const checkDriveStatus = async () => {
+    try {
+      const token = localStorage.getItem('token');
+      const res = await axios.get('/api/google-drive/status', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      setIsDriveConnected(res.data.connected || false);
+    } catch (error) {
+      console.error('Error checking Drive status:', error);
+      setIsDriveConnected(false);
+    }
+  };
 
   const fetchStudents = async () => {
     try {
@@ -838,8 +1676,40 @@ const FeedbackManagement = () => {
       formData.append('studentId', selectedStudent);
       formData.append('category', category);
       formData.append('message', message);
-      if (file) {
-        formData.append('file', file);
+      
+      // Handle Drive files: download and convert to File object
+      let fileToUpload = file;
+      if (file && file.isDriveFile) {
+        try {
+          // Download file from Google Drive using the access token
+          const driveResponse = await fetch(
+            `https://www.googleapis.com/drive/v3/files/${file.driveFileId}?alt=media`,
+            {
+              headers: {
+                Authorization: `Bearer ${file.accessToken}`,
+              },
+            }
+          );
+
+          if (!driveResponse.ok) {
+            throw new Error('Failed to download file from Google Drive');
+          }
+
+          const blob = await driveResponse.blob();
+          // Convert blob to File object
+          fileToUpload = new File([blob], file.name, {
+            type: file.mimeType || blob.type,
+          });
+        } catch (driveError) {
+          console.error('Error downloading Drive file:', driveError);
+          showError('Drive Download Error', 'Failed to download file from Google Drive. Please try again.');
+          setLoading(false);
+          return;
+        }
+      }
+      
+      if (fileToUpload) {
+        formData.append('file', fileToUpload);
       }
 
       const config = {
@@ -1051,10 +1921,12 @@ const FeedbackManagement = () => {
             width: rect.width,
             height: rect.height
           }
-        }
+        },
+        isGeneral: false
       });
       setShowCommentBox(true);
-    } else if (!text) {
+      setTimeout(() => commentTextareaRef.current?.focus(), 0);
+    } else if (!text && commentPosition?.isGeneral !== true) {
       // Clear selection if no text selected
       setShowCommentBox(false);
       setCommentPosition(null);
@@ -1064,16 +1936,16 @@ const FeedbackManagement = () => {
 
   // Add comment
   const handleAddComment = async () => {
-    if (!newComment.trim() || !commentPosition) return;
+    if (!newComment.trim()) return;
 
     try {
       const token = localStorage.getItem('token');
       await axios.post(`/api/faculty/feedback/${viewingFeedback._id}/comments`, {
         comment: newComment,
-        position: commentPosition.position,
-        pageNumber: commentPosition.pageNumber,
-        selectedText: commentPosition.selectedText,
-        highlightColor: "#ffeb3b"
+        position: commentPosition?.position || null,
+        pageNumber: commentPosition?.pageNumber || pageNumber || 1,
+        selectedText: commentPosition?.selectedText || '',
+        highlightColor: commentPosition?.selectedText ? "#ffeb3b" : undefined
       }, {
         headers: { Authorization: `Bearer ${token}` }
       });
@@ -1090,6 +1962,17 @@ const FeedbackManagement = () => {
       setErrorMessage("Failed to add comment");
       setTimeout(() => setErrorMessage(""), 4000);
     }
+  };
+
+  const handleOpenGeneralComment = () => {
+    setCommentPosition({
+      selectedText: '',
+      pageNumber: pageNumber || 1,
+      position: null,
+      isGeneral: true
+    });
+    setShowCommentBox(true);
+    setTimeout(() => commentTextareaRef.current?.focus(), 0);
   };
 
   // Delete comment
@@ -1236,7 +2119,7 @@ const FeedbackManagement = () => {
               Attach File (Optional)
             </label>
             <div
-              className={`border-2 border-dashed rounded-lg p-6 text-center transition-colors ${
+              className={`border-2 border-dashed rounded-lg p-6 transition-colors ${
                 dragActive ? 'border-[#7C1D23] bg-red-50' : 'border-gray-300 bg-gray-50'
               }`}
               onDragEnter={handleDrag}
@@ -1245,10 +2128,13 @@ const FeedbackManagement = () => {
               onDrop={handleDrop}
             >
               {file ? (
-                <div className="space-y-2">
+                <div className="space-y-2 text-center">
                   <FaFileAlt className="mx-auto h-12 w-12 text-[#7C1D23]" />
                   <p className="text-sm font-medium text-gray-800">{file.name}</p>
                   <p className="text-xs text-gray-500">{formatFileSize(file.size)}</p>
+                  {file.isDriveFile && (
+                    <span className="text-xs text-blue-600">📁 From Google Drive</span>
+                  )}
                   <button
                     type="button"
                     onClick={() => setFile(null)}
@@ -1258,26 +2144,77 @@ const FeedbackManagement = () => {
                   </button>
                 </div>
               ) : (
-                <div className="space-y-2">
-                  <FaUpload className="mx-auto h-12 w-12 text-gray-400" />
-                  <p className="text-sm text-gray-600">
-                    Drag and drop a file here, or{" "}
-                    <label className="text-[#7C1D23] hover:text-[#5a1519] cursor-pointer font-medium">
-                      browse
-                      <input
-                        type="file"
-                        className="hidden"
-                        onChange={handleFileChange}
-                        accept=".pdf,.doc,.docx,.jpg,.jpeg,.png"
-                      />
-                    </label>
+                <div className="flex flex-col items-center text-center">
+                  <FaUpload className="text-[#7C1D23] text-xl mb-2" />
+                  <p className="text-sm text-gray-600 mb-2">
+                    Drag and drop your file here, or select from your options below
                   </p>
-                  <p className="text-xs text-gray-500">
+                  <p className="text-xs text-gray-400 mb-4">
                     Supported: PDF, Word (.doc, .docx), Images (.jpg, .png) • Max 10MB
                   </p>
+                  
+                  <div className="flex gap-3 justify-center">
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      className="px-4 py-2 bg-[#7C1D23] text-white rounded-md hover:bg-[#5a1519] transition-colors text-sm font-medium"
+                    >
+                      Select File from Computer
+                    </button>
+                    <DriveUploader
+                      defaultType="other"
+                      driveButtonLabel="Upload from Google Drive"
+                      buttonBg="#7C1D23"
+                      buttonTextColor="#ffffff"
+                      skipBackendSave={true}
+                      onFilePicked={(fileInfo) => {
+                        if (!fileInfo || !fileInfo.id || !fileInfo.accessToken) {
+                          showError('Error', 'Failed to get Google Drive file information. Please try again.');
+                          return;
+                        }
+                        const MAX_SIZE = 10 * 1024 * 1024; // 10MB
+                        const ALLOWED_TYPES = ['application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'image/jpeg', 'image/jpg', 'image/png'];
+                        
+                        if (fileInfo.size && fileInfo.size > MAX_SIZE) {
+                          showError('File Too Large', 'File size exceeds 10MB limit');
+                          return;
+                        }
+                        
+                        if (fileInfo.mimeType && !ALLOWED_TYPES.includes(fileInfo.mimeType)) {
+                          showError('Invalid File Type', 'Unsupported file format. Allowed: PDF, Word documents, Images (JPG, PNG)');
+                          return;
+                        }
+                        
+                        setFile({
+                          name: fileInfo.name,
+                          driveFileId: fileInfo.id,
+                          accessToken: fileInfo.accessToken,
+                          mimeType: fileInfo.mimeType,
+                          size: fileInfo.size,
+                          isDriveFile: true,
+                        });
+                        setErrorMessage("");
+                      }}
+                    />
+                  </div>
+                  
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    className="hidden"
+                    onChange={handleFileChange}
+                    accept=".pdf,.doc,.docx,.jpg,.jpeg,.png"
+                  />
                 </div>
               )}
             </div>
+            {!isDriveConnected && (
+              <div className="mt-3 text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-md p-3">
+                <span>
+                  Google Drive is not connected. Please connect your Drive account in Settings before uploading files.
+                </span>
+              </div>
+            )}
           </div>
 
           {/* Upload Progress */}
@@ -1436,9 +2373,10 @@ const FeedbackManagement = () => {
         </div>
       )}
 
-      {/* Document Viewer Modal */}
+      {/* Document Viewer Modal (Feedback view) */}
       {showDocumentViewer && viewingFeedback && documentBlobUrl && (
-        <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 p-4">
+        // Match Dean / Export PDF-Excel overlay
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4 py-6">
           <div className="bg-white rounded-lg shadow-xl max-w-7xl w-full h-full flex flex-col">
             {/* Header */}
             <div className="bg-gradient-to-r from-[#7C1D23] to-[#5a1519] text-white p-4 rounded-t-lg flex justify-between items-center">
@@ -1538,16 +2476,21 @@ const FeedbackManagement = () => {
                   </div>
                 )}
 
-                {/* Comment Box (appears when text is selected) */}
-                {showCommentBox && commentPosition && (
+                {/* Comment Box */}
+                {showCommentBox && (
                   <div className="absolute top-20 right-4 bg-white border-2 border-[#7C1D23] rounded-lg shadow-xl p-4 z-50 w-80">
                     <h4 className="font-semibold text-gray-800 mb-2">Add Comment</h4>
-                    {commentPosition.selectedText && (
+                    {commentPosition?.selectedText ? (
                       <p className="text-sm text-gray-600 italic mb-2 p-2 bg-gray-50 rounded">
                         "{commentPosition.selectedText}"
                       </p>
+                    ) : (
+                      <p className="text-xs text-gray-500 mb-2 p-2 bg-gray-50 rounded">
+                        This comment will apply to the current page/document.
+                      </p>
                     )}
                     <textarea
+                      ref={commentTextareaRef}
                       value={newComment}
                       onChange={(e) => setNewComment(e.target.value)}
                       placeholder="Enter your comment..."
@@ -1579,8 +2522,14 @@ const FeedbackManagement = () => {
 
               {/* Comments Panel (Right) */}
               <div className="w-96 border-l border-gray-200 flex flex-col bg-white">
-                <div className="p-4 border-b border-gray-200 bg-gray-50">
+                <div className="p-4 border-b border-gray-200 bg-gray-50 flex items-center justify-between gap-3">
                   <h4 className="font-semibold text-gray-800">Comments ({comments.length})</h4>
+                  <button
+                    onClick={handleOpenGeneralComment}
+                    className="text-xs px-3 py-1 bg-[#7C1D23] text-white rounded hover:bg-[#5a1519] transition-colors"
+                  >
+                    + Comment
+                  </button>
                 </div>
                 
                 <div className="flex-1 overflow-y-auto p-4 space-y-3">
@@ -1592,7 +2541,9 @@ const FeedbackManagement = () => {
                   ) : comments.length === 0 ? (
                     <div className="text-center py-8">
                       <FaFileAlt className="mx-auto h-12 w-12 text-gray-400 mb-3" />
-                      <p className="text-gray-500 text-sm">No comments yet. Select text to add a comment.</p>
+                      <p className="text-gray-500 text-sm">
+                        No comments yet. Select text or use the button above to add one.
+                      </p>
                     </div>
                   ) : (
                     comments.map((comment) => (
@@ -1662,7 +2613,7 @@ const FeedbackManagement = () => {
 };
 
 // Consultation Schedule Component
-const ConsultationSchedule = ({ schedules, onRefresh, calendarConnected, onConnectCalendar, onDisconnectCalendar, calendarLoading }) => {
+const ConsultationSchedule = ({ schedules, onRefresh }) => {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
@@ -1677,11 +2628,17 @@ const ConsultationSchedule = ({ schedules, onRefresh, calendarConnected, onConne
     datetime: "",
     duration: 60,
     location: "",
+    consultationType: "face-to-face",
     syncToCalendar: true
   });
   const [loading, setLoading] = useState(false);
   const [successMessage, setSuccessMessage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
+  const [showDeclineModal, setShowDeclineModal] = useState(false);
+  const [selectedScheduleToDecline, setSelectedScheduleToDecline] = useState(null);
+  const [selectedParticipantToDecline, setSelectedParticipantToDecline] = useState(null);
+  const [declineReason, setDeclineReason] = useState("");
+  const [declineReasonType, setDeclineReasonType] = useState("predefined"); // "predefined" or "custom"
   const [refreshTrigger, setRefreshTrigger] = useState(0);
 
   // Convert schedules to calendar events format
@@ -1715,13 +2672,13 @@ const ConsultationSchedule = ({ schedules, onRefresh, calendarConnected, onConne
 
     try {
       const token = localStorage.getItem('token');
-      // Convert datetime-local value to ISO string for proper timezone handling
-      // datetime-local gives us local time, we need to send it as ISO with timezone
-      const datetimeISO = new Date(formData.datetime).toISOString();
+      // Send datetime in datetime-local format (YYYY-MM-DDTHH:mm)
+      // The backend will treat this as Manila time (UTC+8) and convert to UTC for storage
+      // Do NOT convert to ISO here to avoid browser timezone issues
       
       const response = await axios.post('/api/faculty/schedules', {
         ...formData,
-        datetime: datetimeISO
+        datetime: formData.datetime // Send as-is in datetime-local format
       }, {
         headers: { Authorization: `Bearer ${token}` }
       });
@@ -1743,6 +2700,7 @@ const ConsultationSchedule = ({ schedules, onRefresh, calendarConnected, onConne
         datetime: "",
         duration: 60,
         location: "",
+        consultationType: "face-to-face",
         syncToCalendar: true
       });
       
@@ -1818,21 +2776,39 @@ const ConsultationSchedule = ({ schedules, onRefresh, calendarConnected, onConne
     }
   };
 
-  const handleDeclineRequest = async (scheduleId, participantId) => {
-    if (!window.confirm("Are you sure you want to decline this consultation request?")) return;
+  const handleDeclineRequest = (scheduleId, participantId) => {
+    setSelectedScheduleToDecline(scheduleId);
+    setSelectedParticipantToDecline(participantId);
+    setShowDeclineModal(true);
+    setDeclineReason("");
+    setDeclineReasonType("predefined");
+  };
+
+  const confirmDeclineRequest = async () => {
+    if (!declineReason.trim()) {
+      setErrorMessage("Please select a reason or provide a custom message.");
+      setTimeout(() => setErrorMessage(""), 4000);
+      return;
+    }
 
     setLoading(true);
     try {
       const token = localStorage.getItem('token');
       await axios.put('/api/faculty/schedules/status', {
-        scheduleId,
-        participantId,
-        action: "decline"
+        scheduleId: selectedScheduleToDecline,
+        participantId: selectedParticipantToDecline,
+        action: "decline",
+        rejectionReason: declineReason
       }, {
         headers: { Authorization: `Bearer ${token}` }
       });
 
       setSuccessMessage("Consultation request declined.");
+      setShowDeclineModal(false);
+      setSelectedScheduleToDecline(null);
+      setSelectedParticipantToDecline(null);
+      setDeclineReason("");
+      setDeclineReasonType("predefined");
       window.location.reload();
       setTimeout(() => setSuccessMessage(""), 4000);
     } catch (error) {
@@ -1897,14 +2873,14 @@ const ConsultationSchedule = ({ schedules, onRefresh, calendarConnected, onConne
 
     try {
       const token = localStorage.getItem('token');
-      // Convert datetime-local value to ISO string for proper timezone handling
-      // datetime-local gives us local time, we need to send it as ISO with timezone
-      const datetimeISO = new Date(formData.datetime).toISOString();
+      // Send datetime in datetime-local format (YYYY-MM-DDTHH:mm)
+      // The backend will treat this as Manila time (UTC+8) and convert to UTC for storage
+      // Do NOT convert to ISO here to avoid browser timezone issues
       
       const response = await axios.put('/api/faculty/schedules/update', {
         scheduleId: selectedSchedule._id,
         ...formData,
-        datetime: datetimeISO
+        datetime: formData.datetime // Send as-is in datetime-local format
       }, {
         headers: { Authorization: `Bearer ${token}` }
       });
@@ -2063,6 +3039,22 @@ const ConsultationSchedule = ({ schedules, onRefresh, calendarConnected, onConne
           <div className="space-y-3">
             {pendingRequests.map((schedule) => {
               const studentParticipant = schedule.participants?.find(p => p.role === 'student');
+              
+              // Parse description to extract student message if present
+              // Format: "Student message: {message}" or just description
+              let description = schedule.description || '';
+              let studentMessage = null;
+              
+              if (description.includes('Student message: ')) {
+                const parts = description.split('Student message: ');
+                description = parts[0].trim() || null;
+                studentMessage = parts[1]?.trim() || null;
+              }
+              
+              // Get consultation type with proper formatting
+              const consultationType = schedule.consultationType || 'face-to-face';
+              const consultationTypeDisplay = consultationType === 'online' ? 'Online' : 'Face-to-Face';
+              
               return (
                 <div key={schedule._id} className="bg-white rounded-lg p-4 border border-yellow-300">
                   <div className="flex items-start justify-between">
@@ -2078,6 +3070,19 @@ const ConsultationSchedule = ({ schedules, onRefresh, calendarConnected, onConne
                       <p className="text-sm text-gray-500">
                         Location: {schedule.location}
                       </p>
+                      <p className="text-sm text-gray-500 mt-1">
+                        <strong>Consultation Type:</strong> {consultationTypeDisplay}
+                      </p>
+                      {description && (
+                        <p className="text-sm text-gray-600 mt-2">
+                          <strong>Description:</strong> {description}
+                        </p>
+                      )}
+                      {studentMessage && (
+                        <p className="text-sm text-gray-700 mt-2 bg-blue-50 p-2 rounded border-l-2 border-blue-300">
+                          <strong>Student Message:</strong> {studentMessage}
+                        </p>
+                      )}
                     </div>
                     <div className="flex space-x-2 ml-4">
                       <button
@@ -2105,33 +3110,106 @@ const ConsultationSchedule = ({ schedules, onRefresh, calendarConnected, onConne
         </div>
       )}
 
-      {/* Google Calendar Connection */}
-      <div className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm mb-4">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center space-x-3">
-            <FaGoogle className={`text-2xl ${calendarConnected ? 'text-green-600' : 'text-gray-400'}`} />
-            <div>
-              <h3 className="font-semibold text-gray-800">Google Calendar</h3>
-              <p className="text-sm text-gray-600">
-                {calendarConnected 
-                  ? '✅ Connected - Schedules sync automatically' 
-                  : '❌ Not connected - Connect to enable sync'}
-              </p>
+      {/* Decline Consultation Request Modal */}
+      {showDeclineModal && (
+        // Match Dean / Export PDF-Excel overlay
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4 py-6">
+          <div className="bg-white rounded-lg shadow-lg max-w-md w-full p-6">
+            <div className="flex items-center mb-4">
+              <div className="h-12 w-12 rounded-full bg-red-100 flex items-center justify-center mr-4">
+                <FaTimesCircle className="h-6 w-6 text-red-600" />
+              </div>
+              <h3 className="text-lg font-semibold text-gray-800">Decline Consultation Request</h3>
+            </div>
+            <p className="text-gray-600 mb-4">
+              Please provide a reason for declining this consultation request:
+            </p>
+
+            {/* Reason Type Selection */}
+            <div className="mb-4">
+              <div className="flex space-x-4 mb-3">
+                <label className="flex items-center">
+                  <input
+                    type="radio"
+                    value="predefined"
+                    checked={declineReasonType === "predefined"}
+                    onChange={(e) => {
+                      setDeclineReasonType(e.target.value);
+                      setDeclineReason("");
+                    }}
+                    className="mr-2"
+                  />
+                  <span className="text-sm text-gray-700">Select a reason</span>
+                </label>
+                <label className="flex items-center">
+                  <input
+                    type="radio"
+                    value="custom"
+                    checked={declineReasonType === "custom"}
+                    onChange={(e) => {
+                      setDeclineReasonType(e.target.value);
+                      setDeclineReason("");
+                    }}
+                    className="mr-2"
+                  />
+                  <span className="text-sm text-gray-700">Custom message</span>
+                </label>
+              </div>
+
+              {/* Predefined Reasons */}
+              {declineReasonType === "predefined" && (
+                <select
+                  value={declineReason}
+                  onChange={(e) => setDeclineReason(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-transparent"
+                >
+                  <option value="">Select a reason...</option>
+                  <option value="Schedule conflict - I have another commitment at this time">Schedule conflict - I have another commitment at this time</option>
+                  <option value="Requested time is not available - Please select a different time slot">Requested time is not available - Please select a different time slot</option>
+                  <option value="Insufficient notice - Please request consultations at least 24 hours in advance">Insufficient notice - Please request consultations at least 24 hours in advance</option>
+                  <option value="The requested date/time has already passed">The requested date/time has already passed</option>
+                  <option value="Please use a different consultation slot that better fits both our schedules">Please use a different consultation slot that better fits both our schedules</option>
+                  <option value="The consultation topic requires more preparation time">The consultation topic requires more preparation time</option>
+                </select>
+              )}
+
+              {/* Custom Message */}
+              {declineReasonType === "custom" && (
+                <textarea
+                  value={declineReason}
+                  onChange={(e) => setDeclineReason(e.target.value)}
+                  placeholder="Enter your custom message (required)..."
+                  rows="4"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-transparent resize-none"
+                  required
+                />
+              )}
+            </div>
+
+            <div className="flex justify-end space-x-3 mt-4">
+              <button
+                onClick={() => {
+                  setShowDeclineModal(false);
+                  setSelectedScheduleToDecline(null);
+                  setSelectedParticipantToDecline(null);
+                  setDeclineReason("");
+                  setDeclineReasonType("predefined");
+                }}
+                className="px-4 py-2 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300 transition-colors text-sm font-medium"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmDeclineRequest}
+                disabled={loading || !declineReason.trim()}
+                className="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 transition-colors text-sm font-medium disabled:opacity-50"
+              >
+                {loading ? "Declining..." : "Confirm Decline"}
+              </button>
             </div>
           </div>
-          <button
-            onClick={calendarConnected ? onDisconnectCalendar : onConnectCalendar}
-            disabled={calendarLoading}
-            className={`px-4 py-2 rounded-md font-medium text-sm transition-colors ${
-              calendarConnected
-                ? 'bg-red-500 hover:bg-red-600 text-white'
-                : 'bg-blue-600 hover:bg-blue-700 text-white'
-            } ${calendarLoading ? 'opacity-50 cursor-not-allowed' : ''}`}
-          >
-            {calendarLoading ? 'Loading...' : calendarConnected ? 'Disconnect' : 'Connect Calendar'}
-          </button>
         </div>
-      </div>
+      )}
 
       {/* Calendar View */}
       {viewMode === "calendar" ? (
@@ -2336,7 +3414,8 @@ const ConsultationSchedule = ({ schedules, onRefresh, calendarConnected, onConne
 
       {/* Create Consultation Slot Modal */}
       {showCreateModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
+        // Match Dean / Export PDF-Excel overlay
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4 py-6">
           <div className="bg-white rounded-lg shadow-lg max-w-2xl w-full p-6 max-h-[90vh] overflow-y-auto">
             <div className="flex justify-between items-center mb-4">
               <h3 className="text-lg font-semibold text-gray-800">Create Consultation Slot</h3>
@@ -2392,6 +3471,26 @@ const ConsultationSchedule = ({ schedules, onRefresh, calendarConnected, onConne
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Consultation Type <span className="text-red-500">*</span>
+                </label>
+                <select
+                  value={formData.consultationType}
+                  onChange={(e) => setFormData({...formData, consultationType: e.target.value})}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-transparent"
+                  required
+                >
+                  <option value="face-to-face">Face-to-Face</option>
+                  <option value="online">Online</option>
+                </select>
+                {formData.consultationType === "online" && (
+                  <p className="text-xs text-blue-600 mt-1">
+                    A Google Meet link will be automatically generated if Google Calendar is connected.
+                  </p>
+                )}
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
                   Duration (minutes) <span className="text-red-500">*</span>
                 </label>
                 <select
@@ -2415,43 +3514,34 @@ const ConsultationSchedule = ({ schedules, onRefresh, calendarConnected, onConne
                   type="text"
                   value={formData.location}
                   onChange={(e) => setFormData({...formData, location: e.target.value})}
-                  placeholder="e.g., Faculty Office, Room 301"
-                  className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-transparent"
+                  placeholder={formData.consultationType === "online" ? "Will be set to 'Online'" : "e.g., Faculty Office, Room 301"}
+                  disabled={formData.consultationType === "online"}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-transparent disabled:bg-gray-100 disabled:cursor-not-allowed"
                   required
                 />
               </div>
 
               {/* Google Calendar Sync Toggle */}
-              {calendarConnected && (
-                <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-                  <div className="flex items-center space-x-3">
-                    <input
-                      type="checkbox"
-                      id="syncToCalendar"
-                      checked={formData.syncToCalendar}
-                      onChange={(e) => setFormData({...formData, syncToCalendar: e.target.checked})}
-                      className="w-5 h-5 text-blue-600 rounded focus:ring-blue-500"
-                    />
-                    <label htmlFor="syncToCalendar" className="flex-1 cursor-pointer">
-                      <div className="flex items-center space-x-2">
-                        <FaGoogle className="text-blue-600" />
-                        <span className="font-medium text-gray-800">Sync to Google Calendar</span>
-                      </div>
-                      <p className="text-sm text-gray-600 mt-1">
-                        Automatically add to Google Calendar and generate a Meet link
-                      </p>
-                    </label>
-                  </div>
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                <div className="flex items-center space-x-3">
+                  <input
+                    type="checkbox"
+                    id="syncToCalendar"
+                    checked={formData.syncToCalendar}
+                    onChange={(e) => setFormData({...formData, syncToCalendar: e.target.checked})}
+                    className="w-5 h-5 text-blue-600 rounded focus:ring-blue-500"
+                  />
+                  <label htmlFor="syncToCalendar" className="flex-1 cursor-pointer">
+                    <div className="flex items-center space-x-2">
+                      <FaGoogle className="text-blue-600" />
+                      <span className="font-medium text-gray-800">Sync to Google Calendar</span>
+                    </div>
+                    <p className="text-sm text-gray-600 mt-1">
+                      Automatically add to Google Calendar and generate a Meet link (requires connection in Settings)
+                    </p>
+                  </label>
                 </div>
-              )}
-
-              {!calendarConnected && (
-                <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3">
-                  <p className="text-sm text-yellow-800">
-                    💡 Connect Google Calendar above to enable automatic sync
-                  </p>
-                </div>
-              )}
+              </div>
 
               <div className="flex justify-end space-x-3 pt-4">
                 <button
@@ -2476,7 +3566,8 @@ const ConsultationSchedule = ({ schedules, onRefresh, calendarConnected, onConne
 
       {/* Edit Consultation Slot Modal */}
       {showEditModal && selectedSchedule && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
+        // Match Dean / Export PDF-Excel overlay
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4 py-6">
           <div className="bg-white rounded-lg shadow-lg max-w-2xl w-full p-6 max-h-[90vh] overflow-y-auto">
             <div className="flex justify-between items-center mb-4">
               <h3 className="text-lg font-semibold text-gray-800">Edit Consultation Slot</h3>
@@ -2592,7 +3683,8 @@ const ConsultationSchedule = ({ schedules, onRefresh, calendarConnected, onConne
 
       {/* Delete Confirmation Dialog */}
       {showDeleteDialog && selectedSchedule && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
+        // Match Dean / Export PDF-Excel overlay
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4 py-6">
           <div className="bg-white rounded-lg shadow-lg max-w-md w-full p-6">
             <div className="flex items-center mb-4">
               <div className="h-12 w-12 rounded-full bg-red-100 flex items-center justify-center mr-4">
@@ -2718,7 +3810,8 @@ const StudentList = ({ students, onUpdateStatus, loading }) => {
 
   if (detailedView && selectedStudent) {
     return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-75">
+      // Match Dean / Export PDF-Excel overlay for View & Update Status modal
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4 py-6">
         <div className="bg-white rounded-lg shadow-lg max-w-3xl w-full p-6 max-h-[90vh] overflow-y-auto">
           {/* Success Confirmation Message */}
           {showConfirmation && (
@@ -2986,7 +4079,7 @@ const PanelReviews = () => {
       setPanels(res.data || []);
     } catch (error) {
       console.error('Error fetching panels:', error);
-      alert('Error loading panel assignments');
+      showError('Error', 'Error loading panel assignments');
     } finally {
       setLoading(false);
     }
@@ -3010,11 +4103,11 @@ const PanelReviews = () => {
   const handleSubmitReview = async (e) => {
     e.preventDefault();
     if (!reviewForm.comments.trim()) {
-      alert('Please provide review comments');
+      showWarning('Validation Error', 'Please provide review comments');
       return;
     }
     if (reviewForm.recommendation === 'pending') {
-      alert('Please select a recommendation');
+      showWarning('Validation Error', 'Please select a recommendation');
       return;
     }
 
@@ -3032,12 +4125,12 @@ const PanelReviews = () => {
         }
       );
 
-      alert('Review submitted successfully!');
+      await showSuccess('Success', 'Review submitted successfully!');
       handleCloseReviewModal();
       fetchPanels();
     } catch (error) {
       console.error('Error submitting review:', error);
-      alert(error?.response?.data?.message || 'Error submitting review');
+      showError('Error', error?.response?.data?.message || 'Error submitting review');
     } finally {
       setSubmitting(false);
     }
@@ -3103,7 +4196,9 @@ const PanelReviews = () => {
                     )}
                   </div>
                   <p className="text-sm text-gray-700 mb-1">
-                    <span className="font-medium">Research:</span> {panel.research?.title || 'N/A'}
+                    <span className="font-medium">Research:</span> {panel.research?.title || (
+                      <span className="text-red-600 italic">Research has been deleted</span>
+                    )}
                   </p>
                   <p className="text-sm text-gray-600 mb-1">
                     <span className="font-medium">Type:</span> {panel.type?.replace(/_/g, ' ')}
@@ -3162,21 +4257,128 @@ const PanelReviews = () => {
                   )}
                 </div>
               )}
+
+              {/* All Panelists' Reviews for this Research (including external) */}
+              <div className="mt-4 pt-4 border-t border-gray-200">
+                <p className="text-sm font-medium text-gray-700 mb-2">
+                  Panelists' Reviews for this Research
+                </p>
+                <div className="space-y-2">
+                  {panel.reviews && panel.reviews.length > 0 ? (
+                      panel.reviews.map((review, idx) => {
+                        const isCurrentUserReview = panel.myReview && review._id === panel.myReview._id;
+                        const displayName =
+                          review.isExternal
+                            ? (review.panelistName || review.panelistEmail || 'External Panelist')
+                            : (review.panelist?.name || 'Panelist');
+                        const displayEmail = review.isExternal && review.panelistEmail 
+                          ? review.panelistEmail 
+                          : (review.panelist?.email || '');
+
+                        return (
+                          <div
+                            key={review._id || idx}
+                            className={`border rounded-lg p-3 ${
+                              review.isExternal 
+                                ? 'border-purple-300 bg-purple-50' 
+                                : 'border-gray-200 bg-gray-50'
+                            }`}
+                          >
+                            <div className="flex items-center justify-between mb-1">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="text-sm font-semibold text-gray-800">
+                                  {displayName}
+                                </span>
+                                {review.isExternal && (
+                                  <span className="px-2 py-0.5 text-xs font-medium rounded bg-purple-100 text-purple-700 border border-purple-300">
+                                    External Panelist
+                                  </span>
+                                )}
+                                {isCurrentUserReview && (
+                                  <span className="px-2 py-0.5 text-xs font-medium rounded bg-green-100 text-green-700">
+                                    You
+                                  </span>
+                                )}
+                                {review.recommendation && review.recommendation !== 'pending' && (
+                                  <span
+                                    className={`px-2 py-0.5 text-xs font-medium rounded ${getRecommendationColor(
+                                      review.recommendation
+                                    )}`}
+                                  >
+                                    {review.recommendation.replace(/_/g, ' ')}
+                                  </span>
+                                )}
+                                {review.status && (
+                                  <span className={`px-2 py-0.5 text-xs font-medium rounded ${
+                                    review.status === 'submitted' 
+                                      ? 'bg-green-100 text-green-700' 
+                                      : review.status === 'pending'
+                                      ? 'bg-yellow-100 text-yellow-700'
+                                      : 'bg-gray-100 text-gray-700'
+                                  }`}>
+                                    {review.status.replace(/_/g, ' ')}
+                                  </span>
+                                )}
+                              </div>
+                              <div className="flex flex-col items-end gap-1">
+                                {review.submittedAt && (
+                                  <span className="text-xs text-gray-500">
+                                    Submitted: {new Date(review.submittedAt).toLocaleDateString()}
+                                  </span>
+                                )}
+                                {!review.submittedAt && review.dueDate && (
+                                  <span className="text-xs text-gray-500">
+                                    Due: {new Date(review.dueDate).toLocaleDateString()}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                            {displayEmail && (
+                              <p className="text-xs text-gray-500 mb-1">
+                                {displayEmail}
+                              </p>
+                            )}
+                            {review.comments && (
+                              <div className="mt-2 pt-2 border-t border-gray-200">
+                                <p className="text-xs font-medium text-gray-600 mb-1">Comments:</p>
+                                <p className="text-sm text-gray-700 whitespace-pre-wrap">
+                                  {review.comments}
+                                </p>
+                              </div>
+                            )}
+                            {!review.comments && review.status === 'submitted' && (
+                              <p className="text-xs text-gray-500 italic mt-1">
+                                No comments provided
+                              </p>
+                            )}
+                          </div>
+                        );
+                      })
+                    ) : (
+                      <p className="text-sm text-gray-500 italic">No reviews submitted yet.</p>
+                    )}
+                </div>
+              </div>
             </div>
           ))}
         </div>
       )}
 
-      {/* Review Submission Modal */}
+      {/* Review Submission Modal (Submit Review) */}
       {showReviewModal && selectedPanel && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+        // Match Dean / Export PDF-Excel overlay
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4 py-6">
           <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[90vh] overflow-hidden flex flex-col">
             <div className="p-5 border-b border-gray-200">
               <div className="flex items-center justify-between">
                 <div>
                   <h3 className="text-lg font-semibold text-gray-900">Submit Panel Review</h3>
                   <p className="text-sm text-gray-600 mt-1">{selectedPanel.name}</p>
-                  <p className="text-xs text-gray-500 mt-1">Research: {selectedPanel.research?.title}</p>
+                  <p className="text-xs text-gray-500 mt-1">
+                    Research: {selectedPanel.research?.title || (
+                      <span className="text-red-600 italic">Research has been deleted</span>
+                    )}
+                  </p>
                 </div>
                 <button
                   onClick={handleCloseReviewModal}
@@ -3264,6 +4466,12 @@ const DocumentsView = () => {
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("all");
+  // Document viewer state (for inline preview)
+  const [viewUrl, setViewUrl] = useState(null);
+  const [viewFilename, setViewFilename] = useState("");
+  const [viewType, setViewType] = useState(""); // 'docx' or 'other'
+  const [docxBlob, setDocxBlob] = useState(null);
+  const docxContainerRef = useRef(null);
 
   useEffect(() => {
     fetchDocuments();
@@ -3301,7 +4509,7 @@ const DocumentsView = () => {
       window.URL.revokeObjectURL(url);
     } catch (error) {
       console.error('Error downloading document:', error);
-      alert('Error downloading document: ' + (error.response?.data?.message || error.message));
+      showError('Error', 'Error downloading document: ' + (error.response?.data?.message || error.message));
     }
   };
 
@@ -3314,11 +4522,50 @@ const DocumentsView = () => {
       });
       
       const blob = new Blob([response.data], { type: doc.mimeType });
-      const url = URL.createObjectURL(blob);
-      window.open(url, '_blank');
+      const filename = doc.filename || 'document';
+      const lowerName = filename.toLowerCase();
+      const isDocx = doc.mimeType?.includes('word') ||
+        lowerName.endsWith('.docx') ||
+        lowerName.endsWith('.doc');
+
+      // Reset any previous viewer state
+      if (viewUrl && viewUrl.startsWith('blob:')) {
+        URL.revokeObjectURL(viewUrl);
+      }
+      if (docxContainerRef.current) {
+        docxContainerRef.current.innerHTML = '';
+      }
+
+      if (isDocx) {
+        // Use docx-preview for DOC/DOCX files
+        setDocxBlob(blob);
+        setViewType('docx');
+        setViewFilename(filename);
+        setViewUrl(null);
+      } else {
+        // For PDFs and other types, preview via iframe
+        const url = URL.createObjectURL(blob);
+        setViewUrl(url);
+        setViewType('other');
+        setViewFilename(filename);
+        setDocxBlob(null);
+      }
     } catch (error) {
       console.error('Error viewing document:', error);
-      alert('Error viewing document');
+      showError('Error', 'Error viewing document');
+    }
+  };
+
+  const handleCloseViewer = () => {
+    if (viewUrl && viewUrl.startsWith('blob:')) {
+      URL.revokeObjectURL(viewUrl);
+    }
+    setViewUrl(null);
+    setViewFilename("");
+    setViewType("");
+    setDocxBlob(null);
+    if (docxContainerRef.current) {
+      docxContainerRef.current.innerHTML = '';
     }
   };
 
@@ -3443,6 +4690,73 @@ const DocumentsView = () => {
           </div>
         )}
       </div>
+
+      {/* Document Viewer Modal (Documents tab) */}
+      {(viewUrl || docxBlob) && (
+        // Match Dean / Export PDF-Excel overlay
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4 py-6"
+          onClick={handleCloseViewer}
+        >
+          <div
+            className="relative w-full h-full flex flex-col bg-white"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Modal Header */}
+            <div className="flex items-center justify-between p-4 border-b border-gray-200 bg-[#7C1D23] text-white">
+              <h3 className="text-lg font-semibold truncate flex-1 mr-4">
+                {viewFilename || 'Document Viewer'}
+              </h3>
+              <button
+                type="button"
+                onClick={handleCloseViewer}
+                className="p-2 hover:bg-[#5a1519] rounded-md transition-colors"
+                aria-label="Close"
+              >
+                <FaClose className="text-xl" />
+              </button>
+            </div>
+
+            {/* Document Viewer */}
+            <div className="flex-1 overflow-hidden">
+              {viewType === 'docx' && docxBlob ? (
+                // For DOCX files, use docx-preview
+                <div className="w-full h-full overflow-auto bg-white">
+                  <div
+                    ref={docxContainerRef}
+                    className="docx-wrapper p-4"
+                    style={{ minHeight: '100%' }}
+                  />
+                  {docxBlob && (
+                    <DocxViewer
+                      blob={docxBlob}
+                      containerRef={docxContainerRef}
+                      onError={(error) => {
+                        console.error('Error rendering DOCX:', error);
+                        if (docxContainerRef.current) {
+                          docxContainerRef.current.innerHTML = `
+                            <div class="p-8 text-center">
+                              <p class="text-red-600 mb-4">Error rendering document. Please try downloading it instead.</p>
+                            </div>
+                          `;
+                        }
+                      }}
+                    />
+                  )}
+                </div>
+              ) : viewUrl ? (
+                // For PDF and other files, use iframe
+                <iframe
+                  src={viewUrl}
+                  className="w-full h-full border-0"
+                  title="Document Viewer"
+                  style={{ minHeight: '100%' }}
+                />
+              ) : null}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

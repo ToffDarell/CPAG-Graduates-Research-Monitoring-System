@@ -1,14 +1,195 @@
-import React, { useState, useEffect } from "react";
-import { FaUsersCog, FaCalendarAlt, FaClipboardCheck, FaChartLine, FaFileAlt, FaBell, FaSignOutAlt, FaBars, FaTimes as FaClose, FaUpload, FaDownload, FaTrash, FaHistory, FaFilePdf, FaFileWord, FaSearch, FaCheck, FaUsers, FaEdit, FaChartBar, FaClock, FaMapMarkerAlt, FaExclamationTriangle, FaGoogle } from "react-icons/fa";
+import React, { useState, useEffect, useCallback, useRef } from "react";
+import { FaUsersCog, FaCalendarAlt, FaClipboardCheck, FaChartLine, FaFileAlt, FaBell, FaSignOutAlt, FaBars, FaTimes as FaClose, FaUpload, FaDownload, FaTrash, FaHistory, FaFilePdf, FaFileWord, FaSearch, FaCheck, FaUsers, FaEdit, FaChartBar, FaClock, FaMapMarkerAlt, FaExclamationTriangle, FaCog, FaTimes } from "react-icons/fa";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import axios from "axios";
+import { showSuccess, showError, showWarning, showConfirm, showDangerConfirm } from "../../utils/sweetAlert";
+import { checkPermission } from "../../utils/permissionChecker";
 import { Calendar, momentLocalizer } from 'react-big-calendar';
 import moment from 'moment';
 import 'react-big-calendar/lib/css/react-big-calendar.css';
+import Settings from "../Settings";
+import DriveUploader from "../../components/DriveUploader";
+import { renderAsync } from 'docx-preview';
 
 const localizer = momentLocalizer(moment);
 
-const ProgramHeadDashboard = ({setUser}) => {
+// Helper function to handle permission errors
+const handlePermissionError = (error, defaultMessage = 'Operation failed') => {
+  if (error?.response?.status === 403) {
+    const errorMsg = error?.response?.data?.message || 'This feature has been disabled by the administrator.';
+    showError('Permission Denied', errorMsg);
+  } else {
+    const errorMsg = error?.response?.data?.message || defaultMessage;
+    showError('Error', errorMsg);
+  }
+};
+
+// Reusable Pagination Component
+const Pagination = ({ 
+  currentPage, 
+  totalPages, 
+  totalItems, 
+  itemsPerPage, 
+  onPageChange, 
+  onItemsPerPageChange,
+  startIndex,
+  endIndex 
+}) => {
+  const handleFirstPage = () => onPageChange(1);
+  const handlePrevPage = () => onPageChange(Math.max(1, currentPage - 1));
+  const handleNextPage = () => onPageChange(Math.min(totalPages, currentPage + 1));
+  const handleLastPage = () => onPageChange(totalPages);
+  const handlePageClick = (page) => onPageChange(page);
+
+  // Generate page numbers to display
+  const getPageNumbers = () => {
+    const pages = [];
+    const maxVisible = 5;
+    
+    if (totalPages <= maxVisible) {
+      for (let i = 1; i <= totalPages; i++) {
+        pages.push(i);
+      }
+    } else {
+      if (currentPage <= 3) {
+        for (let i = 1; i <= 4; i++) {
+          pages.push(i);
+        }
+        pages.push('...');
+        pages.push(totalPages);
+      } else if (currentPage >= totalPages - 2) {
+        pages.push(1);
+        pages.push('...');
+        for (let i = totalPages - 3; i <= totalPages; i++) {
+          pages.push(i);
+        }
+      } else {
+        pages.push(1);
+        pages.push('...');
+        for (let i = currentPage - 1; i <= currentPage + 1; i++) {
+          pages.push(i);
+        }
+        pages.push('...');
+        pages.push(totalPages);
+      }
+    }
+    
+    return pages;
+  };
+
+  // Always show pagination if there are items, even if only one page
+  if (totalItems === 0) {
+    return null; // Only hide if there are no items at all
+  }
+
+  return (
+    <div className="flex items-center justify-between border-t border-gray-200 bg-white px-4 py-3 sm:px-6">
+      <div className="flex flex-1 items-center justify-between sm:hidden">
+        <div className="text-sm text-gray-700">
+          Showing <span className="font-medium">{startIndex}</span> to <span className="font-medium">{endIndex}</span> of{' '}
+          <span className="font-medium">{totalItems}</span> results
+        </div>
+        <div className="flex gap-2">
+          <button
+            onClick={handlePrevPage}
+            disabled={currentPage === 1}
+            className="relative inline-flex items-center rounded-md border border-gray-300 bg-white px-2 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            Previous
+          </button>
+          <button
+            onClick={handleNextPage}
+            disabled={currentPage === totalPages}
+            className="relative ml-3 inline-flex items-center rounded-md border border-gray-300 bg-white px-2 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            Next
+          </button>
+        </div>
+      </div>
+      <div className="hidden sm:flex sm:flex-1 sm:items-center sm:justify-between">
+        <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-gray-700">Rows per page</span>
+            <select
+              value={itemsPerPage}
+              onChange={(e) => onItemsPerPageChange(Number(e.target.value))}
+              className="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm text-gray-700 focus:border-[#7C1D23] focus:outline-none focus:ring-2 focus:ring-[#7C1D23]/20"
+            >
+              <option value={5}>5</option>
+              <option value={10}>10</option>
+              <option value={25}>25</option>
+              <option value={50}>50</option>
+              <option value={100}>100</option>
+            </select>
+          </div>
+          <div className="text-sm text-gray-700">
+            Showing <span className="font-medium">{startIndex}</span> to <span className="font-medium">{endIndex}</span> of{' '}
+            <span className="font-medium">{totalItems}</span> results
+          </div>
+        </div>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={handleFirstPage}
+            disabled={currentPage === 1}
+            className="relative inline-flex items-center rounded-md border border-gray-300 bg-white px-2 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+            title="First page"
+          >
+            <span className="sr-only">First page</span>
+            ««
+          </button>
+          <button
+            onClick={handlePrevPage}
+            disabled={currentPage === 1}
+            className="relative inline-flex items-center rounded-md border border-gray-300 bg-white px-2 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+            title="Previous page"
+          >
+            <span className="sr-only">Previous page</span>
+            «
+          </button>
+          {getPageNumbers().map((page, index) => (
+            page === '...' ? (
+              <span key={`ellipsis-${index}`} className="px-2 py-2 text-sm text-gray-700">
+                ...
+              </span>
+            ) : (
+              <button
+                key={page}
+                onClick={() => handlePageClick(page)}
+                className={`relative inline-flex items-center rounded-md px-3 py-2 text-sm font-medium ${
+                  currentPage === page
+                    ? 'bg-[#7C1D23] text-white'
+                    : 'border border-gray-300 bg-white text-gray-700 hover:bg-gray-50'
+                }`}
+              >
+                {page}
+              </button>
+            )
+          ))}
+          <button
+            onClick={handleNextPage}
+            disabled={currentPage === totalPages}
+            className="relative inline-flex items-center rounded-md border border-gray-300 bg-white px-2 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+            title="Next page"
+          >
+            <span className="sr-only">Next page</span>
+            »
+          </button>
+          <button
+            onClick={handleLastPage}
+            disabled={currentPage === totalPages}
+            className="relative inline-flex items-center rounded-md border border-gray-300 bg-white px-2 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+            title="Last page"
+          >
+            <span className="sr-only">Last page</span>
+            »»
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const ProgramHeadDashboard = ({ setUser, user }) => {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   
@@ -24,6 +205,26 @@ const ProgramHeadDashboard = ({setUser}) => {
   // Google Calendar state
   const [calendarConnected, setCalendarConnected] = useState(false);
   const [calendarLoading, setCalendarLoading] = useState(false);
+  const [driveStatus, setDriveStatus] = useState({ connected: false, loading: true });
+  const [driveStatusError, setDriveStatusError] = useState("");
+  const [showSettings, setShowSettings] = useState(false);
+
+  const fetchDriveStatus = useCallback(async () => {
+    const token = localStorage.getItem('token');
+    if (!token) return;
+    setDriveStatus((prev) => ({ ...prev, loading: true }));
+    setDriveStatusError("");
+    try {
+      const res = await axios.get('/api/google-drive/status', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      setDriveStatus({ ...res.data, loading: false });
+    } catch (error) {
+      console.error('Error checking drive status:', error);
+      setDriveStatus((prev) => ({ ...prev, loading: false }));
+      setDriveStatusError(error.response?.data?.message || 'Unable to determine Google Drive connection status.');
+    }
+  }, []);
 
   // Initialize tab from URL on mount (only if URL has tab param and it differs from initial state)
   useEffect(() => {
@@ -45,6 +246,58 @@ const ProgramHeadDashboard = ({setUser}) => {
     }
   }, [selectedTab]); // setSearchParams is stable, doesn't need to be in deps
 
+  // Track permission warnings shown per tab
+  const permissionWarningsRef = useRef({});
+
+  // Check permissions when tab changes
+  useEffect(() => {
+    const checkTabPermissions = async () => {
+      if (!selectedTab || permissionWarningsRef.current[selectedTab]) return;
+
+      const permissionMap = {
+        'panels': { permissions: ['manage_panels'], feature: 'Panel Selection', context: 'You will not be able to create or manage panels.' },
+        'advisers': { permissions: ['view_users'], feature: 'Faculty Adviser Assignment', context: 'You will not be able to view or assign faculty advisers.' },
+        'schedules': { permissions: ['manage_schedules', 'view_schedules'], feature: 'Schedule Management', context: 'You will not be able to manage schedules.' },
+        'monitoring': { permissions: ['view_research'], feature: 'Process Monitoring', context: 'You will not be able to access monitoring features.' },
+        'forms': { permissions: ['upload_documents'], feature: 'Forms & Documents', context: 'You will not be able to upload forms or documents.' },
+        'records': { permissions: ['view_research'], feature: 'Research Records', context: 'You will not be able to view research records.' },
+        'panel-records': { permissions: ['view_research'], feature: 'Panel Records', context: 'You will not be able to view panel records.' },
+        'activity-logs': { permissions: ['view_activity'], feature: 'Activity Logs', context: 'You will not be able to view activity logs.' },
+      };
+
+      const tabConfig = permissionMap[selectedTab];
+      if (tabConfig) {
+        const hasPermission = await checkPermission(
+          tabConfig.permissions,
+          tabConfig.feature,
+          tabConfig.context
+        );
+        if (!hasPermission) {
+          permissionWarningsRef.current[selectedTab] = true;
+        }
+      }
+    };
+
+    checkTabPermissions();
+  }, [selectedTab]);
+
+  useEffect(() => {
+    fetchDriveStatus();
+  }, [fetchDriveStatus]);
+
+  useEffect(() => {
+    const handleDriveMessage = (event) => {
+      if (event.origin !== window.location.origin) return;
+      if (event.data?.type === "DRIVE_CONNECT_SUCCESS") {
+        fetchDriveStatus();
+      }
+    };
+    window.addEventListener("message", handleDriveMessage);
+    return () => {
+      window.removeEventListener("message", handleDriveMessage);
+    };
+  }, [fetchDriveStatus]);
+
   // Check for calendar connection callback on mount
   useEffect(() => {
     const calendarParam = searchParams.get('calendar');
@@ -55,7 +308,7 @@ const ProgramHeadDashboard = ({setUser}) => {
       // Preserve tab param when cleaning up calendar param
       navigate('/dashboard/program-head?tab=schedules', { replace: true });
     } else if (calendarParam === 'error') {
-      alert('Failed to connect Google Calendar. Please try again.');
+      showError('Connection Error', 'Failed to connect Google Calendar. Please try again.');
       setSelectedTab('schedules'); // Still switch to schedules tab
       // Preserve tab param when cleaning up calendar param
       navigate('/dashboard/program-head?tab=schedules', { replace: true });
@@ -94,7 +347,8 @@ const ProgramHeadDashboard = ({setUser}) => {
   };
 
   const disconnectGoogleCalendar = async () => {
-    if (!window.confirm('Are you sure you want to disconnect Google Calendar?')) return;
+    const result = await showConfirm('Disconnect Google Calendar?', 'Are you sure you want to disconnect Google Calendar?');
+    if (!result.isConfirmed) return;
     
     try {
       setCalendarLoading(true);
@@ -110,9 +364,11 @@ const ProgramHeadDashboard = ({setUser}) => {
     }
   };
 
-  const handleLogout = () => {
+
+  const handleLogout = async () => {
     // Show confirmation dialog
-    if (window.confirm('Are you sure you want to log out?')) {
+    const result = await showConfirm('Log Out', 'Are you sure you want to log out?');
+    if (result.isConfirmed) {
       // Clear session data
       localStorage.removeItem('token');
       sessionStorage.removeItem('selectedRole');
@@ -124,6 +380,13 @@ const ProgramHeadDashboard = ({setUser}) => {
       });
     }
   };
+
+  const handleOpenSettings = () => {
+    setSidebarOpen(false);
+    setShowSettings(true);
+  };
+
+  const handleCloseSettings = () => setShowSettings(false);
 
   const tabs = [
     { id: "panels", label: "Panel Selection", icon: <FaUsersCog /> },
@@ -143,16 +406,11 @@ const ProgramHeadDashboard = ({setUser}) => {
       case "advisers":
         return <FacultyAdviserAssignment />;
       case "schedules":
-        return <ScheduleManagement 
-          calendarConnected={calendarConnected}
-          onConnectCalendar={connectGoogleCalendar}
-          onDisconnectCalendar={disconnectGoogleCalendar}
-          calendarLoading={calendarLoading}
-        />;
+        return <ScheduleManagement />;
       case "monitoring":
         return <ProcessMonitoring />;
       case "forms":
-        return <FormsManagement />;
+        return <FormsManagement driveStatus={driveStatus} />;
       case "records":
         return <ResearchRecords />;
       case "panel-records":
@@ -219,8 +477,21 @@ const ProgramHeadDashboard = ({setUser}) => {
           </ul>
         </nav>
 
-        {/* Logout Button */}
-        <div className="p-4 border-t border-[#5a1519]">
+        {/* Settings & Logout Buttons */}
+        <div className="p-4 border-t border-[#5a1519] space-y-3">
+          <button
+            onClick={showSettings ? handleCloseSettings : handleOpenSettings}
+            className={`flex items-center space-x-3 px-4 py-3 rounded-lg transition-all duration-200 w-full ${
+              showSettings
+                ? "bg-white text-[#7C1D23]"
+                : "text-white bg-[#6e1b20] hover:bg-[#5a1519]"
+            }`}
+          >
+            <FaCog className="h-5 w-5" />
+            <span className="font-medium text-sm">
+              {showSettings ? "Close Settings" : "Settings"}
+            </span>
+          </button>
           <button
             onClick={handleLogout}
             className="flex items-center space-x-3 px-4 py-3 rounded-lg text-white hover:bg-red-600 transition-all duration-200 w-full"
@@ -297,11 +568,21 @@ const ProgramHeadDashboard = ({setUser}) => {
           />
         </div>
 
+
         {/* Main Content */}
         <div className="bg-white rounded-lg shadow-md overflow-hidden border border-gray-200">
           {/* Content Area */}
           <div className="p-6 bg-white">
-            {renderContent()}
+            {showSettings ? (
+              <Settings
+                user={user}
+                setUser={setUser}
+                embedded
+                onClose={handleCloseSettings}
+              />
+            ) : (
+              renderContent()
+            )}
           </div>
         </div>
       </div>
@@ -359,6 +640,8 @@ const PanelSelection = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedMemberIds, setSelectedMemberIds] = useState([]);
   const [savingSelection, setSavingSelection] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(10);
 
   useEffect(() => {
     const token = localStorage.getItem('token');
@@ -412,19 +695,19 @@ const PanelSelection = () => {
     
     // Detailed validation with helpful messages
     if (!panelForm.name || panelForm.name.trim() === '') {
-      alert('Please enter a Panel Name.');
+      showWarning('Validation Error', 'Please enter a Panel Name.');
       return;
     }
     if (!panelForm.type) {
-      alert('Please select a Panel Type.');
+      showWarning('Validation Error', 'Please select a Panel Type.');
       return;
     }
     if (!panelForm.researchId || panelForm.researchId === '') {
-      alert('Please select a Research title from the dropdown.\n\nMake sure you click on a specific research title, not just "Select Research".');
+      showWarning('Validation Error', 'Please select a Research title from the dropdown.\n\nMake sure you click on a specific research title, not just "Select Research".');
       return;
     }
     if (selectedMembers.length < 2) {
-      alert('Please add at least 2 panelists to create a panel.\n\nYou can add existing faculty and/or invite external panelists.');
+      showWarning('Validation Error', 'Please add at least 2 panelists to create a panel.\n\nYou can add existing faculty and/or invite external panelists.');
       return;
     }
     setLoading(true);
@@ -500,19 +783,17 @@ const PanelSelection = () => {
       setSelectedMembers([]);
       setInviteMode(false);
       
-      alert(`Panel created successfully. ${internalMembers.length} internal panelist(s) assigned. ${externalMembers.length > 0 ? externalMembers.length + ' invitation(s) sent.' : ''}`);
+      await showSuccess('Panel Created', `Panel created successfully. ${internalMembers.length} internal panelist(s) assigned. ${externalMembers.length > 0 ? externalMembers.length + ' invitation(s) sent.' : ''}`);
       
       // Show info if no more research available
       if (unassignedResearch.length === 0) {
-        alert('Note: All research titles now have panels assigned. Delete an existing panel to reassign research.');
+        showWarning('All Research Assigned', 'Note: All research titles now have panels assigned. Delete an existing panel to reassign research.');
       }
     } catch (error) {
       console.error('Full error:', error);
       console.error('Error response:', error?.response);
       console.error('Error response data:', error?.response?.data);
-      
-      const errorMsg = error?.response?.data?.message || 'Failed to create panel';
-      alert(`Error: ${errorMsg}\n\nCheck console for details.`);
+      handlePermissionError(error, 'Failed to create panel');
     } finally {
       setLoading(false);
     }
@@ -524,29 +805,29 @@ const PanelSelection = () => {
       const headers = { Authorization: `Bearer ${token}` };
       const res = await axios.put(`/api/programhead/panels/${panelId}/members`, { members }, { headers });
       setPanels(prev => prev.map(p => p._id === panelId ? res.data.panel : p));
-      alert('Panel membership updated.');
+      showSuccess('Success', 'Panel membership updated.');
     } catch (error) {
       console.error(error);
-      alert(error?.response?.data?.message || 'Failed to update membership');
+      handlePermissionError(error, 'Failed to update membership');
     }
   };
 
   const handleInvitePanelist = async (panelId) => {
     if (!inviteForm.name || !inviteForm.email || !inviteForm.role) {
-      alert('Please fill in all required fields: Name, Email, and Role');
+      showWarning('Validation Error', 'Please fill in all required fields: Name, Email, and Role');
       return;
     }
 
     // Validate email format
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(inviteForm.email)) {
-      alert('Please enter a valid email address');
+      showWarning('Validation Error', 'Please enter a valid email address');
       return;
     }
 
     // Validate institutional email domain
     if (!inviteForm.email.endsWith('@buksu.edu.ph')) {
-      alert('Panelist must use @buksu.edu.ph institutional email address');
+      showWarning('Validation Error', 'Panelist must use @buksu.edu.ph institutional email address');
       return;
     }
 
@@ -562,7 +843,7 @@ const PanelSelection = () => {
         reviewDeadline: inviteForm.reviewDeadline || undefined,
       }, { headers });
 
-      alert(res.data.message || 'Invitation sent successfully!');
+      await showSuccess('Invitation Sent', res.data.message || 'Invitation sent successfully!');
       setInviteForm({ name: '', email: '', role: 'member', reviewDeadline: '' });
       setInviteMode(false);
 
@@ -571,7 +852,7 @@ const PanelSelection = () => {
       setPanels(panelsRes.data || []);
     } catch (error) {
       console.error(error);
-      alert(error?.response?.data?.message || 'Failed to send invitation');
+      handlePermissionError(error, 'Failed to send invitation');
     } finally {
       setInviting(false);
     }
@@ -631,7 +912,7 @@ const PanelSelection = () => {
       setPanels(prev => prev.map(p => p._id === currentPanel._id ? res.data.panel : p));
       
       // Show confirmation
-      alert(`Selection saved successfully! ${res.data.selectedCount} panelist(s) selected.`);
+      await showSuccess('Success', `Selection saved successfully! ${res.data.selectedCount} panelist(s) selected.`);
       
       handleCloseSelectModal();
       
@@ -640,7 +921,7 @@ const PanelSelection = () => {
       setPanels(panelsRes.data || []);
     } catch (error) {
       console.error(error);
-      alert(error?.response?.data?.message || 'Failed to save selection');
+      showError('Error', error?.response?.data?.message || 'Failed to save selection');
     } finally {
       setSavingSelection(false);
     }
@@ -648,21 +929,27 @@ const PanelSelection = () => {
 
 
   const handleDeletePanel = async (panelId, panelName) => {
-    if (!window.confirm(`WARNING: Are you sure you want to permanently delete "${panelName}"? This action cannot be undone. All panel data, reviews, and documents will be permanently deleted.`)) {
-      return;
-    }
+    const result1 = await showDangerConfirm(
+      'WARNING: Delete Panel?',
+      `Are you sure you want to permanently delete "${panelName}"? This action cannot be undone. All panel data, reviews, and documents will be permanently deleted.`,
+      'Yes, delete permanently'
+    );
+    if (!result1.isConfirmed) return;
 
     // Double confirmation for permanent deletion
-    if (!window.confirm(`This will permanently delete "${panelName}" and all associated data. This action cannot be undone. Click OK to proceed.`)) {
-      return;
-    }
+    const result2 = await showDangerConfirm(
+      'Final Confirmation',
+      `This will permanently delete "${panelName}" and all associated data. This action cannot be undone. Click OK to proceed.`,
+      'Yes, proceed with deletion'
+    );
+    if (!result2.isConfirmed) return;
 
     try {
       const token = localStorage.getItem('token');
       const headers = { Authorization: `Bearer ${token}` };
       await axios.delete(`/api/programhead/panels/${panelId}`, { headers });
       
-      alert('Panel deleted successfully');
+      await showSuccess('Panel Deleted', 'Panel deleted successfully');
       
       // Refresh panels list and available research
       const [panelsRes, researchRes] = await Promise.all([
@@ -684,7 +971,7 @@ const PanelSelection = () => {
       setAvailableResearch(unassignedResearch);
     } catch (error) {
       console.error(error);
-      alert(error?.response?.data?.message || 'Failed to delete panel');
+      handlePermissionError(error, 'Failed to delete panel');
     }
   };
 
@@ -692,9 +979,8 @@ const PanelSelection = () => {
     if (!currentPanel) return;
 
     const memberName = member.isExternal ? member.name : (member.faculty?.name || 'Unknown');
-    if (!window.confirm(`Are you sure you want to remove "${memberName}" from this panel?`)) {
-      return;
-    }
+    const result = await showConfirm('Remove Panel Member', `Are you sure you want to remove "${memberName}" from this panel?`);
+    if (!result.isConfirmed) return;
 
     try {
       const token = localStorage.getItem('token');
@@ -713,7 +999,7 @@ const PanelSelection = () => {
         data: { memberIdentifier }
       });
       
-      alert('Panel member removed successfully');
+      await showSuccess('Success', 'Panel member removed successfully');
       
       // Refresh current panel data
       const panelsRes = await axios.get('/api/programhead/panels', { headers });
@@ -728,7 +1014,7 @@ const PanelSelection = () => {
       setPanels(panelsRes.data || []);
     } catch (error) {
       console.error(error);
-      alert(error?.response?.data?.message || 'Failed to remove panel member');
+      handlePermissionError(error, 'Failed to remove panel member');
     }
   };
 
@@ -844,6 +1130,7 @@ const PanelSelection = () => {
                 <select id="roleSelect" className="w-full px-4 py-2 rounded-md border border-gray-300 focus:border-[#7C1D23] focus:ring-2 focus:ring-[#7C1D23]/20 text-sm">
                   <option value="chair">Chair</option>
                   <option value="member">Member</option>
+                  <option value="secretary">Secretary</option>
                   <option value="external_examiner">External Examiner</option>
                 </select>
               </div>
@@ -891,6 +1178,7 @@ const PanelSelection = () => {
                   >
                     <option value="chair">Chair</option>
                     <option value="member">Member</option>
+                    <option value="secretary">Secretary</option>
                     <option value="external_examiner">External Examiner</option>
                   </select>
                 </div>
@@ -920,26 +1208,26 @@ const PanelSelection = () => {
                   onClick={() => {
                     // Validate before adding
                     if (!inviteForm.name || !inviteForm.email || !inviteForm.role) {
-                      alert('Please fill in all required fields: Name, Email, and Role');
+                      showWarning('Validation Error', 'Please fill in all required fields: Name, Email, and Role');
                       return;
                     }
                     
                     // Validate email format
                     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
                     if (!emailRegex.test(inviteForm.email)) {
-                      alert('Please enter a valid email address');
+                      showWarning('Validation Error', 'Please enter a valid email address');
                       return;
                     }
                     
                     // Validate institutional email domain
                     if (!inviteForm.email.endsWith('@buksu.edu.ph')) {
-                      alert('Panelist must use @buksu.edu.ph institutional email address');
+                      showWarning('Validation Error', 'Panelist must use @buksu.edu.ph institutional email address');
                       return;
                     }
                     
                     // Check for duplicate email
                     if (selectedMembers.some(m => m.isExternal && m.email === inviteForm.email)) {
-                      alert('This panelist email is already added');
+                      showWarning('Duplicate Email', 'This panelist email is already added');
                       return;
                     }
                     
@@ -989,22 +1277,31 @@ const PanelSelection = () => {
       </div>
 
       {/* All Panels List */}
-      <div className="bg-white border border-gray-200 rounded-lg p-5">
-        <div className="flex items-center justify-between mb-4">
-          <div>
-            <h3 className="text-lg font-semibold text-gray-800">All Panels</h3>
-            <p className="text-sm text-gray-600 mt-1">{panels.length} panel{panels.length !== 1 ? 's' : ''} total</p>
+      <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+        <div className="p-5">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h3 className="text-lg font-semibold text-gray-800">All Panels</h3>
+              <p className="text-sm text-gray-600 mt-1">{panels.length} panel{panels.length !== 1 ? 's' : ''} total</p>
+            </div>
           </div>
-        </div>
-        
-        {panels.length === 0 ? (
-          <div className="text-center py-12 border-2 border-dashed border-gray-300 rounded-lg">
-            <p className="text-gray-500 mb-2">No panels created yet</p>
-            <p className="text-sm text-gray-400">Create your first panel above to get started</p>
-          </div>
-        ) : (
-          <div className="grid gap-4">
-            {panels.map(panel => (
+          
+          {panels.length === 0 ? (
+            <div className="text-center py-12 border-2 border-dashed border-gray-300 rounded-lg">
+              <p className="text-gray-500 mb-2">No panels created yet</p>
+              <p className="text-sm text-gray-400">Create your first panel above to get started</p>
+            </div>
+          ) : (
+            (() => {
+              const startIndex = (currentPage - 1) * itemsPerPage;
+              const endIndex = startIndex + itemsPerPage;
+              const paginatedPanels = panels.slice(startIndex, endIndex);
+              const totalPages = Math.ceil(panels.length / itemsPerPage);
+              
+              return (
+                <>
+                  <div className="grid gap-4">
+                    {paginatedPanels.map(panel => (
               <div key={panel._id} className="border border-gray-200 rounded-lg p-5 hover:shadow-md transition-shadow">
                 <div className="flex items-start justify-between gap-4 mb-4">
                   <div className="flex-1">
@@ -1108,6 +1405,7 @@ const PanelSelection = () => {
                         <select id={`role-${panel._id}`} className="w-full px-3 py-2 rounded-md border border-gray-300 text-sm">
                           <option value="chair">Chair</option>
                           <option value="member">Member</option>
+                          <option value="secretary">Secretary</option>
                           <option value="external_examiner">External Examiner</option>
                         </select>
                       </div>
@@ -1159,6 +1457,7 @@ const PanelSelection = () => {
                           >
                             <option value="chair">Chair</option>
                             <option value="member">Member</option>
+                            <option value="secretary">Secretary</option>
                             <option value="external_examiner">External Examiner</option>
                           </select>
                         </div>
@@ -1196,14 +1495,34 @@ const PanelSelection = () => {
                   )}
                 </div>
               </div>
-            ))}
-          </div>
+                  ))}
+                </div>
+                {panels.length > itemsPerPage && (
+                  <Pagination
+                    currentPage={currentPage}
+                    totalPages={totalPages}
+                    totalItems={panels.length}
+                    itemsPerPage={itemsPerPage}
+                    onPageChange={setCurrentPage}
+                    onItemsPerPageChange={(newItemsPerPage) => {
+                      setItemsPerPage(newItemsPerPage);
+                      setCurrentPage(1);
+                    }}
+                    startIndex={startIndex + 1}
+                    endIndex={Math.min(endIndex, panels.length)}
+                  />
+                )}
+              </>
+            );
+          })()
         )}
+        </div>
       </div>
 
-      {/* Select Members Modal */}
+      {/* Select Members Modal (Manage Active Panelists) */}
       {selectModalOpen && currentPanel && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+        // Match Dean modals / Export PDF-Excel overlay
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4 py-6">
           <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[90vh] overflow-hidden flex flex-col">
             {/* Modal Header */}
             <div className="p-5 border-b border-gray-200">
@@ -1352,7 +1671,7 @@ const PanelSelection = () => {
 };
 
 // Schedule Management Component
-const ScheduleManagement = ({ calendarConnected, onConnectCalendar, onDisconnectCalendar, calendarLoading }) => {
+const ScheduleManagement = () => {
   const [activeTab, setActiveTab] = useState("consultations"); // "consultations", "panels", or "calendar"
   const [consultationSchedules, setConsultationSchedules] = useState([]);
   const [panelsWithoutSchedule, setPanelsWithoutSchedule] = useState([]);
@@ -1403,7 +1722,7 @@ const ScheduleManagement = ({ calendarConnected, onConnectCalendar, onDisconnect
       setConsultationSchedules(res.data || []);
     } catch (error) {
       console.error('Error fetching consultation schedules:', error);
-      alert('Error loading consultation schedules');
+      showError('Error', 'Error loading consultation schedules');
     } finally {
       setLoading(false);
     }
@@ -1452,7 +1771,7 @@ const ScheduleManagement = ({ calendarConnected, onConnectCalendar, onDisconnect
       setCreatedPanelSchedules(res.data || []);
     } catch (error) {
       console.error('Error fetching created panel schedules:', error);
-      alert('Error loading panel defense schedules');
+      showError('Error', 'Error loading panel defense schedules');
     } finally {
       setLoading(false);
     }
@@ -1471,7 +1790,7 @@ const ScheduleManagement = ({ calendarConnected, onConnectCalendar, onDisconnect
       setFinalizedSchedules(finalized);
     } catch (error) {
       console.error('Error fetching finalized schedules:', error);
-      alert('Error loading finalized schedules');
+      showError('Error', 'Error loading finalized schedules');
     } finally {
       setLoading(false);
     }
@@ -1493,16 +1812,20 @@ const ScheduleManagement = ({ calendarConnected, onConnectCalendar, onDisconnect
   };
 
   const handleFinalizeConsultation = async (scheduleId) => {
-    if (!window.confirm('Are you sure you want to finalize this consultation schedule? All participants will be notified.')) {
-      return;
-    }
+    const result = await showConfirm(
+      'Finalize Consultation Schedule',
+      'Are you sure you want to finalize this consultation schedule? All participants will be notified via email.',
+      'Yes, Finalize',
+      'Cancel'
+    );
+    if (!result.isConfirmed) return;
 
     try {
       const token = localStorage.getItem('token');
       await axios.put(`/api/programhead/schedules/${scheduleId}/finalize`, {}, {
         headers: { Authorization: `Bearer ${token}` }
       });
-      alert('Schedule finalized successfully! Participants have been notified.');
+      await showSuccess('Success', 'Schedule finalized successfully! Participants have been notified.');
       fetchPendingSchedules();
       // Refresh calendar if on calendar tab
       if (activeTab === "calendar") {
@@ -1510,13 +1833,13 @@ const ScheduleManagement = ({ calendarConnected, onConnectCalendar, onDisconnect
       }
     } catch (error) {
       console.error('Error finalizing schedule:', error);
-      alert(error.response?.data?.message || 'Error finalizing schedule');
+      showError('Error', error.response?.data?.message || 'Error finalizing schedule');
     }
   };
 
   const handleCheckConflicts = async () => {
     if (!scheduleForm.datetime || !scheduleForm.location) {
-      alert('Please fill in date/time and location first');
+      showWarning('Validation Error', 'Please fill in date/time and location first');
       return;
     }
 
@@ -1552,24 +1875,30 @@ const ScheduleManagement = ({ calendarConnected, onConnectCalendar, onDisconnect
         }
       }
 
+      // Determine schedule type from panel type
+      const scheduleType = panel?.type === 'proposal_defense' ? 'proposal_defense' : 
+                          panel?.type === 'final_defense' ? 'final_defense' : 
+                          'proposal_defense'; // Default to proposal_defense
+
       const res = await axios.post('/api/programhead/schedules/check-conflicts', {
         datetime: scheduleForm.datetime,
         duration: scheduleForm.duration,
         location: scheduleForm.location,
         participants,
+        type: scheduleType, // Pass schedule type to exclude consultation schedules
       }, {
         headers: { Authorization: `Bearer ${token}` }
       });
 
       setConflicts(res.data);
       if (res.data.hasConflicts) {
-        alert('Conflicts detected! Please review and adjust the schedule.');
+        showWarning('Conflicts Detected', 'Conflicts detected! Please review and adjust the schedule.');
       } else {
-        alert('No conflicts detected. You can proceed with finalization.');
+        showSuccess('No Conflicts', 'No conflicts detected. You can proceed with finalization.');
       }
     } catch (error) {
       console.error('Error checking conflicts:', error);
-      alert('Error checking conflicts');
+      showError('Error', 'Error checking conflicts');
     } finally {
       setCheckingConflicts(false);
     }
@@ -1577,7 +1906,7 @@ const ScheduleManagement = ({ calendarConnected, onConnectCalendar, onDisconnect
 
   const handleCreatePanelSchedule = async () => {
     if (!selectedPanel || !scheduleForm.datetime || !scheduleForm.location) {
-      alert('Please fill in all required fields');
+      showWarning('Validation Error', 'Please fill in all required fields');
       return;
     }
 
@@ -1605,12 +1934,16 @@ const ScheduleManagement = ({ calendarConnected, onConnectCalendar, onDisconnect
     confirmMessage += `All participants (panelists, students, and adviser) will be notified via email.`;
     
     if (conflicts && conflicts.hasConflicts) {
-      confirmMessage += `\n\n⚠️ WARNING: Conflicts detected! Proceed anyway?`;
+      confirmMessage += `\n\n⚠️ Conflicts detected! Proceed anyway?`;
     }
 
-    if (!window.confirm(confirmMessage)) {
-      return;
-    }
+    const result = await showConfirm(
+      'Create & Finalize Panel Schedule',
+      confirmMessage,
+      'Yes, Create Schedule',
+      'Cancel'
+    );
+    if (!result.isConfirmed) return;
 
     try {
       setLoading(true);
@@ -1624,7 +1957,7 @@ const ScheduleManagement = ({ calendarConnected, onConnectCalendar, onDisconnect
         headers: { Authorization: `Bearer ${token}` }
       });
       
-      alert('Panel schedule created and finalized successfully! All participants have been notified.');
+      await showSuccess('Success', 'Panel schedule created and finalized successfully! All participants have been notified.');
       setShowCreateModal(false);
       setSelectedPanel(null);
       setScheduleForm({ datetime: '', duration: 120, location: '', description: '' });
@@ -1640,7 +1973,7 @@ const ScheduleManagement = ({ calendarConnected, onConnectCalendar, onDisconnect
       }
     } catch (error) {
       console.error('Error creating panel schedule:', error);
-      alert(error.response?.data?.message || 'Error creating panel schedule');
+      showError('Error', error.response?.data?.message || 'Error creating panel schedule');
     } finally {
       setLoading(false);
     }
@@ -1648,7 +1981,7 @@ const ScheduleManagement = ({ calendarConnected, onConnectCalendar, onDisconnect
 
   const handleUpdateSchedule = async () => {
     if (!editingSchedule || !editForm.datetime || !editForm.location) {
-      alert('Please fill in all required fields');
+      showWarning('Validation Error', 'Please fill in all required fields');
       return;
     }
 
@@ -1658,9 +1991,13 @@ const ScheduleManagement = ({ calendarConnected, onConnectCalendar, onDisconnect
         : 'No email notifications will be sent.'
     }`;
 
-    if (!window.confirm(confirmMessage)) {
-      return;
-    }
+    const result = await showConfirm(
+      'Update Schedule',
+      confirmMessage,
+      'Yes, Update',
+      'Cancel'
+    );
+    if (!result.isConfirmed) return;
 
     try {
       setLoading(true);
@@ -1675,7 +2012,7 @@ const ScheduleManagement = ({ calendarConnected, onConnectCalendar, onDisconnect
         headers: { Authorization: `Bearer ${token}` }
       });
       
-      alert('Schedule updated successfully!');
+      await showSuccess('Success', 'Schedule updated successfully!');
       setShowEditModal(false);
       setEditingSchedule(null);
       setEditForm({ datetime: '', duration: 120, location: '', description: '', sendNotifications: true });
@@ -1686,7 +2023,7 @@ const ScheduleManagement = ({ calendarConnected, onConnectCalendar, onDisconnect
       }
     } catch (error) {
       console.error('Error updating schedule:', error);
-      alert(error.response?.data?.message || 'Error updating schedule');
+      showError('Error', error.response?.data?.message || 'Error updating schedule');
     } finally {
       setLoading(false);
     }
@@ -1731,38 +2068,78 @@ const ScheduleManagement = ({ calendarConnected, onConnectCalendar, onDisconnect
     console.log('Selected slot:', start, end);
   };
 
+  const [exportingSchedule, setExportingSchedule] = useState(false);
+  const [scheduleFilters, setScheduleFilters] = useState({
+    startDate: '',
+    endDate: '',
+    type: 'all'
+  });
+
+  const handleExportDefenseSchedule = async () => {
+    // Check drive status
+    let driveConnected = false;
+    try {
+      const token = localStorage.getItem('token');
+      const driveRes = await axios.get('/api/google-drive/status', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      driveConnected = driveRes.data?.connected || false;
+    } catch (error) {
+      console.error('Error checking drive status:', error);
+    }
+
+    if (!driveConnected) {
+      showWarning('Google Drive Not Connected', 'Please connect your Google Drive account in Settings before exporting.');
+      return;
+    }
+
+    setExportingSchedule(true);
+    try {
+      const token = localStorage.getItem('token');
+      const exportFilters = {
+        startDate: scheduleFilters.startDate || undefined,
+        endDate: scheduleFilters.endDate || undefined,
+        type: scheduleFilters.type !== 'all' ? scheduleFilters.type : undefined,
+      };
+
+      // Remove undefined values
+      Object.keys(exportFilters).forEach(key => exportFilters[key] === undefined && delete exportFilters[key]);
+
+      const res = await axios.post(
+        '/api/programhead/schedules/export',
+        { filters: exportFilters },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+
+      await showSuccess(
+        'Export Successful',
+        res.data.message || `Defense schedule exported as Excel and saved to your Google Drive Reports folder.`
+      );
+    } catch (error) {
+      console.error('Error exporting defense schedule:', error);
+      const errorMessage = error.response?.data?.message || 'Failed to export defense schedule. Please try again.';
+      showError('Export Failed', errorMessage);
+    } finally {
+      setExportingSchedule(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       {/* Header */}
       <div className="bg-white border border-gray-200 rounded-lg p-5">
-        <h2 className="text-xl font-bold text-gray-800 mb-2">Schedule Finalization</h2>
-        <p className="text-sm text-gray-600">Finalize consultation schedules and create panel defense schedules</p>
-      </div>
-
-      {/* Google Calendar Connection */}
-      <div className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center space-x-3">
-            <FaGoogle className={`text-2xl ${calendarConnected ? 'text-green-600' : 'text-gray-400'}`} />
-            <div>
-              <h3 className="font-semibold text-gray-800">Google Calendar</h3>
-              <p className="text-sm text-gray-600">
-                {calendarConnected 
-                  ? '✅ Connected - Schedules sync automatically' 
-                  : '❌ Not connected - Connect to enable sync'}
-              </p>
-            </div>
+        <div className="flex justify-between items-center">
+          <div>
+            <h2 className="text-xl font-bold text-gray-800 mb-2">Schedule Finalization</h2>
+            <p className="text-sm text-gray-600">Finalize consultation schedules and create panel defense schedules</p>
           </div>
           <button
-            onClick={calendarConnected ? onDisconnectCalendar : onConnectCalendar}
-            disabled={calendarLoading}
-            className={`px-4 py-2 rounded-md font-medium text-sm transition-colors ${
-              calendarConnected
-                ? 'bg-red-500 hover:bg-red-600 text-white'
-                : 'bg-blue-600 hover:bg-blue-700 text-white'
-            } ${calendarLoading ? 'opacity-50 cursor-not-allowed' : ''}`}
+            onClick={handleExportDefenseSchedule}
+            disabled={exportingSchedule}
+            className="flex items-center px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm font-medium"
           >
-            {calendarLoading ? 'Loading...' : calendarConnected ? 'Disconnect' : 'Connect Calendar'}
+            <FaDownload className="mr-2" />
+            {exportingSchedule ? 'Exporting...' : 'Export Defense Schedule'}
           </button>
         </div>
       </div>
@@ -2037,23 +2414,29 @@ const ScheduleManagement = ({ calendarConnected, onConnectCalendar, onDisconnect
                         {schedule.status !== 'completed' && (
                           <button
                             onClick={async () => {
-                              if (window.confirm('Are you sure you want to delete this schedule? This will permanently remove it from the database and the panel will be available for creating a new schedule. This action cannot be undone.')) {
-                                try {
-                                  const token = localStorage.getItem('token');
-                                  await axios.delete(`/api/programhead/schedules/${schedule._id}`, {
-                                    headers: { Authorization: `Bearer ${token}` }
-                                  });
-                                  alert('Schedule deleted successfully! The panel is now available for creating a new schedule.');
-                                  fetchCreatedPanelSchedules();
-                                  // Refresh panels without schedule list after deletion
-                                  fetchPanelsWithoutSchedule();
-                                  if (activeTab === "calendar") {
-                                    fetchFinalizedSchedules();
-                                  }
-                                } catch (error) {
-                                  console.error('Error deleting schedule:', error);
-                                  alert(error.response?.data?.message || 'Error deleting schedule');
+                              const result = await showDangerConfirm(
+                                'Delete Schedule',
+                                'Are you sure you want to delete this schedule? This will permanently remove it from the database and the panel will be available for creating a new schedule. This action cannot be undone.',
+                                'Yes, Delete',
+                                'Cancel'
+                              );
+                              if (!result.isConfirmed) return;
+
+                              try {
+                                const token = localStorage.getItem('token');
+                                await axios.delete(`/api/programhead/schedules/${schedule._id}`, {
+                                  headers: { Authorization: `Bearer ${token}` }
+                                });
+                                await showSuccess('Success', 'Schedule deleted successfully! The panel is now available for creating a new schedule.');
+                                fetchCreatedPanelSchedules();
+                                // Refresh panels without schedule list after deletion
+                                fetchPanelsWithoutSchedule();
+                                if (activeTab === "calendar") {
+                                  fetchFinalizedSchedules();
                                 }
+                              } catch (error) {
+                                console.error('Error deleting schedule:', error);
+                                showError('Error', error.response?.data?.message || 'Error deleting schedule');
                               }
                             }}
                             className="p-2 text-red-600 hover:bg-red-50 rounded transition-colors"
@@ -2314,7 +2697,8 @@ const ScheduleManagement = ({ calendarConnected, onConnectCalendar, onDisconnect
 
       {/* Create Panel Schedule Modal */}
       {showCreateModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+        // Match global modal overlay style (Dean / Export PDF-Excel)
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4 py-6">
           <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
             <div className="p-5 border-b border-gray-200">
               <div className="flex items-center justify-between">
@@ -2448,15 +2832,44 @@ const ScheduleManagement = ({ calendarConnected, onConnectCalendar, onDisconnect
                   <div className="flex-1">
                     {conflicts.hasConflicts ? (
                       <div className="bg-red-50 border border-red-200 rounded-lg p-3">
-                        <div className="flex items-center gap-2 text-red-800">
+                        <div className="flex items-center gap-2 text-red-800 mb-2">
                           <FaExclamationTriangle />
                           <span className="font-medium">Conflicts Detected</span>
                         </div>
-                        <ul className="mt-2 text-sm text-red-700 space-y-1">
+                        <div className="space-y-3">
                           {conflicts.conflicts.map((conflict, idx) => (
-                            <li key={idx}>• {conflict.message}</li>
+                            <div key={idx} className="text-sm text-red-700">
+                              <p className="font-medium mb-1">• {conflict.message}</p>
+                              {conflict.conflicts && conflict.conflicts.length > 0 && (
+                                <div className="ml-4 mt-1 space-y-2">
+                                  {conflict.conflicts.map((conflictingSchedule, sIdx) => (
+                                    <div key={sIdx} className="bg-white rounded p-2 border border-red-200">
+                                      <p className="font-medium text-red-800">
+                                        {conflictingSchedule.title || 'Untitled Schedule'}
+                                      </p>
+                                      <p className="text-xs text-red-600">
+                                        Date: {new Date(conflictingSchedule.datetime).toLocaleString()}
+                                        {conflictingSchedule.duration && ` • Duration: ${conflictingSchedule.duration} min`}
+                                        {conflictingSchedule.status && ` • Status: ${conflictingSchedule.status}`}
+                                      </p>
+                                      {conflictingSchedule.participants && conflictingSchedule.participants.length > 0 && (
+                                        <p className="text-xs text-red-600 mt-1">
+                                          Participants: {conflictingSchedule.participants.map(p => p.name).join(', ')}
+                                        </p>
+                                      )}
+                                      {conflictingSchedule.id && (
+                                        <p className="text-xs text-gray-500 mt-1">Schedule ID: {conflictingSchedule.id}</p>
+                                      )}
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
                           ))}
-                        </ul>
+                        </div>
+                        <p className="text-xs text-red-600 mt-2 italic">
+                          Check the backend console logs for more details about conflicting schedules.
+                        </p>
                       </div>
                     ) : (
                       <div className="bg-green-50 border border-green-200 rounded-lg p-3">
@@ -2501,7 +2914,8 @@ const ScheduleManagement = ({ calendarConnected, onConnectCalendar, onDisconnect
 
       {/* Edit Schedule Modal */}
       {showEditModal && editingSchedule && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+        // Match global modal overlay style (Dean / Export PDF-Excel)
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4 py-6">
           <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
             <div className="p-5 border-b border-gray-200">
               <div className="flex items-center justify-between">
@@ -2642,6 +3056,8 @@ const ProcessMonitoring = () => {
     endDate: '',
   });
   const [showDetailsModal, setShowDetailsModal] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(10);
 
   useEffect(() => {
     fetchPanels();
@@ -2661,7 +3077,7 @@ const ProcessMonitoring = () => {
       setPanels(res.data || []);
     } catch (error) {
       console.error('Error fetching panels:', error);
-      alert('Error loading panel monitoring data');
+      showError('Error', 'Error loading panel monitoring data');
     } finally {
       setLoading(false);
     }
@@ -2676,7 +3092,7 @@ const ProcessMonitoring = () => {
       setShowDetailsModal(true);
     } catch (error) {
       console.error('Error fetching panel details:', error);
-      alert('Error loading panel details');
+      showError('Error', 'Error loading panel details');
     }
   };
 
@@ -2786,15 +3202,24 @@ const ProcessMonitoring = () => {
       </div>
 
       {/* Panels List */}
-      <div className="bg-white border border-gray-200 rounded-lg p-5">
-        <h3 className="text-base font-semibold text-gray-800 mb-4">Panels</h3>
-        {loading ? (
-          <p className="text-center py-8 text-gray-500">Loading...</p>
-        ) : panels.length === 0 ? (
-          <p className="text-center py-8 text-gray-500">No panels found</p>
-        ) : (
-          <div className="space-y-4">
-            {panels.map(panel => (
+      <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+        <div className="p-5">
+          <h3 className="text-base font-semibold text-gray-800 mb-4">Panels</h3>
+          {loading ? (
+            <p className="text-center py-8 text-gray-500">Loading...</p>
+          ) : panels.length === 0 ? (
+            <p className="text-center py-8 text-gray-500">No panels found</p>
+          ) : (
+            (() => {
+              const startIndex = (currentPage - 1) * itemsPerPage;
+              const endIndex = startIndex + itemsPerPage;
+              const paginatedPanels = panels.slice(startIndex, endIndex);
+              const totalPages = Math.ceil(panels.length / itemsPerPage);
+              
+              return (
+                <>
+                  <div className="space-y-4">
+                    {paginatedPanels.map(panel => (
               <div
                 key={panel._id}
                 className={`border rounded-lg p-4 hover:shadow-md transition-shadow ${
@@ -2888,14 +3313,34 @@ const ProcessMonitoring = () => {
                   </div>
                 )}
               </div>
-            ))}
-          </div>
-        )}
+                    ))}
+                  </div>
+                  {panels.length > 0 && (
+                    <Pagination
+                      currentPage={currentPage}
+                      totalPages={totalPages}
+                      totalItems={panels.length}
+                      itemsPerPage={itemsPerPage}
+                      onPageChange={setCurrentPage}
+                      onItemsPerPageChange={(newItemsPerPage) => {
+                        setItemsPerPage(newItemsPerPage);
+                        setCurrentPage(1);
+                      }}
+                      startIndex={startIndex + 1}
+                      endIndex={Math.min(endIndex, panels.length)}
+                    />
+                  )}
+                </>
+              );
+            })()
+          )}
+        </div>
       </div>
 
-      {/* Panel Details Modal */}
+      {/* Panel Details Modal (Process Monitoring - View Details) */}
       {showDetailsModal && panelDetails && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+        // Match Dean / Export PDF-Excel modal overlay
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4 py-6">
           <div className="bg-white rounded-lg shadow-xl max-w-4xl w-full max-h-[90vh] overflow-hidden flex flex-col">
             <div className="p-5 border-b border-gray-200">
               <div className="flex items-center justify-between">
@@ -3108,21 +3553,28 @@ const ProcessMonitoring = () => {
                   <>
                     <button
                       onClick={async () => {
-                        if (window.confirm('Mark this panel as completed? This will move it to Panel Records.')) {
-                          try {
-                            const token = localStorage.getItem('token');
-                            await axios.put(`/api/programhead/panels/${panelDetails.panel._id}/status`, 
-                              { status: 'completed' },
-                              { headers: { Authorization: `Bearer ${token}` } }
-                            );
-                            alert('Panel marked as completed successfully!');
-                            setShowDetailsModal(false);
-                            setPanelDetails(null);
-                            fetchPanels();
-                          } catch (error) {
-                            console.error('Error marking panel as completed:', error);
-                            alert('Error marking panel as completed');
-                          }
+                        const result = await showConfirm(
+                          'Mark Panel as Completed',
+                          'Mark this panel as completed? This will move it to Panel Records.',
+                          'Yes, Mark as Completed',
+                          'Cancel'
+                        );
+                        if (!result.isConfirmed) return;
+
+                        try {
+                          const token = localStorage.getItem('token');
+                          await axios.put(
+                            `/api/programhead/panels/${panelDetails.panel._id}/status`, 
+                            { status: 'completed' },
+                            { headers: { Authorization: `Bearer ${token}` } }
+                          );
+                          await showSuccess('Success', 'Panel marked as completed successfully!');
+                          setShowDetailsModal(false);
+                          setPanelDetails(null);
+                          fetchPanels();
+                        } catch (error) {
+                          console.error('Error marking panel as completed:', error);
+                          showError('Error', 'Error marking panel as completed');
                         }
                       }}
                       className="flex-1 px-4 py-2 bg-green-600 text-white rounded-md text-sm font-medium hover:bg-green-700 transition-colors"
@@ -3131,20 +3583,21 @@ const ProcessMonitoring = () => {
                     </button>
                     <button
                       onClick={async () => {
-                        if (window.confirm('Archive this panel? This will move it to Panel Records.')) {
+                        const result = await showConfirm('Archive Panel', 'Archive this panel? This will move it to Panel Records.');
+                        if (result.isConfirmed) {
                           try {
                             const token = localStorage.getItem('token');
                             await axios.put(`/api/programhead/panels/${panelDetails.panel._id}/status`, 
                               { status: 'archived' },
                               { headers: { Authorization: `Bearer ${token}` } }
                             );
-                            alert('Panel archived successfully!');
+                            await showSuccess('Success', 'Panel archived successfully!');
                             setShowDetailsModal(false);
                             setPanelDetails(null);
                             fetchPanels();
                           } catch (error) {
                             console.error('Error archiving panel:', error);
-                            alert('Error archiving panel');
+                            showError('Error', 'Error archiving panel');
                           }
                         }
                       }}
@@ -3173,7 +3626,7 @@ const ProcessMonitoring = () => {
 };
 
 // Forms Management Component
-const FormsManagement = () => {
+const FormsManagement = ({ driveStatus }) => {
   const [panels, setPanels] = useState([]);
   const [selectedPanel, setSelectedPanel] = useState(null);
   const [documents, setDocuments] = useState([]);
@@ -3187,6 +3640,10 @@ const FormsManagement = () => {
   const [dragActive, setDragActive] = useState(false);
   const [showVersionHistory, setShowVersionHistory] = useState(null);
   const [replacingDoc, setReplacingDoc] = useState(null);
+  const isDriveConnected = !!driveStatus?.connected;
+  const fileInputRef = useRef(null);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(10);
 
   useEffect(() => {
     fetchPanels();
@@ -3220,7 +3677,7 @@ const FormsManagement = () => {
       setDocuments(res.data.documents || []);
     } catch (error) {
       console.error('Error fetching documents:', error);
-      alert('Error fetching documents');
+      handlePermissionError(error, 'Error fetching documents');
     } finally {
       setLoading(false);
     }
@@ -3260,15 +3717,25 @@ const FormsManagement = () => {
 
   const validateFile = (file) => {
     const allowedTypes = ['application/pdf', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/msword'];
+    const allowedExtensions = ['.pdf', '.doc', '.docx'];
     const maxSize = 10 * 1024 * 1024; // 10MB
     
-    if (!allowedTypes.includes(file.type)) {
-      alert('Only PDF and DOCX files are allowed');
+    // Check mimeType (for Drive files) or type (for regular files)
+    const fileMimeType = file.mimeType || file.type;
+    const fileName = file.name || '';
+    const fileExtension = fileName.toLowerCase().substring(fileName.lastIndexOf('.'));
+    
+    // Validate by mimeType/type first, then by extension as fallback
+    const isValidMimeType = allowedTypes.includes(fileMimeType);
+    const isValidExtension = allowedExtensions.includes(fileExtension);
+    
+    if (!isValidMimeType && !isValidExtension) {
+      showError('Invalid File Type', 'Only PDF and DOCX files are allowed.');
       return false;
     }
     
-    if (file.size > maxSize) {
-      alert('File size must be less than 10MB');
+    if (file.size && file.size > maxSize) {
+      showError('File Too Large', 'File size must be less than 10MB.');
       return false;
     }
     
@@ -3279,12 +3746,17 @@ const FormsManagement = () => {
     e.preventDefault();
     
     if (!selectedPanel) {
-      alert('Please select a panel first');
+      showWarning('Select Panel', 'Please select a panel first.');
       return;
     }
     
     if (!uploadForm.title || !uploadForm.file) {
-      alert('Please provide a title and select a file');
+      showWarning('Missing Information', 'Please provide a title and select a file.');
+      return;
+    }
+
+    if (!isDriveConnected) {
+      showWarning('Drive Not Connected', 'Please connect your Google Drive account in Settings before uploading documents.');
       return;
     }
 
@@ -3292,7 +3764,39 @@ const FormsManagement = () => {
     try {
       const token = localStorage.getItem('token');
       const formData = new FormData();
-      formData.append('file', uploadForm.file);
+      
+      // Handle Drive files: download and convert to File object
+      let fileToUpload = uploadForm.file;
+      if (uploadForm.file.isDriveFile) {
+        try {
+          // Download file from Google Drive using the access token
+          const driveResponse = await fetch(
+            `https://www.googleapis.com/drive/v3/files/${uploadForm.file.driveFileId}?alt=media`,
+            {
+              headers: {
+                Authorization: `Bearer ${uploadForm.file.accessToken}`,
+              },
+            }
+          );
+
+          if (!driveResponse.ok) {
+            throw new Error('Failed to download file from Google Drive');
+          }
+
+          const blob = await driveResponse.blob();
+          // Convert blob to File object
+          fileToUpload = new File([blob], uploadForm.file.name, {
+            type: uploadForm.file.mimeType || blob.type,
+          });
+        } catch (driveError) {
+          console.error('Error downloading Drive file:', driveError);
+          showError('Drive Download Error', 'Failed to download file from Google Drive. Please try again.');
+          setUploading(false);
+          return;
+        }
+      }
+      
+      formData.append('file', fileToUpload);
       formData.append('title', uploadForm.title);
       formData.append('description', uploadForm.description || '');
 
@@ -3303,12 +3807,12 @@ const FormsManagement = () => {
         }
       });
 
-      alert(res.data.message || 'Document uploaded successfully!');
+      await showSuccess('Upload Complete', res.data.message || 'Document uploaded successfully!');
       setUploadForm({ title: '', description: '', file: null });
       fetchPanelDocuments(selectedPanel);
     } catch (error) {
       console.error('Error uploading document:', error);
-      alert(error.response?.data?.message || 'Error uploading document');
+      handlePermissionError(error, 'Error uploading document');
     } finally {
       setUploading(false);
     }
@@ -3316,7 +3820,12 @@ const FormsManagement = () => {
 
   const handleReplace = async (documentId) => {
     if (!replacingDoc?.file) {
-      alert('Please select a file to replace');
+      showWarning('Select File', 'Please select a file to upload as the replacement.');
+      return;
+    }
+
+    if (!isDriveConnected) {
+      showWarning('Drive Not Connected', 'Please connect your Google Drive account in Settings before replacing documents.');
       return;
     }
 
@@ -3334,19 +3843,23 @@ const FormsManagement = () => {
         }
       });
 
-      alert(res.data.message || 'Document replaced successfully!');
+      await showSuccess('Document Replaced', res.data.message || 'Document replaced successfully!');
       setReplacingDoc(null);
       fetchPanelDocuments(selectedPanel);
     } catch (error) {
       console.error('Error replacing document:', error);
-      alert(error.response?.data?.message || 'Error replacing document');
+      handlePermissionError(error, 'Error replacing document');
     } finally {
       setUploading(false);
     }
   };
 
   const handleRemove = async (documentId) => {
-    if (!window.confirm('Are you sure you want to remove this document?')) {
+    const confirmResult = await showDangerConfirm(
+      'Remove Document?',
+      'This will permanently remove the document from the panel resources.'
+    );
+    if (!confirmResult?.isConfirmed) {
       return;
     }
 
@@ -3356,11 +3869,11 @@ const FormsManagement = () => {
         headers: { Authorization: `Bearer ${token}` }
       });
 
-      alert(res.data.message || 'Document removed successfully!');
+      await showSuccess('Removed', res.data.message || 'Document removed successfully!');
       fetchPanelDocuments(selectedPanel);
     } catch (error) {
       console.error('Error removing document:', error);
-      alert(error.response?.data?.message || 'Error removing document');
+      handlePermissionError(error, 'Error removing document');
     }
   };
 
@@ -3381,7 +3894,7 @@ const FormsManagement = () => {
       link.remove();
     } catch (error) {
       console.error('Error downloading document:', error);
-      alert('Error downloading document');
+      handlePermissionError(error, 'Error downloading document');
     }
   };
 
@@ -3462,56 +3975,97 @@ const FormsManagement = () => {
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  File <span className="text-red-500">*</span> (PDF, DOCX - Max 10MB)
+                  File <span className="text-red-500">*</span> (PDF, DOC, DOCX - Max 10MB)
                 </label>
                 <div
-                  className={`border-2 border-dashed rounded-lg p-8 text-center transition-colors ${
-                    dragActive
-                      ? 'border-[#7C1D23] bg-[#7C1D23]/5'
-                      : 'border-gray-300 hover:border-gray-400'
+                  className={`border-2 border-dashed rounded-lg p-6 transition-colors ${
+                    dragActive ? "border-[#7C1D23] bg-[#f9f1f2]" : "border-gray-300 bg-gray-50"
                   }`}
                   onDragEnter={handleDrag}
                   onDragLeave={handleDrag}
                   onDragOver={handleDrag}
                   onDrop={handleDrop}
                 >
-                  {uploadForm.file ? (
-                    <div className="space-y-2">
-                      <FaFileAlt className="mx-auto text-4xl text-[#7C1D23]" />
-                      <p className="text-sm font-medium text-gray-700">{uploadForm.file.name}</p>
-                      <p className="text-xs text-gray-500">{formatFileSize(uploadForm.file.size)}</p>
+                  <div className="flex flex-col items-center text-center">
+                    <FaUpload className="text-[#7C1D23] text-xl mb-2" />
+                    <p className="text-sm text-gray-600 mb-2">
+                      Drag and drop your chapter file here, or select from your options below
+                    </p>
+                    <p className="text-xs text-gray-400 mb-4">
+                      Accepted formats: PDF, DOC, DOCX • Max size: 10MB
+                    </p>
+
+                    <div className="flex gap-3 justify-center">
                       <button
                         type="button"
-                        onClick={() => setUploadForm({ ...uploadForm, file: null })}
-                        className="text-sm text-red-600 hover:text-red-700"
+                        onClick={() => fileInputRef.current?.click()}
+                        className="px-4 py-2 bg-[#7C1D23] text-white rounded-md hover:bg-[#5a1519] transition-colors text-sm font-medium"
                       >
-                        Remove
+                        Select File from Computer
                       </button>
+                      <DriveUploader
+                        defaultType="other"
+                        driveButtonLabel="Upload from Google Drive"
+                        buttonBg="#7C1D23"
+                        buttonTextColor="#ffffff"
+                        skipBackendSave={true}
+                        onFilePicked={(fileInfo) => {
+                          if (!fileInfo || !fileInfo.id || !fileInfo.accessToken) {
+                            showError('Error', 'Failed to get Google Drive file information. Please try again.');
+                            return;
+                          }
+                          const virtualFile = {
+                            name: fileInfo.name,
+                            driveFileId: fileInfo.id,
+                            accessToken: fileInfo.accessToken,
+                            mimeType: fileInfo.mimeType,
+                            size: fileInfo.size,
+                            isDriveFile: true,
+                          };
+                          if (!validateFile(virtualFile)) return;
+                          setUploadForm({ ...uploadForm, file: virtualFile });
+                        }}
+                      />
                     </div>
-                  ) : (
-                    <div className="space-y-2">
-                      <FaUpload className="mx-auto text-4xl text-gray-400" />
-                      <p className="text-sm text-gray-600">
-                        Drag and drop a file here, or{' '}
-                        <label className="text-[#7C1D23] cursor-pointer hover:underline">
-                          click to browse
-                          <input
-                            type="file"
-                            accept=".pdf,.doc,.docx"
-                            onChange={handleFileSelect}
-                            className="hidden"
-                          />
-                        </label>
-                      </p>
-                      <p className="text-xs text-gray-500">PDF, DOCX files only (max 10MB)</p>
-                    </div>
-                  )}
+
+                    {uploadForm.file && (
+                      <div className="mt-4 inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white border border-gray-200 text-sm text-gray-700">
+                        <FaFileAlt className="text-gray-500" />
+                        <span className="truncate max-w-xs">{uploadForm.file.name}</span>
+                        {uploadForm.file.isDriveFile && (
+                          <span className="text-xs text-blue-600">📁 From Google Drive</span>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => setUploadForm({ ...uploadForm, file: null })}
+                          className="text-red-500 hover:text-red-600 text-xs"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".pdf,.doc,.docx"
+                    onChange={handleFileSelect}
+                    className="hidden"
+                  />
                 </div>
+                {!isDriveConnected && (
+                  <div className="mt-3 text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-md p-3">
+                    <span>
+                      Google Drive is not connected. Please connect your Drive account in Settings before uploading documents.
+                    </span>
+                  </div>
+                )}
               </div>
 
               <button
                 type="submit"
-                disabled={uploading || !uploadForm.title || !uploadForm.file}
+                disabled={uploading}
                 className="w-full px-4 py-2 bg-[#7C1D23] text-white rounded-md hover:bg-[#5a1519] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {uploading ? 'Uploading...' : 'Upload Document'}
@@ -3520,15 +4074,24 @@ const FormsManagement = () => {
           </div>
 
           {/* Documents List */}
-          <div className="bg-white border border-gray-200 rounded-lg p-5">
-            <h3 className="text-lg font-semibold text-gray-800 mb-4">Panel Resources</h3>
-            {loading ? (
-              <p className="text-sm text-gray-500 text-center py-4">Loading documents...</p>
-            ) : documents.length === 0 ? (
-              <p className="text-sm text-gray-500 text-center py-4">No documents uploaded yet</p>
-            ) : (
-              <div className="space-y-3">
-                {documents.map((doc) => (
+          <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+            <div className="p-5">
+              <h3 className="text-lg font-semibold text-gray-800 mb-4">Panel Resources</h3>
+              {loading ? (
+                <p className="text-sm text-gray-500 text-center py-4">Loading documents...</p>
+              ) : documents.length === 0 ? (
+                <p className="text-sm text-gray-500 text-center py-4">No documents uploaded yet</p>
+              ) : (
+                (() => {
+                  const startIndex = (currentPage - 1) * itemsPerPage;
+                  const endIndex = startIndex + itemsPerPage;
+                  const paginatedDocuments = documents.slice(startIndex, endIndex);
+                  const totalPages = Math.ceil(documents.length / itemsPerPage);
+                  
+                  return (
+                    <>
+                      <div className="space-y-3">
+                        {paginatedDocuments.map((doc) => (
                   <div key={doc._id} className="border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow">
                     <div className="flex items-start justify-between">
                       <div className="flex items-start space-x-3 flex-1">
@@ -3656,9 +4219,28 @@ const FormsManagement = () => {
                       </div>
                     )}
                   </div>
-                ))}
-              </div>
-            )}
+                        ))}
+                      </div>
+                      {documents.length > 0 && (
+                        <Pagination
+                          currentPage={currentPage}
+                          totalPages={totalPages}
+                          totalItems={documents.length}
+                          itemsPerPage={itemsPerPage}
+                          onPageChange={setCurrentPage}
+                          onItemsPerPageChange={(newItemsPerPage) => {
+                            setItemsPerPage(newItemsPerPage);
+                            setCurrentPage(1);
+                          }}
+                          startIndex={startIndex + 1}
+                          endIndex={Math.min(endIndex, documents.length)}
+                        />
+                      )}
+                    </>
+                  );
+                })()
+              )}
+            </div>
           </div>
         </>
       )}
@@ -3675,6 +4257,12 @@ const DeanDocumentsSection = () => {
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("all");
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(10);
+  const [viewingDocument, setViewingDocument] = useState(null);
+  const [showDocumentViewer, setShowDocumentViewer] = useState(false);
+  const [documentBlobUrl, setDocumentBlobUrl] = useState(null);
+  const docxPreviewRef = useRef(null);
 
   useEffect(() => {
     fetchDocuments();
@@ -3712,7 +4300,7 @@ const DeanDocumentsSection = () => {
       window.URL.revokeObjectURL(url);
     } catch (error) {
       console.error('Error downloading document:', error);
-      alert('Error downloading document: ' + (error.response?.data?.message || error.message));
+      showError('Error', 'Error downloading document: ' + (error.response?.data?.message || error.message));
     }
   };
 
@@ -3726,12 +4314,71 @@ const DeanDocumentsSection = () => {
       
       const blob = new Blob([response.data], { type: doc.mimeType });
       const url = URL.createObjectURL(blob);
-      window.open(url, '_blank');
+      
+      setDocumentBlobUrl(url);
+      setViewingDocument(doc);
+      setShowDocumentViewer(true);
     } catch (error) {
       console.error('Error viewing document:', error);
-      alert('Error viewing document');
+      showError('Error', 'Error loading document preview');
     }
   };
+
+  // Cleanup blob URL when modal closes
+  const handleCloseViewer = () => {
+    if (documentBlobUrl) {
+      URL.revokeObjectURL(documentBlobUrl);
+      setDocumentBlobUrl(null);
+    }
+    // Clear DOCX preview
+    if (docxPreviewRef.current) {
+      docxPreviewRef.current.innerHTML = '';
+    }
+    setShowDocumentViewer(false);
+    setViewingDocument(null);
+  };
+
+  // Effect to render DOCX files
+  useEffect(() => {
+    if (showDocumentViewer && viewingDocument && documentBlobUrl && docxPreviewRef.current) {
+      const isDocx = viewingDocument.mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+                     viewingDocument.mimeType === 'application/msword' ||
+                     viewingDocument.title?.toLowerCase().endsWith('.docx') ||
+                     viewingDocument.title?.toLowerCase().endsWith('.doc');
+      
+      if (isDocx) {
+        // Clear previous content
+        docxPreviewRef.current.innerHTML = '';
+        
+        // Fetch and render DOCX
+        fetch(documentBlobUrl)
+          .then(response => response.blob())
+          .then(blob => {
+            renderAsync(blob, docxPreviewRef.current, null, {
+              className: 'docx-wrapper',
+              inWrapper: true,
+              ignoreWidth: false,
+              ignoreHeight: false,
+              ignoreFonts: false,
+              breakPages: true,
+              experimental: false,
+              trimXmlDeclaration: true,
+              useBase64URL: false,
+              useMathMLPolyfill: true,
+              showChanges: false,
+            })
+            .catch(error => {
+              console.error('Error rendering DOCX:', error);
+              docxPreviewRef.current.innerHTML = '<p class="text-red-500 p-4">Error rendering document. Please try downloading the file.</p>';
+            });
+          })
+          .catch(error => {
+            console.error('Error fetching DOCX:', error);
+            docxPreviewRef.current.innerHTML = '<p class="text-red-500 p-4">Error loading document. Please try again.</p>';
+          });
+      }
+    }
+  }, [showDocumentViewer, viewingDocument, documentBlobUrl]);
 
   const filteredDocuments = documents.filter(doc => {
     const matchesSearch = doc.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -3804,13 +4451,22 @@ const DeanDocumentsSection = () => {
       </div>
 
       {/* Documents List */}
-      {filteredDocuments.length === 0 ? (
-        <div className="text-center py-8 text-gray-500 text-sm">
-          No documents available from dean
-        </div>
-      ) : (
-        <div className="space-y-3">
-          {filteredDocuments.map((doc) => (
+      <div className="overflow-hidden">
+        {filteredDocuments.length === 0 ? (
+          <div className="text-center py-8 text-gray-500 text-sm">
+            No documents available from dean
+          </div>
+        ) : (
+          (() => {
+            const startIndex = (currentPage - 1) * itemsPerPage;
+            const endIndex = startIndex + itemsPerPage;
+            const paginatedDocuments = filteredDocuments.slice(startIndex, endIndex);
+            const totalPages = Math.ceil(filteredDocuments.length / itemsPerPage);
+            
+            return (
+              <>
+                <div className="space-y-3 p-5">
+                  {paginatedDocuments.map((doc) => (
             <div key={doc._id} className="border border-gray-200 rounded-lg p-4 hover:bg-gray-50 transition-colors">
               <div className="flex items-start justify-between">
                 <div className="flex-1">
@@ -3850,7 +4506,84 @@ const DeanDocumentsSection = () => {
                 </div>
               </div>
             </div>
-          ))}
+                  ))}
+                </div>
+                {filteredDocuments.length > 0 && (
+                  <Pagination
+                    currentPage={currentPage}
+                    totalPages={totalPages}
+                    totalItems={filteredDocuments.length}
+                    itemsPerPage={itemsPerPage}
+                    onPageChange={setCurrentPage}
+                    onItemsPerPageChange={(newItemsPerPage) => {
+                      setItemsPerPage(newItemsPerPage);
+                      setCurrentPage(1);
+                    }}
+                    startIndex={startIndex + 1}
+                    endIndex={Math.min(endIndex, filteredDocuments.length)}
+                  />
+                )}
+              </>
+            );
+          })()
+        )}
+      </div>
+
+      {/* Document Viewer Modal */}
+      {showDocumentViewer && viewingDocument && documentBlobUrl && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4 py-6">
+          <div className="bg-white rounded-lg shadow-xl max-w-6xl w-full h-full flex flex-col">
+            {/* Modal Header */}
+            <div className="bg-gradient-to-r from-[#7C1D23] to-[#5a1519] text-white p-4 rounded-t-lg flex justify-between items-center">
+              <h3 className="text-lg font-bold">{viewingDocument.title}</h3>
+              <button 
+                onClick={handleCloseViewer}
+                className="text-white hover:text-gray-200 transition-colors"
+              >
+                <FaTimes className="h-5 w-5" />
+              </button>
+            </div>
+            
+            {/* Document Content */}
+            <div className="flex-1 p-4 overflow-auto">
+              {viewingDocument.mimeType === 'application/pdf' ? (
+                <iframe
+                  src={documentBlobUrl}
+                  className="w-full h-full border-0"
+                  title={viewingDocument.title}
+                />
+              ) : viewingDocument.mimeType?.startsWith('image/') ? (
+                <div className="flex items-center justify-center h-full">
+                  <img 
+                    src={documentBlobUrl} 
+                    alt={viewingDocument.title}
+                    className="max-w-full max-h-full object-contain"
+                  />
+                </div>
+              ) : viewingDocument.mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+                viewingDocument.mimeType === 'application/msword' ||
+                viewingDocument.title?.toLowerCase().endsWith('.docx') ||
+                viewingDocument.title?.toLowerCase().endsWith('.doc') ? (
+                <div 
+                  ref={docxPreviewRef}
+                  className="w-full h-full docx-container"
+                  style={{ padding: '20px', backgroundColor: '#fff' }}
+                />
+              ) : (
+                <div className="flex items-center justify-center h-full">
+                  <p className="text-gray-500">
+                    Document preview not available for this file type. 
+                    <button 
+                      onClick={() => handleDownload(viewingDocument)}
+                      className="ml-2 text-[#7C1D23] hover:underline"
+                    >
+                      Download to view
+                    </button>
+                  </p>
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       )}
     </div>
@@ -3867,6 +4600,14 @@ const FacultyAdviserAssignment = () => {
     title: '',
     selectedStudents: []
   });
+  const [editingResearch, setEditingResearch] = useState(null);
+  const [editResearchForm, setEditResearchForm] = useState({
+    title: '',
+    selectedStudents: []
+  });
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(10);
 
   // Fetch data on component mount
   useEffect(() => {
@@ -3887,7 +4628,7 @@ const FacultyAdviserAssignment = () => {
       setStudents(res.data);
     } catch (error) {
       console.error('Error fetching students:', error.response || error);
-      alert('Error fetching students: ' + error.message);
+      showError('Error', 'Error fetching students: ' + error.message);
     } finally {
       setLoading(false);
     }
@@ -3932,10 +4673,10 @@ const FacultyAdviserAssignment = () => {
       // Reset form and refresh data
       setNewResearch({ title: '', selectedStudents: [] });
       fetchResearchTitles();
-      alert('Research title created successfully!');
+      await showSuccess('Success', 'Research title created successfully!');
     } catch (error) {
       console.error('Error creating research:', error);
-      alert('Error creating research title');
+      showError('Error', 'Error creating research title');
     } finally {
       setLoading(false);
     }
@@ -3954,10 +4695,10 @@ const FacultyAdviserAssignment = () => {
       
       // Refresh data to get updated information
       fetchResearchTitles();
-      alert('Adviser assigned successfully!');
+      await showSuccess('Success', 'Adviser assigned successfully!');
     } catch (error) {
       console.error('Error assigning adviser:', error);
-      alert('Error assigning adviser');
+      showError('Error', 'Error assigning adviser');
     } finally {
       setLoading(false);
     }
@@ -3975,10 +4716,10 @@ const FacultyAdviserAssignment = () => {
       
       // Refresh data to get updated information
       fetchResearchTitles();
-      alert('Adviser removed successfully!');
+      await showSuccess('Success', 'Adviser removed successfully!');
     } catch (error) {
       console.error('Error removing adviser:', error);
-      alert('Error removing adviser');
+      showError('Error', 'Error removing adviser');
     } finally {
       setLoading(false);
     }
@@ -3996,17 +4737,18 @@ const FacultyAdviserAssignment = () => {
       });
       
       fetchResearchTitles();
-      alert('Students added successfully!');
+      await showSuccess('Success', 'Students added successfully!');
     } catch (error) {
       console.error('Error adding students:', error);
-      alert('Error adding students');
+      showError('Error', 'Error adding students');
     } finally {
       setLoading(false);
     }
   };
 
   const handleDeleteResearch = async (researchId) => {
-    if (!window.confirm('Are you sure you want to delete this research title? This action cannot be undone.')) {
+    const result = await showDangerConfirm('Delete Research Title', 'Are you sure you want to delete this research title? This action cannot be undone.');
+    if (!result.isConfirmed) {
       return;
     }
     
@@ -4018,10 +4760,51 @@ const FacultyAdviserAssignment = () => {
       });
       
       fetchResearchTitles();
-      alert('Research title deleted successfully!');
+      await showSuccess('Success', 'Research title deleted successfully!');
     } catch (error) {
       console.error('Error deleting research:', error);
-      alert('Error deleting research title: ' + (error.response?.data?.message || error.message));
+      showError('Error', 'Error deleting research title: ' + (error.response?.data?.message || error.message));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const openEditResearchModal = (research) => {
+    setEditingResearch(research);
+    setEditResearchForm({
+      title: research.title || '',
+      selectedStudents: (research.students || []).map(s => s._id || s)
+    });
+    setShowEditModal(true);
+  };
+
+  const handleUpdateResearch = async (e) => {
+    e.preventDefault();
+    if (!editingResearch) return;
+
+    if (!editResearchForm.title.trim()) {
+      showWarning('Validation Error', 'Research title is required.');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const token = localStorage.getItem('token');
+      await axios.put(`/api/programhead/research/${editingResearch._id}`, {
+        title: editResearchForm.title.trim(),
+        studentIds: editResearchForm.selectedStudents
+      }, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+
+      await showSuccess('Updated', 'Research title and students updated successfully!');
+      setShowEditModal(false);
+      setEditingResearch(null);
+      setEditResearchForm({ title: '', selectedStudents: [] });
+      fetchResearchTitles();
+    } catch (error) {
+      console.error('Error updating research:', error);
+      showError('Error', error.response?.data?.message || 'Error updating research title');
     } finally {
       setLoading(false);
     }
@@ -4118,13 +4901,22 @@ const FacultyAdviserAssignment = () => {
       </div>
 
       {/* Existing Research Titles List */}
-      <div className="space-y-4">
-        {researchTitles.length === 0 ? (
-          <div className="bg-gray-50 rounded-lg border border-gray-200 p-8">
-            <p className="text-gray-500 text-center text-sm">No research titles found.</p>
-          </div>
-        ) : (
-          researchTitles.map((research) => (
+      <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+        <div className="space-y-4 p-5">
+          {researchTitles.length === 0 ? (
+            <div className="bg-gray-50 rounded-lg border border-gray-200 p-8">
+              <p className="text-gray-500 text-center text-sm">No research titles found.</p>
+            </div>
+          ) : (
+            (() => {
+              const startIndex = (currentPage - 1) * itemsPerPage;
+              const endIndex = startIndex + itemsPerPage;
+              const paginatedResearch = researchTitles.slice(startIndex, endIndex);
+              const totalPages = Math.ceil(researchTitles.length / itemsPerPage);
+              
+              return (
+                <>
+                  {paginatedResearch.map((research) => (
             <div key={research._id} className="bg-white border border-gray-200 rounded-lg p-5 hover:shadow-md transition-shadow">
               <div className="flex items-center justify-between">
                 <div className="flex-1">
@@ -4153,6 +4945,13 @@ const FacultyAdviserAssignment = () => {
                   </div>
                 </div>
                 <div className="flex space-x-2">
+                  <button
+                    onClick={() => openEditResearchModal(research)}
+                    disabled={loading}
+                    className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors text-sm font-medium disabled:opacity-50"
+                  >
+                    Edit
+                  </button>
                   {!research.adviser ? (
                     <select
                       className="px-3 py-2 border border-gray-300 rounded-md text-sm focus:border-[#7C1D23] focus:ring-2 focus:ring-[#7C1D23]/20"
@@ -4189,9 +4988,130 @@ const FacultyAdviserAssignment = () => {
                 </div>
               </div>
             </div>
-          ))
-        )}
+                  ))}
+                  {researchTitles.length > 0 && (
+                    <Pagination
+                      currentPage={currentPage}
+                      totalPages={totalPages}
+                      totalItems={researchTitles.length}
+                      itemsPerPage={itemsPerPage}
+                      onPageChange={setCurrentPage}
+                      onItemsPerPageChange={(newItemsPerPage) => {
+                        setItemsPerPage(newItemsPerPage);
+                        setCurrentPage(1);
+                      }}
+                      startIndex={startIndex + 1}
+                      endIndex={Math.min(endIndex, researchTitles.length)}
+                    />
+                  )}
+                </>
+              );
+            })()
+          )}
+        </div>
       </div>
+
+      {/* Edit Research Modal (Faculty Adviser Assignment - Edit) */}
+      {showEditModal && editingResearch && (
+        // Match Dean / Export PDF-Excel modal overlay
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4 py-6">
+          <div className="bg-white rounded-lg shadow-xl max-w-lg w-full">
+            <div className="px-5 py-4 border-b border-gray-200 flex items-center justify-between">
+              <h3 className="text-lg font-semibold text-gray-800">Edit Research Title & Students</h3>
+              <button
+                onClick={() => {
+                  setShowEditModal(false);
+                  setEditingResearch(null);
+                  setEditResearchForm({ title: '', selectedStudents: [] });
+                }}
+                className="text-gray-400 hover:text-gray-600"
+              >
+                <FaClose />
+              </button>
+            </div>
+            <form onSubmit={handleUpdateResearch} className="p-5 space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700">Research Title</label>
+                <input
+                  type="text"
+                  value={editResearchForm.title}
+                  onChange={(e) =>
+                    setEditResearchForm(prev => ({ ...prev, title: e.target.value }))
+                  }
+                  className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 focus:border-[#7C1D23] focus:ring-[#7C1D23]"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700">Select Students</label>
+                <select
+                  multiple
+                  value={editResearchForm.selectedStudents}
+                  onChange={(e) => {
+                    const selected = Array.from(e.target.selectedOptions, option => option.value);
+                    setEditResearchForm(prev => ({
+                      ...prev,
+                      selectedStudents: selected
+                    }));
+                  }}
+                  className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 focus:border-[#7C1D23] focus:ring-[#7C1D23] min-h-[100px]"
+                >
+                  {students.map(student => (
+                    <option
+                      key={student._id}
+                      value={student._id}
+                      className="py-1"
+                    >
+                      {student.name} ({student.email})
+                    </option>
+                  ))}
+                </select>
+                <p className="mt-1 text-xs text-gray-500">
+                  Hold Ctrl (Windows) or Command (Mac) to select multiple students
+                </p>
+              </div>
+              {editResearchForm.selectedStudents.length > 0 && (
+                <div>
+                  <p className="text-sm font-medium text-gray-700">Selected Students:</p>
+                  <div className="mt-1 flex flex-wrap gap-2">
+                    {editResearchForm.selectedStudents.map(studentId => {
+                      const student = students.find(s => s._id === studentId);
+                      return student ? (
+                        <span
+                          key={studentId}
+                          className="inline-flex items-center px-2 py-1 rounded-full text-xs bg-[#7C1D23] text-white"
+                        >
+                          {student.name}
+                        </span>
+                      ) : null;
+                    })}
+                  </div>
+                </div>
+              )}
+              <div className="flex justify-end space-x-2 pt-2 border-t border-gray-200">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowEditModal(false);
+                    setEditingResearch(null);
+                    setEditResearchForm({ title: '', selectedStudents: [] });
+                  }}
+                  className="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={loading}
+                  className="px-4 py-2 bg-[#7C1D23] text-white rounded-md text-sm font-medium hover:bg-[#5a1519] disabled:opacity-50"
+                >
+                  Save Changes
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* Available Advisers Info */}
       <div className="bg-gray-50 rounded-lg border border-gray-200 p-5">
@@ -4229,6 +5149,8 @@ const ResearchRecords = () => {
     submissionDate: ''
   });
   const [finalizing, setFinalizing] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(10);
 
   // Fetch research records on component mount
   useEffect(() => {
@@ -4248,8 +5170,14 @@ const ResearchRecords = () => {
   };
 
   const handleArchiveResearch = async (researchId) => {
-    if (!window.confirm('Are you sure you want to archive this research?')) return;
-    
+    const result = await showDangerConfirm(
+      'Archive Research',
+      'Are you sure you want to archive this research? It will be moved out of active records but can still be viewed in archives.',
+      'Yes, Archive',
+      'Cancel'
+    );
+    if (!result.isConfirmed) return;
+
     setLoading(true);
     try {
       const token = localStorage.getItem('token');
@@ -4258,10 +5186,10 @@ const ResearchRecords = () => {
       });
       
       fetchResearchRecords();
-      alert('Research archived successfully!');
+      await showSuccess('Success', 'Research archived successfully!');
     } catch (error) {
       console.error('Error archiving research:', error);
-      alert('Error archiving research');
+      showError('Error', 'Error archiving research');
     } finally {
       setLoading(false);
     }
@@ -4284,7 +5212,7 @@ const ResearchRecords = () => {
     e.preventDefault();
     
     if (!finalizeForm.finalGrade || !finalizeForm.evaluationStatus) {
-      alert('Please fill in Final Grade and Evaluation Status');
+      showWarning('Validation Error', 'Please fill in Final Grade and Evaluation Status');
       return;
     }
 
@@ -4335,11 +5263,11 @@ const ResearchRecords = () => {
       });
       
       fetchResearchRecords();
-      alert('Research finalized successfully! The student will be notified.');
+      await showSuccess('Success', 'Research finalized successfully! The student will be notified.');
     } catch (error) {
       console.error('Error finalizing research:', error);
       const errorMessage = error.response?.data?.message || error.message || 'Error finalizing research';
-      alert(errorMessage);
+      showError('Error', errorMessage);
     } finally {
       setFinalizing(false);
     }
@@ -4358,13 +5286,22 @@ const ResearchRecords = () => {
       </div>
 
       {/* Research Records List */}
-      <div className="space-y-4">
-        {activeResearch.length === 0 ? (
-          <div className="bg-gray-50 rounded-lg border border-gray-200 p-8">
-            <p className="text-gray-500 text-center text-sm">No research records found.</p>
-          </div>
-        ) : (
-          activeResearch.map((research) => (
+      <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+        <div className="space-y-4 p-5">
+          {activeResearch.length === 0 ? (
+            <div className="bg-gray-50 rounded-lg border border-gray-200 p-8">
+              <p className="text-gray-500 text-center text-sm">No research records found.</p>
+            </div>
+          ) : (
+            (() => {
+              const startIndex = (currentPage - 1) * itemsPerPage;
+              const endIndex = startIndex + itemsPerPage;
+              const paginatedResearch = activeResearch.slice(startIndex, endIndex);
+              const totalPages = Math.ceil(activeResearch.length / itemsPerPage);
+              
+              return (
+                <>
+                  {paginatedResearch.map((research) => (
             <div key={research._id} className="bg-white border border-gray-200 rounded-lg p-5 hover:shadow-md transition-shadow">
               <div className="flex items-start justify-between">
                 <div className="flex-1">
@@ -4444,8 +5381,27 @@ const ResearchRecords = () => {
                 </div>
               </div>
             </div>
-          ))
-        )}
+                  ))}
+                  {activeResearch.length > 0 && (
+                    <Pagination
+                      currentPage={currentPage}
+                      totalPages={totalPages}
+                      totalItems={activeResearch.length}
+                      itemsPerPage={itemsPerPage}
+                      onPageChange={setCurrentPage}
+                      onItemsPerPageChange={(newItemsPerPage) => {
+                        setItemsPerPage(newItemsPerPage);
+                        setCurrentPage(1);
+                      }}
+                      startIndex={startIndex + 1}
+                      endIndex={Math.min(endIndex, activeResearch.length)}
+                    />
+                  )}
+                </>
+              );
+            })()
+          )}
+        </div>
       </div>
 
       {/* Summary Statistics */}
@@ -4645,6 +5601,8 @@ const PanelRecords = () => {
     minRecommendationRate: '',
   });
   const [exporting, setExporting] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(10);
 
   useEffect(() => {
     fetchPanelRecords();
@@ -4669,7 +5627,7 @@ const PanelRecords = () => {
       setPanels(res.data || []);
     } catch (error) {
       console.error('Error fetching panel records:', error);
-      alert('Error loading panel records');
+      showError('Error', 'Error loading panel records');
     } finally {
       setLoading(false);
     }
@@ -4685,40 +5643,63 @@ const PanelRecords = () => {
       setShowDetailsModal(true);
     } catch (error) {
       console.error('Error fetching panel details:', error);
-      alert('Error loading panel details');
+      showError('Error', 'Error loading panel details');
     }
   };
 
-  const handleExportCSV = async () => {
+  const handleExportPDF = async () => {
+    // Ensure there is data to export
+    if (!panels || panels.length === 0) {
+      showWarning('No Data to Export', 'There are no panel records matching the current filters to export.');
+      return;
+    }
+
+    // Check drive status
+    let driveConnected = false;
+    try {
+      const token = localStorage.getItem('token');
+      const driveRes = await axios.get('/api/google-drive/status', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      driveConnected = driveRes.data?.connected || false;
+    } catch (error) {
+      console.error('Error checking drive status:', error);
+    }
+
+    if (!driveConnected) {
+      showWarning('Google Drive Not Connected', 'Please connect your Google Drive account in Settings before exporting.');
+      return;
+    }
+
     setExporting(true);
     try {
       const token = localStorage.getItem('token');
-      const params = new URLSearchParams();
-      
-      if (filters.status !== 'all') params.append('status', filters.status);
-      if (filters.panelType !== 'all') params.append('panelType', filters.panelType);
-      if (filters.startDate) params.append('startDate', filters.startDate);
-      if (filters.endDate) params.append('endDate', filters.endDate);
-      if (filters.researchId) params.append('researchId', filters.researchId);
-      if (filters.minRecommendationRate) params.append('minRecommendationRate', filters.minRecommendationRate);
-      
-      const res = await axios.get(`/api/programhead/panel-records/export/csv?${params.toString()}`, {
-        headers: { Authorization: `Bearer ${token}` },
-        responseType: 'blob'
-      });
-      
-      const url = window.URL.createObjectURL(new Blob([res.data]));
-      const link = document.createElement('a');
-      link.href = url;
-      link.setAttribute('download', `panel-records-${new Date().toISOString().split('T')[0]}.csv`);
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      
-      alert('Panel records exported successfully!');
+      const exportFilters = {
+        status: filters.status !== 'all' ? filters.status : undefined,
+        panelType: filters.panelType !== 'all' ? filters.panelType : undefined,
+        startDate: filters.startDate || undefined,
+        endDate: filters.endDate || undefined,
+        researchId: filters.researchId || undefined,
+        minRecommendationRate: filters.minRecommendationRate || undefined,
+      };
+
+      // Remove undefined values
+      Object.keys(exportFilters).forEach(key => exportFilters[key] === undefined && delete exportFilters[key]);
+
+      const res = await axios.post(
+        '/api/programhead/panel-records/export',
+        { filters: exportFilters },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+
+      await showSuccess(
+        'Export Successful',
+        res.data.message || `Panel records exported as PDF and saved to your Google Drive Reports folder.`
+      );
     } catch (error) {
       console.error('Error exporting panel records:', error);
-      alert('Error exporting panel records');
+      const errorMessage = error.response?.data?.message || 'Failed to export panel records. Please try again.';
+      showError('Export Failed', errorMessage);
     } finally {
       setExporting(false);
     }
@@ -4739,12 +5720,12 @@ const PanelRecords = () => {
           <p className="text-sm text-gray-600 mt-1">Historical panel evaluation data and analytics</p>
         </div>
         <button
-          onClick={handleExportCSV}
-          disabled={exporting || panels.length === 0}
+          onClick={handleExportPDF}
+          disabled={exporting}
           className="flex items-center px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm font-medium"
         >
           <FaDownload className="mr-2" />
-          {exporting ? 'Exporting...' : 'Export CSV'}
+          {exporting ? 'Exporting...' : 'Export PDF'}
         </button>
       </div>
 
@@ -4857,15 +5838,24 @@ const PanelRecords = () => {
       </div>
 
       {/* Panels List */}
-      <div className="bg-white border border-gray-200 rounded-lg p-5">
-        <h3 className="text-base font-semibold text-gray-800 mb-4">Historical Panels</h3>
-        {loading ? (
-          <p className="text-center py-8 text-gray-500">Loading panel records...</p>
-        ) : panels.length === 0 ? (
-          <p className="text-center py-8 text-gray-500">No panel records found</p>
-        ) : (
-          <div className="space-y-4">
-            {panels.map(panel => (
+      <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+        <div className="p-5">
+          <h3 className="text-base font-semibold text-gray-800 mb-4">Historical Panels</h3>
+          {loading ? (
+            <p className="text-center py-8 text-gray-500">Loading panel records...</p>
+          ) : panels.length === 0 ? (
+            <p className="text-center py-8 text-gray-500">No panel records found</p>
+          ) : (
+            (() => {
+              const startIndex = (currentPage - 1) * itemsPerPage;
+              const endIndex = startIndex + itemsPerPage;
+              const paginatedPanels = panels.slice(startIndex, endIndex);
+              const totalPages = Math.ceil(panels.length / itemsPerPage);
+              
+              return (
+                <>
+                  <div className="space-y-4">
+                    {paginatedPanels.map(panel => (
               <div
                 key={panel._id}
                 className="border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow cursor-pointer"
@@ -4933,9 +5923,28 @@ const PanelRecords = () => {
                   </div>
                 </div>
               </div>
-            ))}
-          </div>
-        )}
+                    ))}
+                  </div>
+                  {panels.length > 0 && (
+                    <Pagination
+                      currentPage={currentPage}
+                      totalPages={totalPages}
+                      totalItems={panels.length}
+                      itemsPerPage={itemsPerPage}
+                      onPageChange={setCurrentPage}
+                      onItemsPerPageChange={(newItemsPerPage) => {
+                        setItemsPerPage(newItemsPerPage);
+                        setCurrentPage(1);
+                      }}
+                      startIndex={startIndex + 1}
+                      endIndex={Math.min(endIndex, panels.length)}
+                    />
+                  )}
+                </>
+              );
+            })()
+          )}
+        </div>
       </div>
 
       {/* Panel Details Modal */}
@@ -5113,11 +6122,12 @@ const ActivityLogs = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const [pagination, setPagination] = useState(null);
+  const [itemsPerPage, setItemsPerPage] = useState(50);
 
   useEffect(() => {
     fetchActivityLogs();
     fetchActivityStats();
-  }, [actionFilter, entityFilter, currentPage]);
+  }, [actionFilter, entityFilter, currentPage, itemsPerPage]);
 
   const fetchActivityLogs = async () => {
     try {
@@ -5125,7 +6135,7 @@ const ActivityLogs = () => {
       const token = localStorage.getItem('token');
       const params = new URLSearchParams({
         page: currentPage,
-        limit: 50,
+        limit: itemsPerPage,
         ...(actionFilter !== 'all' && { action: actionFilter }),
         ...(entityFilter !== 'all' && { entityType: entityFilter })
       });
@@ -5137,7 +6147,7 @@ const ActivityLogs = () => {
       setPagination(res.data.pagination);
     } catch (error) {
       console.error('Error fetching activity logs:', error);
-      alert('Error fetching activity logs');
+      showError('Error', 'Error fetching activity logs');
     } finally {
       setLoading(false);
     }
@@ -5396,31 +6406,22 @@ const ActivityLogs = () => {
         )}
 
         {/* Pagination */}
-        {pagination && pagination.pages > 1 && (
-          <div className="bg-gray-50 px-4 py-3 border-t border-gray-200 sm:px-6">
-            <div className="flex items-center justify-between">
-              <div className="text-sm text-gray-700">
-                Showing page <span className="font-medium">{pagination.page}</span> of{' '}
-                <span className="font-medium">{pagination.pages}</span>
-              </div>
-              <div className="flex space-x-2">
-                <button
-                  onClick={() => setCurrentPage(Math.max(1, currentPage - 1))}
-                  disabled={currentPage === 1}
-                  className="px-3 py-1 bg-white border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  Previous
-                </button>
-                <button
-                  onClick={() => setCurrentPage(Math.min(pagination.pages, currentPage + 1))}
-                  disabled={currentPage === pagination.pages}
-                  className="px-3 py-1 bg-white border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  Next
-                </button>
-              </div>
-            </div>
-          </div>
+        {pagination && pagination.total > 0 && (
+          <Pagination
+            currentPage={pagination.page || currentPage}
+            totalPages={pagination.pages || 1}
+            totalItems={pagination.total || activities.length}
+            itemsPerPage={itemsPerPage}
+            onPageChange={(page) => {
+              setCurrentPage(page);
+            }}
+            onItemsPerPageChange={(newItemsPerPage) => {
+              setItemsPerPage(newItemsPerPage);
+              setCurrentPage(1);
+            }}
+            startIndex={pagination.startIndex || ((currentPage - 1) * itemsPerPage + 1)}
+            endIndex={pagination.endIndex || Math.min(currentPage * itemsPerPage, pagination.total || activities.length)}
+          />
         )}
       </div>
     </div>

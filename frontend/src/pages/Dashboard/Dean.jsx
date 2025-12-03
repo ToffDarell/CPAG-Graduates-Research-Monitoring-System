@@ -1,10 +1,12 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { FaUsers, FaFolder, FaArchive, FaChartBar, FaUsersCog, FaFileAlt, FaPlus, FaSearch, FaEdit, FaTrash, FaTimes, FaSignOutAlt, FaBars, FaTimes as FaClose, FaDownload, FaEye, FaToggleOn, FaToggleOff, FaExclamationTriangle, FaHistory, FaCheck, FaCog  } from 'react-icons/fa';
+import { FaUsers, FaFolder, FaArchive, FaChartBar, FaUsersCog, FaFileAlt, FaPlus, FaSearch, FaEdit, FaTrash, FaTimes, FaSignOutAlt, FaBars, FaTimes as FaClose, FaDownload, FaEye, FaToggleOn, FaToggleOff, FaExclamationTriangle, FaHistory, FaCheck, FaCog, FaTable, FaUpload  } from 'react-icons/fa';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import axios from 'axios';
 import Settings from '../Settings';
+import DriveUploader from '../../components/DriveUploader';
 import { showSuccess, showError, showWarning, showConfirm, showDangerConfirm } from '../../utils/sweetAlert';
 import { checkPermission } from '../../utils/permissionChecker';
+import { renderAsync } from 'docx-preview';
 
 const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL ||
@@ -13,6 +15,171 @@ const API_BASE_URL =
     : '');
 
 const buildApiUrl = (path) => `${API_BASE_URL}${path}`;
+
+// Reusable Pagination Component
+const Pagination = ({ 
+  currentPage, 
+  totalPages, 
+  totalItems, 
+  itemsPerPage, 
+  onPageChange, 
+  onItemsPerPageChange,
+  startIndex,
+  endIndex 
+}) => {
+  const handleFirstPage = () => onPageChange(1);
+  const handlePrevPage = () => onPageChange(Math.max(1, currentPage - 1));
+  const handleNextPage = () => onPageChange(Math.min(totalPages, currentPage + 1));
+  const handleLastPage = () => onPageChange(totalPages);
+  const handlePageClick = (page) => onPageChange(page);
+
+  // Generate page numbers to display
+  const getPageNumbers = () => {
+    const pages = [];
+    const maxVisible = 5;
+    
+    if (totalPages <= maxVisible) {
+      for (let i = 1; i <= totalPages; i++) {
+        pages.push(i);
+      }
+    } else {
+      if (currentPage <= 3) {
+        for (let i = 1; i <= 4; i++) {
+          pages.push(i);
+        }
+        pages.push('...');
+        pages.push(totalPages);
+      } else if (currentPage >= totalPages - 2) {
+        pages.push(1);
+        pages.push('...');
+        for (let i = totalPages - 3; i <= totalPages; i++) {
+          pages.push(i);
+        }
+      } else {
+        pages.push(1);
+        pages.push('...');
+        for (let i = currentPage - 1; i <= currentPage + 1; i++) {
+          pages.push(i);
+        }
+        pages.push('...');
+        pages.push(totalPages);
+      }
+    }
+    
+    return pages;
+  };
+
+  // Always show pagination if there are items, even if only one page
+  if (totalItems === 0) {
+    return null; // Only hide if there are no items at all
+  }
+
+  return (
+    <div className="flex items-center justify-between border-t border-gray-200 bg-white px-4 py-3 sm:px-6">
+      <div className="flex flex-1 items-center justify-between sm:hidden">
+        <div className="text-sm text-gray-700">
+          Showing <span className="font-medium">{startIndex}</span> to <span className="font-medium">{endIndex}</span> of{' '}
+          <span className="font-medium">{totalItems}</span> results
+        </div>
+        <div className="flex gap-2">
+          <button
+            onClick={handlePrevPage}
+            disabled={currentPage === 1}
+            className="relative inline-flex items-center rounded-md border border-gray-300 bg-white px-2 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            Previous
+          </button>
+          <button
+            onClick={handleNextPage}
+            disabled={currentPage === totalPages}
+            className="relative ml-3 inline-flex items-center rounded-md border border-gray-300 bg-white px-2 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            Next
+          </button>
+        </div>
+      </div>
+      <div className="hidden sm:flex sm:flex-1 sm:items-center sm:justify-between">
+        <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-gray-700">Rows per page</span>
+            <select
+              value={itemsPerPage}
+              onChange={(e) => onItemsPerPageChange(Number(e.target.value))}
+              className="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm text-gray-700 focus:border-[#7C1D23] focus:outline-none focus:ring-2 focus:ring-[#7C1D23]/20"
+            >
+              <option value={5}>5</option>
+              <option value={10}>10</option>
+              <option value={25}>25</option>
+              <option value={50}>50</option>
+              <option value={100}>100</option>
+            </select>
+          </div>
+          <div className="text-sm text-gray-700">
+            Showing <span className="font-medium">{startIndex}</span> to <span className="font-medium">{endIndex}</span> of{' '}
+            <span className="font-medium">{totalItems}</span> results
+          </div>
+        </div>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={handleFirstPage}
+            disabled={currentPage === 1}
+            className="relative inline-flex items-center rounded-md border border-gray-300 bg-white px-2 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+            title="First page"
+          >
+            <span className="sr-only">First page</span>
+            ««
+          </button>
+          <button
+            onClick={handlePrevPage}
+            disabled={currentPage === 1}
+            className="relative inline-flex items-center rounded-md border border-gray-300 bg-white px-2 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+            title="Previous page"
+          >
+            <span className="sr-only">Previous page</span>
+            «
+          </button>
+          {getPageNumbers().map((page, index) => (
+            page === '...' ? (
+              <span key={`ellipsis-${index}`} className="px-2 py-2 text-sm text-gray-700">
+                ...
+              </span>
+            ) : (
+              <button
+                key={page}
+                onClick={() => handlePageClick(page)}
+                className={`relative inline-flex items-center rounded-md px-3 py-2 text-sm font-medium ${
+                  currentPage === page
+                    ? 'bg-[#7C1D23] text-white'
+                    : 'border border-gray-300 bg-white text-gray-700 hover:bg-gray-50'
+                }`}
+              >
+                {page}
+              </button>
+            )
+          ))}
+          <button
+            onClick={handleNextPage}
+            disabled={currentPage === totalPages}
+            className="relative inline-flex items-center rounded-md border border-gray-300 bg-white px-2 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+            title="Next page"
+          >
+            <span className="sr-only">Next page</span>
+            »
+          </button>
+          <button
+            onClick={handleLastPage}
+            disabled={currentPage === totalPages}
+            className="relative inline-flex items-center rounded-md border border-gray-300 bg-white px-2 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+            title="Last page"
+          >
+            <span className="sr-only">Last page</span>
+            »»
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
 
 const DeanDashboard = ({ setUser, user }) => {
   const navigate = useNavigate();
@@ -43,7 +210,10 @@ const DeanDashboard = ({ setUser, user }) => {
   const [archivedDocuments, setArchivedDocuments] = useState([]);
   const [driveStatus, setDriveStatus] = useState({ connected: false, loading: true });
   const [driveStatusError, setDriveStatusError] = useState("");
+  const [sheetsStatus, setSheetsStatus] = useState({ connected: false, loading: true });
+  const [sheetsStatusError, setSheetsStatusError] = useState("");
   const [showSettings, setShowSettings] = useState(false);
+  const [exportingToSheets, setExportingToSheets] = useState(false);
 
   const fetchDriveStatus = useCallback(async () => {
     const token = localStorage.getItem('token');
@@ -59,6 +229,23 @@ const DeanDashboard = ({ setUser, user }) => {
       console.error('Error checking drive status:', error);
       setDriveStatus((prev) => ({ ...prev, loading: false }));
       setDriveStatusError(error.response?.data?.message || 'Unable to determine Google Drive connection status.');
+    }
+  }, []);
+
+  const fetchSheetsStatus = useCallback(async () => {
+    const token = localStorage.getItem('token');
+    if (!token) return;
+    setSheetsStatus((prev) => ({ ...prev, loading: true }));
+    setSheetsStatusError("");
+    try {
+      const res = await axios.get('/api/google-sheets/status', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      setSheetsStatus({ ...res.data, loading: false });
+    } catch (error) {
+      console.error('Error checking sheets status:', error);
+      setSheetsStatus((prev) => ({ ...prev, loading: false }));
+      setSheetsStatusError(error.response?.data?.message || 'Unable to determine Google Sheets connection status.');
     }
   }, []);
 
@@ -124,20 +311,23 @@ const DeanDashboard = ({ setUser, user }) => {
       fetchAnalytics();
       fetchArchivedDocuments();
       fetchDriveStatus();
-    },[fetchDriveStatus]);
+      fetchSheetsStatus();
+    },[fetchDriveStatus, fetchSheetsStatus]);
 
   useEffect(() => {
     const handleDriveMessage = (event) => {
       if (event.origin !== window.location.origin) return;
       if (event.data?.type === "DRIVE_CONNECT_SUCCESS") {
         fetchDriveStatus();
+      } else if (event.data?.type === "SHEETS_CONNECT_SUCCESS") {
+        fetchSheetsStatus();
       }
     };
     window.addEventListener("message", handleDriveMessage);
     return () => {
       window.removeEventListener("message", handleDriveMessage);
     };
-  }, [fetchDriveStatus]);
+  }, [fetchDriveStatus, fetchSheetsStatus]);
 
   const fetchFaculty = async () => {
     try {
@@ -220,7 +410,8 @@ const DeanDashboard = ({ setUser, user }) => {
       const updateData = {
         name: editingFaculty.name,
         email: editingFaculty.email,
-        role: editingFaculty.role
+        role: editingFaculty.role,
+        version: editingFaculty.version || 0
       };
 
       const res = await axios.put(`/api/dean/faculty/${editingFaculty._id}`, updateData, {
@@ -232,6 +423,15 @@ const DeanDashboard = ({ setUser, user }) => {
       await showSuccess('Success', 'Faculty updated successfully!');
     } catch (error) {
       console.error('Update faculty error:', error);
+      
+      // Handle version mismatch (409 Conflict)
+      if (error.response?.status === 409) {
+        showError('Version Conflict', error.response.data?.message || 'This profile was updated by another user. Please reload the page to see the latest changes and try again.');
+        setShowEditFacultyModal(false);
+        setEditingFaculty(null);
+        return;
+      }
+      
       if (error.response?.data?.errors) {
         showWarning('Validation Error', 'Validation errors:\n ' + error.response?.data?.errors.join('\n'));
       } else {
@@ -283,10 +483,10 @@ const DeanDashboard = ({ setUser, user }) => {
         headers: { Authorization: `Bearer ${token}` }
       });
       fetchArchivedDocuments();
-      alert('Document archived successfully!');
+      await showSuccess('Success', 'Document archived successfully!');
     } catch (error) {
       console.error('Error archiving document:', error);
-      alert('Error archiving document');
+      showError('Error', 'Error archiving document');
     }
   };
 
@@ -319,16 +519,43 @@ const DeanDashboard = ({ setUser, user }) => {
   );
 
   // Add this function after handleDeleteFaculty
-  const handleToggleFacultyStatus = async (id) => {
+  const handleToggleFacultyStatus = async (faculty) => {
+    if (!faculty) {
+      showError('Error', 'Faculty member not found in the current list.');
+      return;
+    }
     try {
       const token = localStorage.getItem('token');
-      const res = await axios.put(`/api/dean/faculty/${id}/toggle-status`, {}, {
+      const { data } = await axios.put(`/api/dean/faculty/${faculty._id}/toggle-status`, {
+        version: faculty.version || 0
+      }, {
         headers: { Authorization: `Bearer ${token}` }
       });
-      fetchFaculty();
-      alert(res.data.message);
+      // Update local faculty list so status reflects the change without a full refresh
+      if (data?.faculty) {
+        setFacultyList(prev =>
+          prev.map(f =>
+            f._id === data.faculty._id
+              ? { ...f, isActive: data.faculty.isActive, version: data.faculty.version ?? f.version }
+              : f
+          )
+        );
+      } else {
+        setFacultyList(prev =>
+          prev.map(f =>
+            f._id === faculty._id
+              ? { ...f, isActive: !faculty.isActive, version: (f.version || 0) + 1 }
+              : f
+          )
+        );
+      }
+      await showSuccess('Success', data?.message || 'Faculty status updated successfully.');
     } catch (error) {
-      alert(error.response?.data?.message || 'Error updating faculty status');
+      if (error.response?.status === 409) {
+        showError('Version Conflict', error.response?.data?.message || 'This faculty account was updated elsewhere. Please refresh the list and try again.');
+        return;
+      }
+      showError('Error', error.response?.data?.message || 'Error updating faculty status');
     }
   };
 
@@ -357,7 +584,7 @@ const DeanDashboard = ({ setUser, user }) => {
           onToggleStatus={handleToggleFacultyStatus} 
         />;
       case 'research':
-        return <ResearchRecords 
+        return <ResearchRecords sheetsStatus={sheetsStatus} 
           stats={researchStats} 
           research={researchList}
           driveStatus={driveStatus}
@@ -375,7 +602,7 @@ const DeanDashboard = ({ setUser, user }) => {
           }}
         />;
       case 'monitoring':
-        return <MonitoringEvaluation research={researchList} />;
+        return <MonitoringEvaluation research={researchList} driveStatus={driveStatus} />;
       case 'panels':
         return <PanelAssignment research={researchList} faculty={facultyList} />;
       case 'documents':
@@ -472,7 +699,7 @@ const DeanDashboard = ({ setUser, user }) => {
       {/* Mobile Sidebar Overlay */}
       {sidebarOpen && (
         <div
-          className="fixed inset-0 bg-black bg-opacity-50 z-40 lg:hidden"
+          className="fixed inset-0 bg-black/30 backdrop-blur-sm z-40 lg:hidden"
           onClick={() => setSidebarOpen(false)}
         />
       )}
@@ -556,7 +783,7 @@ const DeanDashboard = ({ setUser, user }) => {
 
       {/* Add Faculty Modal */}
       {showAddFacultyModal && (
-        <div className="fixed inset-0 bg-gray-50 bg-opacity-95 flex items-center justify-center z-50 p-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4 py-6">
           <div className="bg-white rounded-lg shadow-xl max-w-md w-full border border-gray-200">
             {/* Modal Header */}
             <div className="bg-gradient-to-r from-[#7C1D23] to-[#5a1519] text-white p-4 rounded-t-lg">
@@ -638,7 +865,7 @@ const DeanDashboard = ({ setUser, user }) => {
 
       {/* Edit Faculty Modal */}
       {showEditFacultyModal && editingFaculty && (
-        <div className="fixed inset-0 bg-gray-50 bg-opacity-95 flex items-center justify-center z-50 p-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4 py-6">
           <div className="bg-white rounded-lg shadow-xl max-w-md w-full border border-gray-200">
             {/* Modal Header */}
             <div className="bg-gradient-to-r from-[#7C1D23] to-[#5a1519] text-white p-4 rounded-t-lg">
@@ -753,37 +980,47 @@ const StatCard = ({ title, value, icon, color, trend }) => {
 };
 
 // Placeholder components for different sections
-const FacultyManagement = ({ faculty, searchQuery, setSearchQuery, onAdd, onEdit, onDelete, onToggleStatus }) => (
-  <div className="space-y-5">
-    <div className="flex justify-between items-center">
-      <h2 className="text-xl font-bold text-gray-800">Faculty Management</h2>
-      <button 
-        onClick={onAdd}
-        className="flex items-center px-4 py-2 bg-[#7C1D23] text-white rounded-md hover:bg-[#5a1519] transition-colors text-sm font-medium"
-      >
-        <FaPlus className="mr-2 text-sm" />
-        Add Faculty
-      </button>
-    </div>
-    <div className="bg-gray-50 rounded-lg border border-gray-200 overflow-hidden">
-      <div className="p-4 bg-white border-b border-gray-200">
-        <div className="relative">
-          <FaSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search faculty..."
-            className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-[#7C1D23] text-sm"
-          />
-        </div>
+const FacultyManagement = ({ faculty, searchQuery, setSearchQuery, onAdd, onEdit, onDelete, onToggleStatus }) => {
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(10);
+
+  const startIndex = (currentPage - 1) * itemsPerPage;
+  const endIndex = startIndex + itemsPerPage;
+  const paginatedFaculty = faculty.slice(startIndex, endIndex);
+  const totalPages = Math.ceil(faculty.length / itemsPerPage);
+
+  return (
+    <div className="space-y-5">
+      <div className="flex justify-between items-center">
+        <h2 className="text-xl font-bold text-gray-800">Faculty Management</h2>
+        <button 
+          onClick={onAdd}
+          className="flex items-center px-4 py-2 bg-[#7C1D23] text-white rounded-md hover:bg-[#5a1519] transition-colors text-sm font-medium"
+        >
+          <FaPlus className="mr-2 text-sm" />
+          Add Faculty
+        </button>
       </div>
-      <div className="p-4">
-        {faculty.length === 0 ? (
-          <p className="text-gray-500 text-center text-sm py-8">No faculty members found.</p>
-        ) : (
-          <div className="space-y-3">
-            {faculty.map((member) => (
+      <div className="bg-gray-50 rounded-lg border border-gray-200 overflow-hidden">
+        <div className="p-4 bg-white border-b border-gray-200">
+          <div className="relative">
+            <FaSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search faculty..."
+              className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-[#7C1D23] text-sm"
+            />
+          </div>
+        </div>
+        <div className="p-4">
+          {faculty.length === 0 ? (
+            <p className="text-gray-500 text-center text-sm py-8">No faculty members found.</p>
+          ) : (
+            <>
+              <div className="space-y-3">
+                {paginatedFaculty.map((member) => (
               <div key={member._id} className={`bg-white border rounded-lg p-4 flex items-center justify-between hover:shadow-md transition-shadow ${
                 member.isActive ? 'border-gray-200' : 'border-red-200 bg-red-50'
               }`}>
@@ -811,8 +1048,8 @@ const FacultyManagement = ({ faculty, searchQuery, setSearchQuery, onAdd, onEdit
                   </div>
                 </div>
                 <div className="flex space-x-2">
-                  <button 
-                    onClick={() => onToggleStatus(member._id)}
+                    <button
+                      onClick={() => onToggleStatus(member)}
                     className={`p-2 transition-colors ${
                       member.isActive 
                         ? 'text-gray-600 hover:text-red-600' 
@@ -836,13 +1073,30 @@ const FacultyManagement = ({ faculty, searchQuery, setSearchQuery, onAdd, onEdit
                   </button>
                 </div>
               </div>
-            ))}
-          </div>
-        )}
+                ))}
+              </div>
+              {faculty.length > 0 && (
+                <Pagination
+                  currentPage={currentPage}
+                  totalPages={totalPages}
+                  totalItems={faculty.length}
+                  itemsPerPage={itemsPerPage}
+                  onPageChange={setCurrentPage}
+                  onItemsPerPageChange={(newItemsPerPage) => {
+                    setItemsPerPage(newItemsPerPage);
+                    setCurrentPage(1);
+                  }}
+                  startIndex={startIndex + 1}
+                  endIndex={Math.min(endIndex, faculty.length)}
+                />
+              )}
+            </>
+          )}
+        </div>
       </div>
     </div>
-  </div>
-);
+  );
+};
 
 // Helper function to determine if project is overdue
 const isOverdue = (research) => {
@@ -963,18 +1217,19 @@ const ResearchDetailsModal = ({ research, isOpen, onClose }) => {
       
       setRemarks('');
       fetchResearchFeedback(research._id);
-      alert('Remarks submitted successfully!');
+      await showSuccess('Success', 'Remarks submitted successfully!');
     } catch (error) {
       console.error('Error submitting remarks:', error);
       console.error('Error response:', error.response?.data);
-      alert('Error submitting remarks: ' + (error.response?.data?.message || error.message));
+      showError('Error', 'Error submitting remarks: ' + (error.response?.data?.message || error.message));
     }
   };
   
   if (!isOpen || !research) return null;
   
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+    // Modal overlay: match Export PDF/Excel (dark dim background)
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4 py-6">
       <div className="bg-white rounded-lg shadow-xl max-w-4xl w-full max-h-[90vh] overflow-y-auto">
         {/* Modal Header */}
         <div className="bg-gradient-to-r from-[#7C1D23] to-[#5a1519] text-white p-4 rounded-t-lg">
@@ -1158,7 +1413,7 @@ const ResearchRecordDetailsModal = ({ research, isOpen, onClose, onDownload }) =
   };
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4 py-6">
       <div className="bg-white rounded-lg shadow-xl max-w-4xl w-full max-h-[90vh] overflow-y-auto">
         {/* Modal Header */}
         <div className="bg-gradient-to-r from-[#7C1D23] to-[#5a1519] text-white p-6 rounded-t-lg sticky top-0 z-10">
@@ -1338,7 +1593,7 @@ const ResearchRecordDetailsModal = ({ research, isOpen, onClose, onDownload }) =
   );
 };
 
-const ResearchRecords = ({ stats, research, onRefresh, driveStatus }) => {
+const ResearchRecords = ({ stats, research, onRefresh, driveStatus, sheetsStatus }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [stageFilter, setStageFilter] = useState('all');
@@ -1359,8 +1614,12 @@ const ResearchRecords = ({ stats, research, onRefresh, driveStatus }) => {
   ]);
   const [exporting, setExporting] = useState(false);
   const previousResearchRef = useRef(research);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(10);
 
   const driveConnected = driveStatus?.connected;
+  const sheetsConnected = sheetsStatus?.connected;
+  const [exportingToSheets, setExportingToSheets] = useState(false);
   const adviserOptions = useMemo(() => {
     const map = new Map();
     (research || []).forEach((item) => {
@@ -1735,6 +1994,56 @@ const ResearchRecords = ({ stats, research, onRefresh, driveStatus }) => {
     }
   };
 
+  // Export to Google Sheets - Create Research Dashboard
+  const handleExportToSheets = async () => {
+    if (!sheetsConnected) {
+      showWarning('Google Sheets Not Connected', 'Please connect your Google Sheets account in Settings before exporting.');
+      return;
+    }
+
+    setExportingToSheets(true);
+    try {
+      const token = localStorage.getItem('token');
+      
+      // Build filters (same as Excel export)
+      const filters = {
+        status: statusFilter !== 'all' ? statusFilter : undefined,
+        stage: stageFilter !== 'all' ? stageFilter : undefined,
+        adviserId: adviserFilter !== 'all' ? adviserFilter : undefined,
+        startDate: startDateFilter || undefined,
+        endDate: endDateFilter || undefined,
+        academicYear: academicYearFilter !== 'all' ? academicYearFilter : undefined,
+      };
+
+      // Remove undefined values
+      Object.keys(filters).forEach(key => filters[key] === undefined && delete filters[key]);
+
+      const res = await axios.post(
+        '/api/google-sheets/create-research-dashboard',
+        {
+          fields: selectedFields,
+          filters: filters
+        },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+
+      await showSuccess(
+        'Dashboard Created!',
+        `Research progress dashboard created successfully with ${res.data.recordCount || 0} records. Click the link to view it.`,
+        () => {
+          if (res.data.spreadsheetUrl) {
+            window.open(res.data.spreadsheetUrl, '_blank');
+          }
+        }
+      );
+    } catch (error) {
+      const errorMessage = error.response?.data?.message || 'Failed to create research dashboard. Please try again.';
+      showError('Export Failed', errorMessage);
+    } finally {
+      setExportingToSheets(false);
+    }
+  };
+
   const toggleField = (field) => {
     if (selectedFields.includes(field)) {
       if (field === 'title') {
@@ -1772,13 +2081,22 @@ const ResearchRecords = ({ stats, research, onRefresh, driveStatus }) => {
         <div className="flex items-center gap-3">
           <span className="text-sm text-gray-600">{filteredResearch.length} record(s) found</span>
           <button
+            onClick={handleExportToSheets}
+            disabled={!sheetsConnected || exportingToSheets || filteredResearch.length === 0}
+            className="px-4 py-2 bg-[#0F9D58] text-white rounded-md hover:bg-[#0B8043] transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm font-medium flex items-center gap-2"
+            title={!sheetsConnected ? 'Connect Google Sheets to export' : 'Export to Google Sheets'}
+          >
+            <FaTable className="h-4 w-4" />
+            {exportingToSheets ? 'Creating...' : 'Export to Sheets'}
+          </button>
+          <button
             onClick={() => setShowExportModal(true)}
             disabled={!driveConnected || filteredResearch.length === 0}
             className="px-4 py-2 bg-[#7C1D23] text-white rounded-md hover:bg-[#5a1519] transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm font-medium flex items-center gap-2"
             title={!driveConnected ? 'Connect Google Drive to export' : 'Export Research Records'}
           >
             <FaDownload className="h-4 w-4" />
-            Export
+            Export PDF/Excel
           </button>
         </div>
       </div>
@@ -1952,43 +2270,51 @@ const ResearchRecords = ({ stats, research, onRefresh, driveStatus }) => {
             <p className="mt-2 text-gray-500">No research records available.</p>
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-gray-200">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th className="px-6 py-3 text-left">
-                    <input
-                      type="checkbox"
-                      checked={selectedResearchIds.length === filteredResearch.length && filteredResearch.length > 0}
-                      onChange={(e) => {
-                        if (e.target.checked) {
-                          setSelectedResearchIds(filteredResearch.map(r => r._id));
-                        } else {
-                          setSelectedResearchIds([]);
-                        }
-                      }}
-                      className="rounded border-gray-300 text-[#7C1D23] focus:ring-[#7C1D23]"
-                    />
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Research Title
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Adviser
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Submission Date
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Status
-                  </th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Actions
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
-                {filteredResearch.map((item) => (
+          (() => {
+            const startIndex = (currentPage - 1) * itemsPerPage;
+            const endIndex = startIndex + itemsPerPage;
+            const paginatedResearch = filteredResearch.slice(startIndex, endIndex);
+            const totalPages = Math.ceil(filteredResearch.length / itemsPerPage);
+            
+            return (
+              <>
+                <div className="overflow-x-auto">
+                  <table className="min-w-full divide-y divide-gray-200">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <th className="px-6 py-3 text-left">
+                          <input
+                            type="checkbox"
+                            checked={selectedResearchIds.length === filteredResearch.length && filteredResearch.length > 0}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setSelectedResearchIds(filteredResearch.map(r => r._id));
+                              } else {
+                                setSelectedResearchIds([]);
+                              }
+                            }}
+                            className="rounded border-gray-300 text-[#7C1D23] focus:ring-[#7C1D23]"
+                          />
+                        </th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Research Title
+                        </th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Adviser
+                        </th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Submission Date
+                        </th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Status
+                        </th>
+                        <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Actions
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody className="bg-white divide-y divide-gray-200">
+                      {paginatedResearch.map((item) => (
                   <tr key={item._id} className={`hover:bg-gray-50 transition-colors ${selectedResearchIds.includes(item._id) ? 'bg-blue-50' : ''}`}>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <input
@@ -2041,10 +2367,28 @@ const ResearchRecords = ({ stats, research, onRefresh, driveStatus }) => {
                       </div>
                     </td>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                {filteredResearch.length > 0 && (
+                  <Pagination
+                    currentPage={currentPage}
+                    totalPages={totalPages}
+                    totalItems={filteredResearch.length}
+                    itemsPerPage={itemsPerPage}
+                    onPageChange={setCurrentPage}
+                    onItemsPerPageChange={(newItemsPerPage) => {
+                      setItemsPerPage(newItemsPerPage);
+                      setCurrentPage(1);
+                    }}
+                    startIndex={startIndex + 1}
+                    endIndex={Math.min(endIndex, filteredResearch.length)}
+                  />
+                )}
+              </>
+            );
+          })()
         )}
       </div>
 
@@ -2203,7 +2547,8 @@ const ResearchRecords = ({ stats, research, onRefresh, driveStatus }) => {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                   {[
                     { key: 'title', label: 'Research Title', required: true },
-                    { key: 'students', label: 'Students' },
+                    { key: 'students', label: 'Students (Name)' },
+                    { key: 'studentEmail', label: 'Student Email/ID' },
                     { key: 'adviser', label: 'Adviser' },
                     { key: 'status', label: 'Status' },
                     { key: 'stage', label: 'Stage' },
@@ -2265,6 +2610,8 @@ const ArchiveProjects = ({ research, onRefresh }) => {
   const [dateFilter, setDateFilter] = useState('all');
   const [selectedResearchIds, setSelectedResearchIds] = useState([]);
   const [bulkOperating, setBulkOperating] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(10);
 
   useEffect(() => {
     let filtered = research;
@@ -2549,43 +2896,51 @@ const ArchiveProjects = ({ research, onRefresh }) => {
             <p className="mt-2 text-gray-500">No archived projects yet.</p>
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-gray-200">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th className="px-6 py-3 text-left">
-                    <input
-                      type="checkbox"
-                      checked={selectedResearchIds.length === filteredResearch.length && filteredResearch.length > 0}
-                      onChange={(e) => {
-                        if (e.target.checked) {
-                          setSelectedResearchIds(filteredResearch.map(item => item._id));
-                        } else {
-                          setSelectedResearchIds([]);
-                        }
-                      }}
-                      className="rounded border-gray-300 text-[#7C1D23] focus:ring-[#7C1D23]"
-                    />
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Research Title
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Author/Faculty
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Archived Date
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Status
-                  </th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Actions
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
-                {filteredResearch.map((item) => (
+          (() => {
+            const startIndex = (currentPage - 1) * itemsPerPage;
+            const endIndex = startIndex + itemsPerPage;
+            const paginatedResearch = filteredResearch.slice(startIndex, endIndex);
+            const totalPages = Math.ceil(filteredResearch.length / itemsPerPage);
+            
+            return (
+              <>
+                <div className="overflow-x-auto">
+                  <table className="min-w-full divide-y divide-gray-200">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <th className="px-6 py-3 text-left">
+                          <input
+                            type="checkbox"
+                            checked={selectedResearchIds.length === filteredResearch.length && filteredResearch.length > 0}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setSelectedResearchIds(filteredResearch.map(item => item._id));
+                              } else {
+                                setSelectedResearchIds([]);
+                              }
+                            }}
+                            className="rounded border-gray-300 text-[#7C1D23] focus:ring-[#7C1D23]"
+                          />
+                        </th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Research Title
+                        </th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Author/Faculty
+                        </th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Archived Date
+                        </th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Status
+                        </th>
+                        <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Actions
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody className="bg-white divide-y divide-gray-200">
+                      {paginatedResearch.map((item) => (
                   <tr key={item._id} className={`hover:bg-gray-50 transition-colors ${selectedResearchIds.includes(item._id) ? 'bg-blue-50' : ''}`}>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <input
@@ -2652,10 +3007,28 @@ const ArchiveProjects = ({ research, onRefresh }) => {
                       </div>
                     </td>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                {filteredResearch.length > 0 && (
+                  <Pagination
+                    currentPage={currentPage}
+                    totalPages={totalPages}
+                    totalItems={filteredResearch.length}
+                    itemsPerPage={itemsPerPage}
+                    onPageChange={setCurrentPage}
+                    onItemsPerPageChange={(newItemsPerPage) => {
+                      setItemsPerPage(newItemsPerPage);
+                      setCurrentPage(1);
+                    }}
+                    startIndex={startIndex + 1}
+                    endIndex={Math.min(endIndex, filteredResearch.length)}
+                  />
+                )}
+              </>
+            );
+          })()
         )}
       </div>
 
@@ -2675,12 +3048,20 @@ const ArchiveProjects = ({ research, onRefresh }) => {
   );
 };
 
-const MonitoringEvaluation = ({ research }) => {
+const MonitoringEvaluation = ({ research, driveStatus }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [filteredResearch, setFilteredResearch] = useState(research);
   const [selectedResearch, setSelectedResearch] = useState(null);
   const [showDetailsModal, setShowDetailsModal] = useState(false);
+  const [exportingSchedule, setExportingSchedule] = useState(false);
+  const [scheduleFilters, setScheduleFilters] = useState({
+    startDate: '',
+    endDate: '',
+    type: 'all'
+  });
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(10);
 
   useEffect(() => {
     let filtered = research;
@@ -2710,9 +3091,56 @@ const MonitoringEvaluation = ({ research }) => {
     setShowDetailsModal(true);
   };
 
+  const handleExportDefenseSchedule = async () => {
+    if (!driveStatus?.connected) {
+      showWarning('Google Drive Not Connected', 'Please connect your Google Drive account in Settings before exporting.');
+      return;
+    }
+
+    setExportingSchedule(true);
+    try {
+      const token = localStorage.getItem('token');
+      const exportFilters = {
+        startDate: scheduleFilters.startDate || undefined,
+        endDate: scheduleFilters.endDate || undefined,
+        type: scheduleFilters.type !== 'all' ? scheduleFilters.type : undefined,
+      };
+
+      // Remove undefined values
+      Object.keys(exportFilters).forEach(key => exportFilters[key] === undefined && delete exportFilters[key]);
+
+      const res = await axios.post(
+        '/api/dean/defense-schedule/export',
+        { filters: exportFilters },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+
+      await showSuccess(
+        'Export Successful',
+        res.data.message || `Defense schedule exported as Excel and saved to your Google Drive Reports folder.`
+      );
+    } catch (error) {
+      console.error('Error exporting defense schedule:', error);
+      const errorMessage = error.response?.data?.message || 'Failed to export defense schedule. Please try again.';
+      showError('Export Failed', errorMessage);
+    } finally {
+      setExportingSchedule(false);
+    }
+  };
+
   return (
     <div className="space-y-5">
-      <h2 className="text-xl font-bold text-gray-800">Research Monitoring</h2>
+      <div className="flex justify-between items-center">
+        <h2 className="text-xl font-bold text-gray-800">Research Monitoring</h2>
+        <button
+          onClick={handleExportDefenseSchedule}
+          disabled={exportingSchedule || !driveStatus?.connected}
+          className="flex items-center px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm font-medium"
+        >
+          <FaDownload className="mr-2" />
+          {exportingSchedule ? 'Exporting...' : 'Export Defense Schedule'}
+        </button>
+      </div>
       
       {/* Search and Filter Controls */}
       <div className="bg-white rounded-lg border border-gray-200 p-4">
@@ -2750,15 +3178,43 @@ const MonitoringEvaluation = ({ research }) => {
       </div>
 
       {/* Research List */}
-      <div className="bg-white rounded-lg border border-gray-200 p-4">
+      <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
         {filteredResearch.length === 0 ? (
-          <p className="text-gray-500 text-center text-sm py-8">No active research projects to display.</p>
-        ) : (
-          <div className="space-y-3">
-            {filteredResearch.map((item) => (
-              <ResearchMonitoringCard key={item._id} research={item} onViewDetails={handleViewDetails} />
-            ))}
+          <div className="p-8 text-center">
+            <p className="text-gray-500 text-sm">No active research projects to display.</p>
           </div>
+        ) : (
+          (() => {
+            const startIndex = (currentPage - 1) * itemsPerPage;
+            const endIndex = startIndex + itemsPerPage;
+            const paginatedResearch = filteredResearch.slice(startIndex, endIndex);
+            const totalPages = Math.ceil(filteredResearch.length / itemsPerPage);
+            
+            return (
+              <>
+                <div className="p-4 space-y-3">
+                  {paginatedResearch.map((item) => (
+                    <ResearchMonitoringCard key={item._id} research={item} onViewDetails={handleViewDetails} />
+                  ))}
+                </div>
+                {filteredResearch.length > 0 && (
+                  <Pagination
+                    currentPage={currentPage}
+                    totalPages={totalPages}
+                    totalItems={filteredResearch.length}
+                    itemsPerPage={itemsPerPage}
+                    onPageChange={setCurrentPage}
+                    onItemsPerPageChange={(newItemsPerPage) => {
+                      setItemsPerPage(newItemsPerPage);
+                      setCurrentPage(1);
+                    }}
+                    startIndex={startIndex + 1}
+                    endIndex={Math.min(endIndex, filteredResearch.length)}
+                  />
+                )}
+              </>
+            );
+          })()
         )}
       </div>
 
@@ -2779,6 +3235,9 @@ const MonitoringEvaluation = ({ research }) => {
 };
 
 const PanelAssignment = ({ research, faculty }) => {
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(10);
+  
   const getStatusColor = (status) => {
     const colors = {
       'approved': 'bg-green-100 text-green-700',
@@ -2791,18 +3250,26 @@ const PanelAssignment = ({ research, faculty }) => {
     return colors[status?.toLowerCase()] || 'bg-gray-100 text-gray-700';
   };
 
+  const startIndex = (currentPage - 1) * itemsPerPage;
+  const endIndex = startIndex + itemsPerPage;
+  const paginatedResearch = research.slice(startIndex, endIndex);
+  const totalPages = Math.ceil(research.length / itemsPerPage);
+
   return (
     <div className="space-y-5">
       <div className="flex justify-between items-center">
         <h2 className="text-xl font-bold text-gray-800">Panel Assignment</h2>
         <p className="text-sm text-gray-600">Total Research: {research.length}</p>
       </div>
-      <div className="bg-white rounded-lg border border-gray-200 p-4">
+      <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
         {research.length === 0 ? (
-          <p className="text-gray-500 text-center text-sm py-8">No research available for panel assignment.</p>
+          <div className="p-8 text-center">
+            <p className="text-gray-500 text-sm">No research available for panel assignment.</p>
+          </div>
         ) : (
-          <div className="space-y-3">
-            {research.map((item) => (
+          <>
+            <div className="p-4 space-y-3">
+              {paginatedResearch.map((item) => (
               <div key={item._id} className="border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow">
                 <div className="flex justify-between items-start mb-2">
                   <h4 className="text-sm font-semibold text-gray-800 flex-1">{item.title}</h4>
@@ -2839,8 +3306,24 @@ const PanelAssignment = ({ research, faculty }) => {
                   </div>
                 </div>
               </div>
-            ))}
-          </div>
+              ))}
+            </div>
+            {research.length > 0 && (
+              <Pagination
+                currentPage={currentPage}
+                totalPages={totalPages}
+                totalItems={research.length}
+                itemsPerPage={itemsPerPage}
+                onPageChange={setCurrentPage}
+                onItemsPerPageChange={(newItemsPerPage) => {
+                  setItemsPerPage(newItemsPerPage);
+                  setCurrentPage(1);
+                }}
+                startIndex={startIndex + 1}
+                endIndex={Math.min(endIndex, research.length)}
+              />
+            )}
+          </>
         )}
       </div>
     </div>
@@ -2854,6 +3337,8 @@ const ArchivedDocuments = () => {
   const [selectedCategory, setSelectedCategory] = useState('all');
   const [selectedDocumentIds, setSelectedDocumentIds] = useState([]);
   const [bulkOperating, setBulkOperating] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(10);
 
   useEffect(() => {
     fetchArchivedDocuments();
@@ -3107,43 +3592,51 @@ const ArchivedDocuments = () => {
             <p className="mt-2 text-gray-500">No archived documents found.</p>
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-gray-200">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th className="px-6 py-3 text-left">
-                    <input
-                      type="checkbox"
-                      checked={selectedDocumentIds.length === filteredDocuments.length && filteredDocuments.length > 0}
-                      onChange={(e) => {
-                        if (e.target.checked) {
-                          setSelectedDocumentIds(filteredDocuments.map(doc => doc._id));
-                        } else {
-                          setSelectedDocumentIds([]);
-                        }
-                      }}
-                      className="rounded border-gray-300 text-[#7C1D23] focus:ring-[#7C1D23]"
-                    />
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Document Title
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Category
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    File Size
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Archived Date
-                  </th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Actions
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
-                {filteredDocuments.map((doc) => (
+          (() => {
+            const startIndex = (currentPage - 1) * itemsPerPage;
+            const endIndex = startIndex + itemsPerPage;
+            const paginatedDocuments = filteredDocuments.slice(startIndex, endIndex);
+            const totalPages = Math.ceil(filteredDocuments.length / itemsPerPage);
+            
+            return (
+              <>
+                <div className="overflow-x-auto">
+                  <table className="min-w-full divide-y divide-gray-200">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <th className="px-6 py-3 text-left">
+                          <input
+                            type="checkbox"
+                            checked={selectedDocumentIds.length === filteredDocuments.length && filteredDocuments.length > 0}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setSelectedDocumentIds(filteredDocuments.map(doc => doc._id));
+                              } else {
+                                setSelectedDocumentIds([]);
+                              }
+                            }}
+                            className="rounded border-gray-300 text-[#7C1D23] focus:ring-[#7C1D23]"
+                          />
+                        </th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Document Title
+                        </th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Category
+                        </th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          File Size
+                        </th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Archived Date
+                        </th>
+                        <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Actions
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody className="bg-white divide-y divide-gray-200">
+                      {paginatedDocuments.map((doc) => (
                   <tr key={doc._id} className={`hover:bg-gray-50 transition-colors ${selectedDocumentIds.includes(doc._id) ? 'bg-blue-50' : ''}`}>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <input
@@ -3206,10 +3699,28 @@ const ArchivedDocuments = () => {
                       </div>
                     </td>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                {filteredDocuments.length > 0 && (
+                  <Pagination
+                    currentPage={currentPage}
+                    totalPages={totalPages}
+                    totalItems={filteredDocuments.length}
+                    itemsPerPage={itemsPerPage}
+                    onPageChange={setCurrentPage}
+                    onItemsPerPageChange={(newItemsPerPage) => {
+                      setItemsPerPage(newItemsPerPage);
+                      setCurrentPage(1);
+                    }}
+                    startIndex={startIndex + 1}
+                    endIndex={Math.min(endIndex, filteredDocuments.length)}
+                  />
+                )}
+              </>
+            );
+          })()
         )}
       </div>
     </div>
@@ -3232,12 +3743,16 @@ const DocumentManagement = ({ onArchive, driveStatus }) => {
   const [selectedFile, setSelectedFile] = useState(null);
   const [selectedDocumentIds, setSelectedDocumentIds] = useState([]);
   const [bulkOperating, setBulkOperating] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(10);
   
   // Add these state variables for document viewer
   const [viewingDocument, setViewingDocument] = useState(null);
   const [showDocumentViewer, setShowDocumentViewer] = useState(false);
   const [documentBlobUrl, setDocumentBlobUrl] = useState(null); 
   const isDriveConnected = !!driveStatus?.connected;
+  const fileInputRef = useRef(null);
+  const docxPreviewRef = useRef(null);
 
   useEffect(() => {
     fetchDocuments();
@@ -3259,16 +3774,21 @@ const DocumentManagement = ({ onArchive, driveStatus }) => {
     }
   };
 
-  const handleFileSelect = (e) => {
-    const file = e.target.files[0];
-    if (file) {
-      // Validate file size (max 10MB)
-      if (file.size > 10 * 1024 * 1024) {
-        showWarning('File Too Large', 'File size must be less than 10MB');
-        return;
-      }
-      setSelectedFile(file);
+  const handleFileSelect = (fileOrEvent) => {
+    // Handle both event object and direct file parameter
+    const file = fileOrEvent?.target?.files?.[0] || fileOrEvent;
+    
+    if (!file) {
+      return;
     }
+    
+    // Validate file size (max 10MB)
+    if (file.size > 10 * 1024 * 1024) {
+      showWarning('File Too Large', 'File size must be less than 10MB');
+      return;
+    }
+    
+    setSelectedFile(file);
   };
 
   const handleUpload = async (e) => {
@@ -3287,7 +3807,39 @@ const DocumentManagement = ({ onArchive, driveStatus }) => {
       setUploadLoading(true);
       const token = localStorage.getItem('token');
       const formData = new FormData();
-      formData.append('file', selectedFile);
+      
+      // Handle Drive files: download and convert to File object
+      let fileToUpload = selectedFile;
+      if (selectedFile.isDriveFile) {
+        try {
+          // Download file from Google Drive using the access token
+          const driveResponse = await fetch(
+            `https://www.googleapis.com/drive/v3/files/${selectedFile.driveFileId}?alt=media`,
+            {
+              headers: {
+                Authorization: `Bearer ${selectedFile.accessToken}`,
+              },
+            }
+          );
+
+          if (!driveResponse.ok) {
+            throw new Error('Failed to download file from Google Drive');
+          }
+
+          const blob = await driveResponse.blob();
+          // Convert blob to File object
+          fileToUpload = new File([blob], selectedFile.name, {
+            type: selectedFile.mimeType || blob.type,
+          });
+        } catch (driveError) {
+          console.error('Error downloading Drive file:', driveError);
+          showError('Drive Download Error', 'Failed to download file from Google Drive. Please try again.');
+          setUploadLoading(false);
+          return;
+        }
+      }
+      
+      formData.append('file', fileToUpload);
       formData.append('title', newDocument.title);
       formData.append('description', newDocument.description);
       formData.append('category', newDocument.category);
@@ -3297,8 +3849,8 @@ const DocumentManagement = ({ onArchive, driveStatus }) => {
         title: newDocument.title,
         category: newDocument.category,
         accessibleTo: newDocument.accessibleTo,
-        fileName: selectedFile.name,
-        fileSize: selectedFile.size
+        fileName: fileToUpload.name,
+        fileSize: fileToUpload.size
       }); // Debug log
 
       const res = await axios.post('/api/dean/documents', formData, {
@@ -3524,9 +4076,55 @@ const handleDeleteDocument = async (doc) => {
       URL.revokeObjectURL(documentBlobUrl);
       setDocumentBlobUrl(null);
     }
+    // Clear DOCX preview
+    if (docxPreviewRef.current) {
+      docxPreviewRef.current.innerHTML = '';
+    }
     setShowDocumentViewer(false);
     setViewingDocument(null);
   };
+
+  // Effect to render DOCX files
+  useEffect(() => {
+    if (showDocumentViewer && viewingDocument && documentBlobUrl && docxPreviewRef.current) {
+      const isDocx = viewingDocument.mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+                     viewingDocument.mimeType === 'application/msword' ||
+                     viewingDocument.title?.toLowerCase().endsWith('.docx') ||
+                     viewingDocument.title?.toLowerCase().endsWith('.doc');
+      
+      if (isDocx) {
+        // Clear previous content
+        docxPreviewRef.current.innerHTML = '';
+        
+        // Fetch and render DOCX
+        fetch(documentBlobUrl)
+          .then(response => response.blob())
+          .then(blob => {
+            renderAsync(blob, docxPreviewRef.current, null, {
+              className: 'docx-wrapper',
+              inWrapper: true,
+              ignoreWidth: false,
+              ignoreHeight: false,
+              ignoreFonts: false,
+              breakPages: true,
+              experimental: false,
+              trimXmlDeclaration: true,
+              useBase64URL: false,
+              useMathMLPolyfill: true,
+              showChanges: false,
+            })
+            .catch(error => {
+              console.error('Error rendering DOCX:', error);
+              docxPreviewRef.current.innerHTML = '<p class="text-red-500 p-4">Error rendering document. Please try downloading the file.</p>';
+            });
+          })
+          .catch(error => {
+            console.error('Error fetching DOCX:', error);
+            docxPreviewRef.current.innerHTML = '<p class="text-red-500 p-4">Error loading document. Please try again.</p>';
+          });
+      }
+    }
+  }, [showDocumentViewer, viewingDocument, documentBlobUrl]);
 
   const filteredDocuments = documents.filter(doc => {
     const matchesSearch = doc.title?.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -3645,46 +4243,54 @@ const handleDeleteDocument = async (doc) => {
             <p className="mt-2 text-gray-500">No documents uploaded yet.</p>
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-gray-200">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th className="px-6 py-3 text-left">
-                    <input
-                      type="checkbox"
-                      checked={selectedDocumentIds.length === filteredDocuments.length && filteredDocuments.length > 0}
-                      onChange={(e) => {
-                        if (e.target.checked) {
-                          setSelectedDocumentIds(filteredDocuments.map(doc => doc._id));
-                        } else {
-                          setSelectedDocumentIds([]);
-                        }
-                      }}
-                      className="rounded border-gray-300 text-[#7C1D23] focus:ring-[#7C1D23]"
-                    />
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Document Title
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Category
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    File Size
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Uploaded By
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Upload Date
-                  </th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Actions
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
-                {filteredDocuments.map((doc) => (
+          (() => {
+            const startIndex = (currentPage - 1) * itemsPerPage;
+            const endIndex = startIndex + itemsPerPage;
+            const paginatedDocuments = filteredDocuments.slice(startIndex, endIndex);
+            const totalPages = Math.ceil(filteredDocuments.length / itemsPerPage);
+            
+            return (
+              <>
+                <div className="overflow-x-auto">
+                  <table className="min-w-full divide-y divide-gray-200">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <th className="px-6 py-3 text-left">
+                          <input
+                            type="checkbox"
+                            checked={selectedDocumentIds.length === filteredDocuments.length && filteredDocuments.length > 0}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setSelectedDocumentIds(filteredDocuments.map(doc => doc._id));
+                              } else {
+                                setSelectedDocumentIds([]);
+                              }
+                            }}
+                            className="rounded border-gray-300 text-[#7C1D23] focus:ring-[#7C1D23]"
+                          />
+                        </th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Document Title
+                        </th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Category
+                        </th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          File Size
+                        </th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Uploaded By
+                        </th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Upload Date
+                        </th>
+                        <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Actions
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody className="bg-white divide-y divide-gray-200">
+                      {paginatedDocuments.map((doc) => (
                   <tr key={doc._id} className={`hover:bg-gray-50 transition-colors ${selectedDocumentIds.includes(doc._id) ? 'bg-blue-50' : ''}`}>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <input
@@ -3757,19 +4363,38 @@ const handleDeleteDocument = async (doc) => {
                       </div>
                     </td>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                {filteredDocuments.length > 0 && (
+                  <Pagination
+                    currentPage={currentPage}
+                    totalPages={totalPages}
+                    totalItems={filteredDocuments.length}
+                    itemsPerPage={itemsPerPage}
+                    onPageChange={setCurrentPage}
+                    onItemsPerPageChange={(newItemsPerPage) => {
+                      setItemsPerPage(newItemsPerPage);
+                      setCurrentPage(1);
+                    }}
+                    startIndex={startIndex + 1}
+                    endIndex={Math.min(endIndex, filteredDocuments.length)}
+                  />
+                )}
+              </>
+            );
+          })()
         )}
       </div>
 
       {/* Upload Modal */}
       {showUploadModal && (
-        <div className="fixed inset-0 bg-gray-50 bg-opacity-95 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full border border-gray-200">
+        // Match Export PDF/Excel / other modals overlay
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4 py-6 overflow-y-auto">
+          <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full border border-gray-200 my-auto max-h-[90vh] flex flex-col">
             {/* Modal Header */}
-            <div className="bg-gradient-to-r from-[#7C1D23] to-[#5a1519] text-white p-4 rounded-t-lg">
+            <div className="bg-gradient-to-r from-[#7C1D23] to-[#5a1519] text-white p-4 rounded-t-lg flex-shrink-0">
               <div className="flex justify-between items-center">
                 <h3 className="text-lg font-bold">Upload Document</h3>
                 <button 
@@ -3781,10 +4406,10 @@ const handleDeleteDocument = async (doc) => {
               </div>
             </div>
 
-            {/* Modal Body */}
-            <div className="p-6">
-              <form onSubmit={handleUpload}>
-                <div className="space-y-4">
+            {/* Modal Body - Scrollable */}
+            <div className="p-6 overflow-y-auto flex-1">
+              <form onSubmit={handleUpload} className="flex flex-col h-full">
+                <div className="space-y-4 flex-1">
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-2">
                       Document Title *
@@ -3867,18 +4492,75 @@ const handleDeleteDocument = async (doc) => {
                     <label className="block text-sm font-medium text-gray-700 mb-2">
                       Select File * (Max 10MB)
                     </label>
-                    <input
-                      type="file"
-                      required
-                      onChange={handleFileSelect}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-[#7C1D23] transition-colors"
-                      accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt"
-                    />
-                    {selectedFile && (
-                      <p className="mt-1 text-sm text-gray-600">
-                        Selected: {selectedFile.name} ({formatFileSize(selectedFile.size)})
-                      </p>
-                    )}
+                    <div
+                      className="border-2 border-dashed rounded-lg p-6 transition-colors bg-gray-50 border-gray-300"
+                    >
+                      <div className="flex flex-col items-center text-center">
+                        <FaUpload className="text-[#7C1D23] text-xl mb-2" />
+                        <p className="text-sm text-gray-600 mb-2">
+                          Drag and drop your file here, or select from your options below
+                        </p>
+                        <p className="text-xs text-gray-400 mb-4">
+                          Accepted formats: PDF, DOC, DOCX, XLS, XLSX, PPT, PPTX, TXT • Max size: 10MB
+                        </p>
+
+                        <div className="flex gap-3 justify-center">
+                          <button
+                            type="button"
+                            onClick={() => fileInputRef.current?.click()}
+                            className="px-4 py-2 bg-[#7C1D23] text-white rounded-md hover:bg-[#5a1519] transition-colors text-sm font-medium"
+                          >
+                            Select File from Computer
+                          </button>
+                          <DriveUploader
+                            defaultType="other"
+                            driveButtonLabel="Upload from Google Drive"
+                            buttonBg="#7C1D23"
+                            buttonTextColor="#ffffff"
+                            skipBackendSave={true}
+                            onFilePicked={(fileInfo) => {
+                              if (!fileInfo || !fileInfo.id || !fileInfo.accessToken) {
+                                showError('Error', 'Failed to get Google Drive file information. Please try again.');
+                                return;
+                              }
+                              setSelectedFile({
+                                name: fileInfo.name,
+                                driveFileId: fileInfo.id,
+                                accessToken: fileInfo.accessToken,
+                                mimeType: fileInfo.mimeType,
+                                size: fileInfo.size,
+                                isDriveFile: true,
+                              });
+                            }}
+                          />
+                        </div>
+
+                        {selectedFile && (
+                          <div className="mt-4 inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white border border-gray-200 text-sm text-gray-700">
+                            <FaFileAlt className="text-gray-500" />
+                            <span className="truncate max-w-xs">{selectedFile.name}</span>
+                            {selectedFile.isDriveFile && (
+                              <span className="text-xs text-blue-600">📁 From Google Drive</span>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => setSelectedFile(null)}
+                              className="text-red-500 hover:text-red-600 text-xs"
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        )}
+                      </div>
+
+                      <input
+                        ref={fileInputRef}
+                        type="file"
+                        className="hidden"
+                        accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt"
+                        onChange={handleFileSelect}
+                      />
+                    </div>
                     {!isDriveConnected && (
                       <div className="mt-3 text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-md p-3">
                         <span>
@@ -3889,8 +4571,8 @@ const handleDeleteDocument = async (doc) => {
                   </div>
                 </div>
 
-                {/* Modal Footer */}
-                <div className="flex space-x-3 mt-6 pt-4 border-t border-gray-200">
+                {/* Modal Footer - Fixed at bottom */}
+                <div className="flex space-x-3 mt-6 pt-4 border-t border-gray-200 flex-shrink-0">
                   <button
                     type="submit"
                     disabled={uploadLoading}
@@ -3914,7 +4596,7 @@ const handleDeleteDocument = async (doc) => {
 
       {/* Document Viewer Modal */}
       {showDocumentViewer && viewingDocument && documentBlobUrl && (
-        <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 p-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4 py-6">
           <div className="bg-white rounded-lg shadow-xl max-w-6xl w-full h-full flex flex-col">
             {/* Modal Header */}
             <div className="bg-gradient-to-r from-[#7C1D23] to-[#5a1519] text-white p-4 rounded-t-lg flex justify-between items-center">
@@ -3928,7 +4610,7 @@ const handleDeleteDocument = async (doc) => {
             </div>
             
             {/* Document Content */}
-            <div className="flex-1 p-4">
+            <div className="flex-1 p-4 overflow-auto">
               {viewingDocument.mimeType === 'application/pdf' ? (
                 <iframe
                   src={documentBlobUrl}
@@ -3943,6 +4625,15 @@ const handleDeleteDocument = async (doc) => {
                     className="max-w-full max-h-full object-contain"
                   />
                 </div>
+              ) : viewingDocument.mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+                viewingDocument.mimeType === 'application/msword' ||
+                viewingDocument.title?.toLowerCase().endsWith('.docx') ||
+                viewingDocument.title?.toLowerCase().endsWith('.doc') ? (
+                <div 
+                  ref={docxPreviewRef}
+                  className="w-full h-full docx-container"
+                  style={{ padding: '20px', backgroundColor: '#fff' }}
+                />
               ) : (
                 <div className="flex items-center justify-center h-full">
                   <p className="text-gray-500">
@@ -3974,11 +4665,12 @@ const ActivityLogs = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const [pagination, setPagination] = useState(null);
+  const [itemsPerPage, setItemsPerPage] = useState(50);
 
   useEffect(() => {
     fetchActivityLogs();
     fetchActivityStats();
-  }, [actionFilter, entityFilter, currentPage]);
+  }, [actionFilter, entityFilter, currentPage, itemsPerPage]);
 
   const fetchActivityLogs = async () => {
     try {
@@ -3986,7 +4678,7 @@ const ActivityLogs = () => {
       const token = localStorage.getItem('token');
       const params = new URLSearchParams({
         page: currentPage,
-        limit: 50,
+        limit: itemsPerPage,
         ...(actionFilter !== 'all' && { action: actionFilter }),
         ...(entityFilter !== 'all' && { entityType: entityFilter })
       });
@@ -3998,7 +4690,7 @@ const ActivityLogs = () => {
       setPagination(res.data.pagination);
     } catch (error) {
       console.error('Error fetching activity logs:', error);
-      alert('Error fetching activity logs');
+      showError('Error', 'Error fetching activity logs');
     } finally {
       setLoading(false);
     }
@@ -4250,31 +4942,22 @@ const ActivityLogs = () => {
         )}
 
         {/* Pagination */}
-        {pagination && pagination.pages > 1 && (
-          <div className="bg-gray-50 px-4 py-3 border-t border-gray-200 sm:px-6">
-            <div className="flex items-center justify-between">
-              <div className="text-sm text-gray-700">
-                Showing page <span className="font-medium">{pagination.page}</span> of{' '}
-                <span className="font-medium">{pagination.pages}</span>
-              </div>
-              <div className="flex space-x-2">
-                <button
-                  onClick={() => setCurrentPage(Math.max(1, currentPage - 1))}
-                  disabled={currentPage === 1}
-                  className="px-3 py-1 bg-white border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  Previous
-                </button>
-                <button
-                  onClick={() => setCurrentPage(Math.min(pagination.pages, currentPage + 1))}
-                  disabled={currentPage === pagination.pages}
-                  className="px-3 py-1 bg-white border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  Next
-                </button>
-              </div>
-            </div>
-          </div>
+        {pagination && pagination.total > 0 && (
+          <Pagination
+            currentPage={pagination.page || currentPage}
+            totalPages={pagination.pages || 1}
+            totalItems={pagination.total || filteredActivities.length}
+            itemsPerPage={itemsPerPage}
+            onPageChange={(page) => {
+              setCurrentPage(page);
+            }}
+            onItemsPerPageChange={(newItemsPerPage) => {
+              setItemsPerPage(newItemsPerPage);
+              setCurrentPage(1);
+            }}
+            startIndex={pagination.startIndex || ((currentPage - 1) * itemsPerPage + 1)}
+            endIndex={pagination.endIndex || Math.min(currentPage * itemsPerPage, pagination.total || filteredActivities.length)}
+          />
         )}
       </div>
     </div>

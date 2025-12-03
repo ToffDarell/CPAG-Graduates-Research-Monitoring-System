@@ -1,11 +1,14 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { FaUpload, FaCalendar, FaBook, FaCheckCircle, FaClock, FaFileAlt, FaChartLine, FaSignOutAlt, FaBars, FaTimes as FaClose, FaTimesCircle, FaDownload, FaSearch, FaFilter, FaExclamationTriangle, FaChevronRight, FaInfoCircle, FaChevronDown, FaChevronUp, FaPaperclip, FaHistory, FaComments, FaEye } from "react-icons/fa";
+import { FaUpload, FaCalendar, FaBook, FaCheckCircle, FaClock, FaFileAlt, FaChartLine, FaSignOutAlt, FaBars, FaTimes as FaClose, FaTimesCircle, FaDownload, FaSearch, FaFilter, FaExclamationTriangle, FaChevronRight, FaInfoCircle, FaChevronDown, FaChevronUp, FaPaperclip, FaHistory, FaComments, FaEye, FaCog } from "react-icons/fa";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import axios from "axios";
+import { renderAsync } from 'docx-preview';
 import MySchedule from "../../components/MyScheduleComponent";
 import DriveUploader from "../../components/DriveUploader";
+import { showSuccess, showError, showWarning, showDangerConfirm } from "../../utils/sweetAlert";
+import Settings from "../Settings";
 
-const GraduateDashboard = ({setUser}) => {
+const GraduateDashboard = ({ setUser, user }) => {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   
@@ -29,6 +32,15 @@ const GraduateDashboard = ({setUser}) => {
   const [chapterData, setChapterData] = useState([]);
   const [chapterLoading, setChapterLoading] = useState(false);
   const [chapterError, setChapterError] = useState(null);
+  const [filters, setFilters] = useState({
+    chapter: '',
+    partName: '',
+    status: '',
+    startDate: '',
+    endDate: '',
+    search: ''
+  });
+  const [showSettings, setShowSettings] = useState(false);
 
 
   const completedChapters = Object.values(uploadProgress).filter(Boolean).length;
@@ -55,6 +67,9 @@ const GraduateDashboard = ({setUser}) => {
     }
   }, [selectedTab]); // setSearchParams is stable, doesn't need to be in deps
 
+  // Track if component has mounted to avoid double fetch
+  const filtersInitialized = useRef(false);
+
   // Fetch my research data
   useEffect(() => {
     fetchMyResearch();
@@ -62,7 +77,19 @@ const GraduateDashboard = ({setUser}) => {
     fetchAdviserFeedback();
     fetchProgressOverview();
     fetchChapterSubmissions();
+    filtersInitialized.current = true;
   }, []);
+
+  // Refetch submissions when filters change (with debounce for search)
+  useEffect(() => {
+    if (!filtersInitialized.current) return; // Skip on initial mount
+    
+    const timeoutId = setTimeout(() => {
+      fetchChapterSubmissions(filters);
+    }, filters.search ? 500 : 0); // Debounce search by 500ms
+    
+    return () => clearTimeout(timeoutId);
+  }, [filters]);
 
   const fetchMyResearch = async () => {
     try {
@@ -87,16 +114,39 @@ const GraduateDashboard = ({setUser}) => {
     }
   };
 
-  const fetchChapterSubmissions = async () => {
+  const fetchChapterSubmissions = async (filterParams = {}) => {
     setChapterLoading(true);
     setChapterError(null);
     try {
       const token = localStorage.getItem('token');
-      const res = await axios.get('/api/student/chapters', {
+      const params = new URLSearchParams();
+      
+      // Add filter parameters
+      if (filterParams.chapter) params.append('chapter', filterParams.chapter);
+      if (filterParams.partName) params.append('partName', filterParams.partName);
+      if (filterParams.status) params.append('status', filterParams.status);
+      if (filterParams.startDate) params.append('startDate', filterParams.startDate);
+      if (filterParams.endDate) params.append('endDate', filterParams.endDate);
+      if (filterParams.search) params.append('search', filterParams.search);
+      
+      const queryString = params.toString();
+      const url = `/api/student/chapters${queryString ? `?${queryString}` : ''}`;
+      
+      const res = await axios.get(url, {
         headers: { Authorization: `Bearer ${token}` }
       });
 
       const chapters = res.data?.chapters || [];
+      console.log('[fetchChapterSubmissions] Received chapters:', chapters.map(ch => ({
+        chapterType: ch.chapterType,
+        submissionCount: ch.submissions?.length || 0,
+        submissions: ch.submissions?.map(s => ({
+          id: s.id,
+          version: s.version,
+          partName: s.partName,
+          filename: s.filename
+        }))
+      })));
       setChapterData(chapters);
 
       const chapterProgress = chapters.reduce((acc, chapter) => {
@@ -173,7 +223,7 @@ const GraduateDashboard = ({setUser}) => {
     }
   };
 
-  const handleChapterUpload = async ({ chapterType, chapterTitle, file }) => {
+  const handleChapterUpload = async ({ chapterType, chapterTitle, partName, file }) => {
     if (!file || !chapterType) return;
     
     setUploadingChapter(chapterType);
@@ -216,7 +266,8 @@ const GraduateDashboard = ({setUser}) => {
             accessToken: file.accessToken,
             researchId: researchId,
             chapterType: chapterType,
-            chapterTitle: chapterTitle || ''
+            chapterTitle: chapterTitle || '',
+            partName: partName || null
           }, {
             headers: {
               Authorization: `Bearer ${token}`,
@@ -235,7 +286,8 @@ const GraduateDashboard = ({setUser}) => {
                 accessToken: file.accessToken,
                 researchId: researchId,
                 chapterType: chapterType,
-                chapterTitle: chapterTitle || ''
+                chapterTitle: chapterTitle || '',
+                partName: partName || null
               }, {
                 headers: {
                   Authorization: `Bearer ${token}`,
@@ -266,18 +318,21 @@ const GraduateDashboard = ({setUser}) => {
         });
 
         // Regular file upload
-        const formData = new FormData();
-        formData.append('file', file);
+      const formData = new FormData();
+      formData.append('file', file);
         formData.append('researchId', researchId);
         formData.append('chapterType', chapterType);
         formData.append('chapterTitle', chapterTitle || '');
+        if (partName) {
+          formData.append('partName', partName);
+        }
 
         const response = await axios.post('/api/student/chapter', formData, {
-          headers: {
-            Authorization: `Bearer ${token}`,
-            'Content-Type': 'multipart/form-data'
-          }
-        });
+        headers: { 
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'multipart/form-data'
+        }
+      });
         console.log('Regular upload response:', response.data);
       } else {
         console.error('Invalid file selection:', file);
@@ -301,7 +356,7 @@ const GraduateDashboard = ({setUser}) => {
       });
       
       const errorMessage = error.response?.data?.message || error.message || 'Error uploading chapter. Please try again.';
-      alert(errorMessage);
+      showError('Upload Error', errorMessage);
       throw error;
     } finally {
       setLoading(false);
@@ -325,6 +380,13 @@ const GraduateDashboard = ({setUser}) => {
     }
   };
 
+  const handleOpenSettings = () => {
+    setSidebarOpen(false);
+    setShowSettings(true);
+  };
+
+  const handleCloseSettings = () => setShowSettings(false);
+
   const tabs = [
     { id: "chapters", label: "Research Chapters", icon: <FaBook /> },
     { id: "compliance", label: "Compliance Forms", icon: <FaFileAlt /> },
@@ -339,13 +401,16 @@ const GraduateDashboard = ({setUser}) => {
       case "chapters":
         return (
           <ResearchChapters 
-            progress={uploadProgress}
+          progress={uploadProgress} 
             chapters={chapterData}
             chapterLoading={chapterLoading}
             chapterError={chapterError}
-            onChapterUpload={handleChapterUpload}
+          onChapterUpload={handleChapterUpload}
             uploading={loading}
-            uploadingChapter={uploadingChapter}
+          uploadingChapter={uploadingChapter}
+            filters={filters}
+            setFilters={setFilters}
+            onRefresh={() => fetchChapterSubmissions(filters)}
           />
         );
       case "compliance":
@@ -368,7 +433,7 @@ const GraduateDashboard = ({setUser}) => {
               total: totalChapters,
               research: myResearch,
             }}
-            feedback={adviserFeedback}
+          feedback={adviserFeedback}
           />
         );
       case "completed":
@@ -436,8 +501,21 @@ const GraduateDashboard = ({setUser}) => {
           </ul>
         </nav>
 
-        {/* Logout Button */}
-        <div className="p-4 border-t border-[#5a1519]">
+        {/* Settings & Logout Buttons */}
+        <div className="p-4 border-t border-[#5a1519] space-y-3">
+          <button
+            onClick={showSettings ? handleCloseSettings : handleOpenSettings}
+            className={`flex items-center space-x-3 px-4 py-3 rounded-lg transition-all duration-200 w-full ${
+              showSettings
+                ? "bg-white text-[#7C1D23]"
+                : "text-white bg-[#6e1b20] hover:bg-[#5a1519]"
+            }`}
+          >
+            <FaCog className="h-5 w-5" />
+            <span className="font-medium text-sm">
+              {showSettings ? "Close Settings" : "Settings"}
+            </span>
+          </button>
           <button
             onClick={handleLogout}
             className="flex items-center space-x-3 px-4 py-3 rounded-lg text-white hover:bg-red-600 transition-all duration-200 w-full"
@@ -518,7 +596,16 @@ const GraduateDashboard = ({setUser}) => {
         <div className="bg-white rounded-lg shadow-md overflow-hidden border border-gray-200">
           {/* Content Area */}
           <div className="p-6 bg-white">
-            {renderContent()}
+            {showSettings ? (
+              <Settings
+                user={user}
+                setUser={setUser}
+                embedded
+                onClose={handleCloseSettings}
+              />
+            ) : (
+              renderContent()
+            )}
           </div>
         </div>
       </div>
@@ -554,6 +641,62 @@ const StatCard = ({ title, value, icon, color }) => {
   );
 };
 
+// DOCX Viewer Component using docx-preview
+const DocxViewer = ({ blob, containerRef, onError }) => {
+  useEffect(() => {
+    if (blob && containerRef.current) {
+      // Clear previous content
+      containerRef.current.innerHTML = '';
+      
+      // Render DOCX using docx-preview
+      // blob should be ArrayBuffer (converted in onClick handler)
+      renderAsync(
+        blob, // document: ArrayBuffer | Blob | Uint8Array
+        containerRef.current, // bodyContainer: HTMLElement
+        null, // styleContainer: HTMLElement (null = use bodyContainer)
+        {
+          className: "docx",
+          inWrapper: true,
+          ignoreWidth: false,
+          ignoreHeight: false,
+          ignoreFonts: false,
+          breakPages: true,
+          ignoreLastRenderedPageBreak: true,
+          experimental: false,
+          trimXmlDeclaration: true,
+          useBase64URL: false,
+          renderChanges: false,
+          renderHeaders: true,
+          renderFooters: true,
+          renderFootnotes: true,
+          renderEndnotes: true,
+          renderComments: false,
+          renderAltChunks: true,
+          debug: false,
+        }
+      )
+      .then(() => {
+        console.log("DOCX: finished rendering");
+      })
+      .catch((error) => {
+        console.error("Error rendering DOCX:", error);
+        if (onError) {
+          onError(error);
+        }
+      });
+    }
+    
+    // Cleanup function
+    return () => {
+      if (containerRef.current) {
+        containerRef.current.innerHTML = '';
+      }
+    };
+  }, [blob, containerRef, onError]);
+  
+  return null; // This component doesn't render anything itself
+};
+
 // Research Chapters Component
 const ResearchChapters = ({
   progress,
@@ -563,6 +706,9 @@ const ResearchChapters = ({
   onChapterUpload,
   uploading,
   uploadingChapter,
+  filters = { chapter: '', partName: '', status: '', startDate: '', endDate: '', search: '' },
+  setFilters,
+  onRefresh,
 }) => {
   const defaultTitles = useMemo(
     () => ({
@@ -584,6 +730,14 @@ const ResearchChapters = ({
     chapter2: false,
     chapter3: false,
   });
+  const [showPartModal, setShowPartModal] = useState(false);
+  const [partName, setPartName] = useState("");
+  const [viewDocumentUrl, setViewDocumentUrl] = useState(null);
+  const [viewDocumentFilename, setViewDocumentFilename] = useState(null);
+  const [viewDocumentType, setViewDocumentType] = useState(null); // 'pdf', 'docx', 'doc', etc.
+  const [viewDocumentSubmissionId, setViewDocumentSubmissionId] = useState(null); // Store submission ID for download
+  const [docxBlob, setDocxBlob] = useState(null); // Store DOCX blob for docx-preview
+  const docxContainerRef = useRef(null); // Ref for DOCX container
   const fileInputRef = useRef(null);
 
   useEffect(() => {
@@ -591,10 +745,21 @@ const ResearchChapters = ({
     setFormSuccess(null);
   }, [selectedChapter]);
 
+  // Cleanup blob URLs when component unmounts or modal closes
+  useEffect(() => {
+    return () => {
+      if (viewDocumentUrl && viewDocumentUrl.startsWith('blob:')) {
+        window.URL.revokeObjectURL(viewDocumentUrl);
+      }
+    };
+  }, [viewDocumentUrl]);
+
   const resetForm = useCallback(() => {
     setSelectedFile(null);
     setChapterTitle("");
+    setPartName("");
     setDragActive(false);
+    setShowPartModal(false);
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
     }
@@ -685,11 +850,18 @@ const ResearchChapters = ({
       return;
     }
 
+    // If part modal is open, partName must be provided
+    if (showPartModal && !partName.trim()) {
+      setFormError("Please enter a part name or close the part modal.");
+      return;
+    }
+
     setFormError(null);
     try {
       await onChapterUpload({
         chapterType: selectedChapter,
         chapterTitle: chapterTitle.trim(),
+        partName: showPartModal && partName.trim() ? partName.trim() : null,
         file: selectedFile,
       });
       setFormSuccess("Chapter uploaded successfully and is now pending review.");
@@ -719,7 +891,7 @@ const ResearchChapters = ({
       window.URL.revokeObjectURL(url);
     } catch (error) {
       console.error("Error downloading file:", error);
-      alert("Failed to download the file. Please try again.");
+      showError("Download Error", "Failed to download the file. Please try again.");
     }
   }, []);
 
@@ -783,7 +955,7 @@ const ResearchChapters = ({
     <div className="space-y-6">
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
         <div>
-          <h2 className="text-xl font-bold text-gray-800">Research Chapters</h2>
+        <h2 className="text-xl font-bold text-gray-800">Research Chapters</h2>
           <p className="text-sm text-gray-500">
             Upload thesis chapters individually, track review status, and access reviewer feedback.
           </p>
@@ -806,6 +978,9 @@ const ResearchChapters = ({
           </h3>
           <p className="text-sm text-gray-500">
             Select the chapter, provide a title, and upload your latest draft. You can resubmit new versions at any time.
+          </p>
+          <p className="mt-1 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2">
+            Note: Please upload your chapter as a <span className="font-semibold">PDF file</span> so your adviser can add comments and feedback directly on the document.
           </p>
         </div>
         <div
@@ -845,6 +1020,44 @@ const ResearchChapters = ({
             </div>
           </div>
 
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => {
+                setShowPartModal(!showPartModal);
+                if (showPartModal) {
+                  setPartName("");
+                }
+              }}
+              className={`inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-md transition-colors ${
+                showPartModal
+                  ? "bg-[#7C1D23] text-white hover:bg-[#5a1519]"
+                  : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+              }`}
+            >
+              <FaPaperclip className="text-xs" />
+              {showPartModal ? "Cancel Specific Part" : "Add Specific Part"}
+            </button>
+            {showPartModal && (
+              <div className="flex-1">
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Part Name <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  value={partName}
+                  onChange={(e) => setPartName(e.target.value)}
+                  placeholder="e.g., Objectives, Background, Local Literature, Significance of the Study"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23]/20 focus:border-[#7C1D23]"
+                  maxLength={100}
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  Enter the specific part name for this chapter submission
+                </p>
+              </div>
+            )}
+              </div>
+
           <div
             className={`border-2 border-dashed rounded-lg p-6 transition-colors ${
               dragActive ? "border-[#7C1D23] bg-[#f9f1f2]" : "border-gray-300 bg-gray-50"
@@ -875,7 +1088,7 @@ const ResearchChapters = ({
                   skipBackendSave={true}
                   onFilePicked={handleGoogleDriveFileSelected}
                 />
-              </div>
+            </div>
               
               {selectedFile && (
                 <div className="mt-4 inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white border border-gray-200 text-sm text-gray-700">
@@ -894,11 +1107,11 @@ const ResearchChapters = ({
                 </div>
               )}
             </div>
-            <input
+                <input 
               ref={fileInputRef}
-              type="file"
+                  type="file" 
               className="hidden"
-              accept=".pdf,.doc,.docx"
+                  accept=".pdf,.doc,.docx"
               onChange={(event) => handleFileSelect(event.target.files?.[0])}
             />
           </div>
@@ -919,7 +1132,7 @@ const ResearchChapters = ({
 
           <div className="flex items-center justify-end gap-3 pt-2">
             {selectedFile && (
-              <button
+                <button 
                 type="button"
                 onClick={resetForm}
                 className="px-4 py-2 text-sm font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-md transition-colors"
@@ -944,7 +1157,7 @@ const ResearchChapters = ({
                   Upload Chapter
                 </>
               )}
-            </button>
+                </button>
           </div>
         </div>
       </div>
@@ -953,19 +1166,134 @@ const ResearchChapters = ({
         <div className="flex items-start gap-2 text-sm text-red-600 bg-red-50 border border-red-200 rounded-md p-3">
           <FaExclamationTriangle className="mt-0.5" />
           <span>{chapterError}</span>
-        </div>
-      )}
+              </div>
+            )}
 
       {chapterLoading ? (
         <div className="bg-white border border-gray-200 rounded-lg p-6 text-sm text-gray-500">
           Loading chapter submissions...
-        </div>
+          </div>
       ) : chapters.length === 0 ? (
         <div className="bg-white border border-gray-200 rounded-lg p-6 text-sm text-gray-500">
           No chapter submissions yet. Upload your first chapter to begin the review process.
         </div>
       ) : (
         <div className="space-y-4">
+          {/* Filters and Search */}
+          <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-5">
+            <div className="flex items-center gap-2 mb-4">
+              <FaFilter className="text-[#7C1D23]" />
+              <h3 className="text-lg font-semibold text-gray-800">Filters & Search</h3>
+            </div>
+            
+            <div className="space-y-4">
+              {/* Search Bar */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  <FaSearch className="inline mr-1" />
+                  Search
+                </label>
+                <input
+                  type="text"
+                  value={filters?.search || ''}
+                  onChange={(e) => setFilters && setFilters({ ...filters, search: e.target.value })}
+                  placeholder="Search by part name, filename, or chapter title..."
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23]/20 focus:border-[#7C1D23]"
+                />
+              </div>
+
+              {/* Filter Row */}
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Chapter
+                  </label>
+                  <select
+                    value={filters?.chapter || ''}
+                    onChange={(e) => setFilters && setFilters({ ...filters, chapter: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23]/20 focus:border-[#7C1D23]"
+                  >
+                    <option value="">All Chapters</option>
+                    <option value="chapter1">Chapter 1</option>
+                    <option value="chapter2">Chapter 2</option>
+                    <option value="chapter3">Chapter 3</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Part Name
+                  </label>
+                  <input
+                    type="text"
+                    value={filters?.partName || ''}
+                    onChange={(e) => setFilters && setFilters({ ...filters, partName: e.target.value })}
+                    placeholder="Filter by part name..."
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23]/20 focus:border-[#7C1D23]"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Status
+                  </label>
+                  <select
+                    value={filters?.status || ''}
+                    onChange={(e) => setFilters && setFilters({ ...filters, status: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23]/20 focus:border-[#7C1D23]"
+                  >
+                    <option value="">All Statuses</option>
+                    <option value="pending">Pending</option>
+                    <option value="approved">Approved</option>
+                    <option value="rejected">Rejected</option>
+                    <option value="revision">Revision</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Date Range
+                  </label>
+                  <div className="flex gap-2">
+                    <input
+                      type="date"
+                      value={filters?.startDate || ''}
+                      onChange={(e) => setFilters && setFilters({ ...filters, startDate: e.target.value })}
+                      className="flex-1 px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23]/20 focus:border-[#7C1D23] text-sm"
+                      placeholder="Start"
+                    />
+                    <input
+                      type="date"
+                      value={filters?.endDate || ''}
+                      onChange={(e) => setFilters && setFilters({ ...filters, endDate: e.target.value })}
+                      className="flex-1 px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23]/20 focus:border-[#7C1D23] text-sm"
+                      placeholder="End"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Clear Filters Button */}
+              {setFilters && (filters?.chapter || filters?.partName || filters?.status || filters?.startDate || filters?.endDate || filters?.search) && (
+                <div className="flex justify-end">
+                  <button
+                    type="button"
+                    onClick={() => setFilters({
+                      chapter: '',
+                      partName: '',
+                      status: '',
+                      startDate: '',
+                      endDate: '',
+                      search: ''
+                    })}
+                    className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-md transition-colors"
+                  >
+                    Clear All Filters
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
           {chapters.map((chapter) => {
             const latestSubmission = chapter.submissions?.[0];
             const submissionCount = chapter.submissions?.length || 0;
@@ -1021,172 +1349,357 @@ const ResearchChapters = ({
                       </p>
                     ) : (
                       <div className="space-y-4">
-                        {chapter.submissions.map((submission, index) => (
-                          <div
-                            key={submission.id}
-                            className="border border-gray-200 rounded-lg p-4 bg-white shadow-sm"
-                          >
-                            <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-3">
-                              <div>
-                                <div className="flex items-center gap-2">
-                                  <span className="text-sm font-semibold text-gray-800">
-                                    Version {submission.version}
-                                  </span>
-                                  {index === 0 && (
-                                    <span className="px-2 py-0.5 text-xs font-medium bg-blue-100 text-blue-700 rounded-full">
-                                      Latest
-                                    </span>
-                                  )}
-                                </div>
-                                <p className="text-xs text-gray-500 mt-1">
-                                  Uploaded {formatDateTime(submission.uploadedAt)}
-                                  {submission.uploadedBy?.name
-                                    ? ` • ${submission.uploadedBy.name}`
-                                    : ""}
-                                </p>
-                              </div>
-                              <span
-                                className={`self-start px-3 py-1 rounded-full text-xs font-medium ${
-                                  statusClasses[submission.status] ||
-                                  "bg-gray-100 text-gray-600"
-                                }`}
-                              >
-                                {statusLabels[submission.status] || submission.status}
-                              </span>
-                            </div>
+                        {(() => {
+                          console.log(`[ResearchChapters] ${chapter.chapterType} - Total submissions:`, chapter.submissions?.length || 0);
+                          console.log(`[ResearchChapters] ${chapter.chapterType} - Submissions:`, chapter.submissions?.map(s => ({
+                            id: s.id,
+                            version: s.version,
+                            partName: s.partName,
+                            filename: s.filename
+                          })));
+                          
+                          // Group submissions by partName (null for full chapter, string for specific part)
+                          const groupedSubmissions = new Map();
+                          
+                          chapter.submissions?.forEach((submission) => {
+                            // Normalize partName: null, undefined, or empty string all become 'full-chapter'
+                            const partKey = (submission.partName && submission.partName.trim()) 
+                              ? submission.partName.trim() 
+                              : 'full-chapter';
+                            if (!groupedSubmissions.has(partKey)) {
+                              groupedSubmissions.set(partKey, []);
+                            }
+                            groupedSubmissions.get(partKey).push(submission);
+                          });
+                          
+                          console.log(`[ResearchChapters] ${chapter.chapterType} - Grouped:`, Array.from(groupedSubmissions.entries()).map(([key, subs]) => ({
+                            partKey: key,
+                            count: subs.length,
+                            versions: subs.map(s => s.version || 1)
+                          })));
 
-                            <div className="mt-3 text-sm text-gray-600 space-y-2">
-                              <p>
-                                <strong>Title:</strong>{" "}
-                                {submission.chapterTitle || "Untitled"}
-                              </p>
-                              <p>
-                                <strong>File name:</strong>{" "}
-                                {submission.file?.filename}
-                              </p>
-                            </div>
+                          // Sort each group by version (highest first) or date (newest first)
+                          groupedSubmissions.forEach((subs) => {
+                            subs.sort((a, b) => {
+                              const versionA = a.version || 1;
+                              const versionB = b.version || 1;
+                              if (versionA !== versionB) {
+                                return versionB - versionA; // Higher version first
+                              }
+                              return new Date(b.uploadedAt) - new Date(a.uploadedAt); // Newer first
+                            });
+                          });
 
-                            <div className="mt-4 flex flex-wrap gap-2">
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  downloadFile(
-                                    submission.file.downloadUrl,
-                                    submission.file.filename
-                                  )
-                                }
-                                className="inline-flex items-center gap-2 px-3 py-2 text-sm font-medium text-white bg-[#7C1D23] rounded-md hover:bg-[#5a1519] transition-colors"
-                              >
-                                <FaDownload />
-                                Download Submission
-                              </button>
-                            </div>
-
-                            {submission.reviewComment && (
-                              <div className="mt-4 bg-green-50 border border-green-200 rounded-md p-3 text-sm text-green-800">
-                                <div className="flex items-center gap-2 font-semibold">
-                                  <FaInfoCircle />
-                                  Reviewer Comment
-                                </div>
-                                <p className="mt-2 whitespace-pre-line">
-                                  {submission.reviewComment}
-                                </p>
-                                <p className="text-xs text-green-600 mt-2">
-                                  {submission.reviewedBy?.name
-                                    ? `Reviewed by ${submission.reviewedBy.name}`
-                                    : "Reviewed"}
-                                  {submission.reviewedAt
-                                    ? ` • ${formatDateTime(submission.reviewedAt)}`
-                                    : ""}
-                                </p>
-                              </div>
-                            )}
-
-                            {submission.reviewFiles?.length > 0 && (
-                              <div className="mt-3">
-                                <div className="flex items-center gap-2 text-sm font-semibold text-gray-700">
-                                  <FaPaperclip />
-                                  Reviewer Attachments
-                                </div>
-                                <ul className="mt-2 space-y-2">
-                                  {submission.reviewFiles.map((file) => (
-                                    <li
-                                      key={file.id}
-                                      className="flex items-center justify-between text-sm text-gray-600 bg-gray-50 border border-gray-200 rounded-md px-3 py-2"
-                                    >
-                                      <span>{file.filename}</span>
-                                      <button
-                                        type="button"
-                                        className="inline-flex items-center gap-1 text-[#7C1D23] hover:text-[#5a1519]"
-                                        onClick={() =>
-                                          downloadFile(file.downloadUrl, file.filename)
-                                        }
-                                      >
-                                        <FaDownload className="text-xs" />
-                                        Download
-                                      </button>
-                                    </li>
-                                  ))}
-                                </ul>
-                              </div>
-                            )}
-
-                            {submission.feedback?.length > 0 && (
-                              <div className="mt-3">
-                                <div className="flex items-center gap-2 text-sm font-semibold text-gray-700">
-                                  <FaHistory />
-                                  Feedback History
-                                </div>
-                                <div className="mt-2 space-y-2">
-                                  {submission.feedback.map((feedback) => (
+                          // Convert to array and get only latest version per part
+                          const groups = Array.from(groupedSubmissions.entries());
+                          
+                          return (
+                            <>
+                              {groups.map(([partKey, submissions]) => {
+                                // Get only the latest version (first in sorted array)
+                                const latestSubmission = submissions[0];
+                                
+                                return (
+                                  <div key={partKey} className="space-y-3">
+                                    {groups.length > 1 && (
+                                      <div className="text-xs font-semibold text-gray-600 uppercase tracking-wide px-2">
+                                        {partKey === 'full-chapter' ? 'Full Chapter Submissions' : `${latestSubmission.partName} Submissions`}
+                                      </div>
+                                    )}
+                                    {(() => {
+                                      const submission = latestSubmission;
+                                      const index = 0; // Always the latest
+                                      
+                                      return (
                                     <div
-                                      key={feedback.id || feedback._id}
-                                      className="border border-gray-200 rounded-md px-3 py-2 bg-gray-50 text-sm text-gray-700"
+                                      key={submission.id}
+                                      className={`border rounded-lg p-4 shadow-sm ${
+                                        index === 0 
+                                          ? 'border-blue-300 bg-blue-50' 
+                                          : 'border-gray-200 bg-white'
+                                      }`}
                                     >
-                                      <div className="flex items-center justify-between">
-                                        <span>{feedback.message}</span>
-                                        <span className="text-xs text-gray-500">
-                                          {feedback.adviser?.name || "Adviser"} •{" "}
-                                          {formatDateTime(feedback.createdAt)}
+                                      <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-3">
+                                        <div>
+                                          <div className="flex items-center gap-2 flex-wrap">
+                                            <span className="text-sm font-semibold text-gray-800">
+                                              Version {submission.version || 1}
+                                            </span>
+                                            {submission.partName && (
+                                              <span className="px-2 py-0.5 text-xs font-medium bg-purple-100 text-purple-700 rounded-full">
+                                                {submission.partName}
+                                              </span>
+                                            )}
+                                            {!submission.partName && (
+                                              <span className="px-2 py-0.5 text-xs font-medium bg-gray-100 text-gray-600 rounded-full">
+                                                Full Chapter
+                                              </span>
+                                            )}
+                                            {index === 0 && (
+                                              <span className="px-2 py-0.5 text-xs font-medium bg-blue-100 text-blue-700 rounded-full">
+                                                Latest
+                                              </span>
+                                            )}
+                                          </div>
+                                          <p className="text-xs text-gray-500 mt-1">
+                                            Uploaded {formatDateTime(submission.uploadedAt)}
+                                            {submission.uploadedBy?.name
+                                              ? ` • ${submission.uploadedBy.name}`
+                                              : ""}
+                                          </p>
+                                        </div>
+                                        <span
+                                          className={`self-start px-3 py-1 rounded-full text-xs font-medium ${
+                                            statusClasses[submission.status] ||
+                                            "bg-gray-100 text-gray-600"
+                                          }`}
+                                        >
+                                          {statusLabels[submission.status] || submission.status}
                                         </span>
                                       </div>
-                                      <div className="flex items-center gap-2 mt-2">
-                                        {feedback.file || feedback.hasFile ? (
-                                          <button
-                                            type="button"
-                                            onClick={() => navigate(`/feedback/${feedback._id || feedback.id}/view`)}
-                                            className="inline-flex items-center gap-1 text-xs px-2 py-1 bg-[#7C1D23] text-white rounded hover:bg-[#5a1519] transition-colors font-medium"
-                                          >
-                                            <FaEye className="text-xs" />
-                                            View Document
-                                            {(feedback.commentCount > 0 || feedback.totalComments > 0) && (
-                                              <span className="ml-1">({feedback.commentCount || feedback.totalComments})</span>
-                                            )}
-                                          </button>
-                                        ) : null}
-                                        {feedback.hasFile && feedback.downloadUrl && (
-                                          <button
-                                            type="button"
-                                            className="inline-flex items-center gap-1 text-xs px-2 py-1 text-[#7C1D23] hover:text-[#5a1519] border border-[#7C1D23] rounded hover:bg-[#7C1D23] hover:text-white transition-colors"
-                                            onClick={() =>
-                                              downloadFile(
-                                                feedback.downloadUrl,
-                                                feedback.filename || "feedback"
-                                              )
-                                            }
-                                          >
-                                            <FaDownload className="text-xs" />
-                                            Download
-                                          </button>
+
+                                      <div className="mt-3 text-sm text-gray-600 space-y-2">
+                                        {submission.chapterTitle && (
+                                          <p>
+                                            <strong>Title:</strong>{" "}
+                                            {submission.chapterTitle}
+                                          </p>
+                                        )}
+                                        <p>
+                                          <strong>File name:</strong>{" "}
+                                          {submission.file?.filename || submission.filename}
+                                        </p>
+                                        {submission.feedback && (
+                                          <div className="mt-2 bg-yellow-50 border border-yellow-200 rounded-md p-3">
+                                            <p className="text-xs font-semibold text-yellow-800 mb-1">Adviser Feedback:</p>
+                                            <p className="text-sm text-yellow-900 whitespace-pre-line">{submission.feedback}</p>
+                                          </div>
                                         )}
                                       </div>
-                                    </div>
-                                  ))}
-                                </div>
-                              </div>
-                            )}
-                          </div>
-                        ))}
+
+                                      <div className="mt-4 flex flex-wrap gap-2">
+                                        {/* View Document Button */}
+                                        <button
+                                          type="button"
+                                          onClick={async () => {
+                                            try {
+                                              const token = localStorage.getItem('token');
+                                              const viewUrl = `/api/student/chapter-submissions/${submission.id}/view`;
+                                              
+                                              // Get file extension to determine file type
+                                              const filename = submission.filename || submission.file?.filename || 'document';
+                                              const fileExtension = filename.split('.').pop()?.toLowerCase();
+                                              
+                                              // Store submission ID and filename
+                                              setViewDocumentSubmissionId(submission.id);
+                                              setViewDocumentFilename(filename);
+                                              setViewDocumentType(fileExtension);
+                                              
+                                              if (fileExtension === 'docx' || fileExtension === 'doc') {
+                                                // For DOCX files, fetch as arraybuffer directly for better compatibility
+                                                const response = await axios.get(viewUrl, {
+                                                  headers: { Authorization: `Bearer ${token}` },
+                                                  responseType: 'arraybuffer'
+                                                });
+                                                
+                                                // Check if response is valid
+                                                if (!response.data || response.data.byteLength === 0) {
+                                                  throw new Error('File is empty or invalid');
+                                                }
+                                                
+                                                // Check content type
+                                                const contentType = response.headers['content-type'] || '';
+                                                if (contentType.includes('text/html') || contentType.includes('application/json')) {
+                                                  // Might be an error page
+                                                  const decoder = new TextDecoder();
+                                                  const text = decoder.decode(new Uint8Array(response.data));
+                                                  try {
+                                                    const errorData = JSON.parse(text);
+                                                    throw new Error(errorData.message || 'Server error');
+                                                  } catch {
+                                                    throw new Error('Received HTML instead of document file. Please check the file on the server.');
+                                                  }
+                                                }
+                                                
+                                                // Verify file signature
+                                                const uint8Array = new Uint8Array(response.data);
+                                                
+                                                // DOCX files are ZIP archives and start with PK (0x50 0x4B)
+                                                // Old .doc files use OLE format and start with different bytes (0xD0 0xCF 0x11 0xE0)
+                                                const isDocx = uint8Array.length >= 2 && uint8Array[0] === 0x50 && uint8Array[1] === 0x4B;
+                                                const isOldDoc = uint8Array.length >= 4 && 
+                                                  uint8Array[0] === 0xD0 && uint8Array[1] === 0xCF && 
+                                                  uint8Array[2] === 0x11 && uint8Array[3] === 0xE0;
+                                                
+                                                if (isDocx || isOldDoc) {
+                                                  // Valid DOCX or old DOC file
+                                                  setDocxBlob(response.data);
+                                                  setViewDocumentUrl(null); // Clear URL for DOCX
+                                                } else {
+                                                  // File doesn't match expected signatures, but try to render anyway
+                                                  // docx-preview might still be able to handle it
+                                                  console.warn('File signature check failed, but attempting to render anyway. First bytes:', 
+                                                    Array.from(uint8Array.slice(0, 8)).map(b => '0x' + b.toString(16).toUpperCase()).join(' '));
+                                                  setDocxBlob(response.data);
+                                                  setViewDocumentUrl(null);
+                                                }
+                                              } else {
+                                                // For PDF and other files, fetch as blob for iframe
+                                                const response = await axios.get(viewUrl, {
+                                                  headers: { Authorization: `Bearer ${token}` },
+                                                  responseType: 'blob'
+                                                });
+                                                
+                                                const contentType = response.headers['content-type'] || 'application/pdf';
+                                                const blob = new Blob([response.data], { type: contentType });
+                                                const url = window.URL.createObjectURL(blob);
+                                                setViewDocumentUrl(url);
+                                                setDocxBlob(null); // Clear DOCX blob
+                                              }
+                                            } catch (error) {
+                                              console.error('Error viewing document:', error);
+                                              showError('Error', error.response?.data?.message || 'Failed to open document. Please try again.');
+                                            }
+                                          }}
+                                          className="inline-flex items-center gap-2 px-3 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 transition-colors"
+                                        >
+                                          <FaEye />
+                                          View Document
+                                        </button>
+
+                                        {/* Download Button */}
+                                        <button
+                                          type="button"
+                                          onClick={async () => {
+                                            try {
+                                              const token = localStorage.getItem('token');
+                                              const downloadUrl = `/api/student/chapter-submissions/${submission.id}/download`;
+                                              
+                                              // For files stored in Google Drive, redirect to Drive link
+                                              if (submission.driveFileLink && (submission.storageLocation === 'google-drive' || submission.storageLocation === 'local+google-drive')) {
+                                                window.open(submission.driveFileLink, '_blank');
+                                              } else {
+                                                // For local files, download via axios to handle auth
+                                                const response = await axios.get(downloadUrl, {
+                                                  headers: { Authorization: `Bearer ${token}` },
+                                                  responseType: 'blob'
+                                                });
+                                                
+                                                const url = window.URL.createObjectURL(new Blob([response.data]));
+                                                const link = document.createElement('a');
+                                                link.href = url;
+                                                link.setAttribute('download', submission.filename || submission.file?.filename || 'document');
+                                                document.body.appendChild(link);
+                                                link.click();
+                                                link.remove();
+                                                window.URL.revokeObjectURL(url);
+                                              }
+                                            } catch (error) {
+                                              console.error('Error downloading document:', error);
+                                              showError('Error', error.response?.data?.message || 'Failed to download document. Please try again.');
+                                            }
+                                          }}
+                                          className="inline-flex items-center gap-2 px-3 py-2 text-sm font-medium text-white bg-green-600 rounded-md hover:bg-green-700 transition-colors"
+                                        >
+                                          <FaDownload />
+                                          Download
+                                        </button>
+
+                                        {/* Delete Button - Show for all non-approved submissions (including older versions) */}
+                                        {submission.status !== 'approved' ? (
+                                          <button
+                                            type="button"
+                                            onClick={async () => {
+                                              const versionText = submission.version ? `Version ${submission.version}` : 'this submission';
+                                              const partText = submission.partName ? ` (${submission.partName})` : '';
+                                              const result = await showDangerConfirm('Delete Submission', `Are you sure you want to delete ${versionText}${partText}? This action cannot be undone.`);
+                                              if (result.isConfirmed) {
+                                                try {
+                                                  const token = localStorage.getItem('token');
+                                                  await axios.delete(`/api/student/chapter-submissions/${submission.id}`, {
+                                                    headers: { Authorization: `Bearer ${token}` }
+                                                  });
+                                                  // Refresh submissions if callback provided, otherwise reload page
+                                                  if (onRefresh) {
+                                                    onRefresh();
+                                                  } else {
+                                                    window.location.reload();
+                                                  }
+                                                } catch (error) {
+                                                  showError('Error', error.response?.data?.message || 'Failed to delete submission');
+                                                }
+                                              }
+                                            }}
+                                            className="inline-flex items-center gap-2 px-3 py-2 text-sm font-medium text-white bg-red-600 rounded-md hover:bg-red-700 transition-colors"
+                                            title={submission.status === 'approved' ? 'Approved submissions cannot be deleted' : 'Delete this submission'}
+                                          >
+                                            <FaTimesCircle />
+                                            Delete
+                                          </button>
+                                        ) : (
+                                          <span className="text-xs text-gray-500 italic px-3 py-2">
+                                            Approved submissions cannot be deleted
+                                          </span>
+                                        )}
+                                      </div>
+
+                                      {submission.reviewComment && (
+                                        <div className="mt-4 bg-green-50 border border-green-200 rounded-md p-3 text-sm text-green-800">
+                                          <div className="flex items-center gap-2 font-semibold">
+                                            <FaInfoCircle />
+                                            Reviewer Comment
+                                          </div>
+                                          <p className="mt-2 whitespace-pre-line">
+                                            {submission.reviewComment}
+                                          </p>
+                                          <p className="text-xs text-green-600 mt-2">
+                                            {submission.reviewedBy?.name
+                                              ? `Reviewed by ${submission.reviewedBy.name}`
+                                              : "Reviewed"}
+                                            {submission.reviewedAt
+                                              ? ` • ${formatDateTime(submission.reviewedAt)}`
+                                              : ""}
+                                          </p>
+                                        </div>
+                                      )}
+
+                                      {submission.reviewFiles?.length > 0 && (
+                                        <div className="mt-3">
+                                          <div className="flex items-center gap-2 text-sm font-semibold text-gray-700">
+                                            <FaPaperclip />
+                                            Reviewer Attachments
+                                          </div>
+                                          <ul className="mt-2 space-y-2">
+                                            {submission.reviewFiles.map((file) => (
+                                              <li
+                                                key={file.id}
+                                                className="flex items-center justify-between text-sm text-gray-600 bg-gray-50 border border-gray-200 rounded-md px-3 py-2"
+                                              >
+                                                <span>{file.filename}</span>
+                                                <button
+                                                  type="button"
+                                                  className="inline-flex items-center gap-1 text-[#7C1D23] hover:text-[#5a1519]"
+                                                  onClick={() =>
+                                                    downloadFile(file.downloadUrl, file.filename)
+                                                  }
+                                                >
+                                                  <FaDownload className="text-xs" />
+                                                  Download
+                                                </button>
+                                              </li>
+                                            ))}
+                                          </ul>
+      </div>
+                                      )}
+    </div>
+  );
+                                    })()}
+                                  </div>
+                                );
+                              })}
+                            </>
+                          );
+                        })()}
                       </div>
                     )}
                   </div>
@@ -1194,6 +1707,98 @@ const ResearchChapters = ({
               </div>
             );
           })}
+        </div>
+      )}
+
+      {/* Document Viewer Modal */}
+      {(viewDocumentUrl || (viewDocumentFilename && (viewDocumentType === 'docx' || viewDocumentType === 'doc'))) && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-75" onClick={() => {
+          // Clean up blob URL if it's a local file
+          if (viewDocumentUrl && viewDocumentUrl.startsWith('blob:')) {
+            window.URL.revokeObjectURL(viewDocumentUrl);
+          }
+          setViewDocumentUrl(null);
+          setViewDocumentFilename(null);
+          setViewDocumentType(null);
+          setViewDocumentSubmissionId(null);
+          setDocxBlob(null);
+          if (docxContainerRef.current) {
+            docxContainerRef.current.innerHTML = '';
+          }
+        }}>
+          <div className="relative w-full h-full flex flex-col bg-white" onClick={(e) => e.stopPropagation()}>
+            {/* Modal Header */}
+            <div className="flex items-center justify-between p-4 border-b border-gray-200 bg-[#7C1D23] text-white">
+              <h3 className="text-lg font-semibold truncate flex-1 mr-4">
+                {viewDocumentFilename || 'Document Viewer'}
+              </h3>
+              <button
+                type="button"
+                onClick={() => {
+                  // Clean up blob URL if it's a local file
+                  if (viewDocumentUrl && viewDocumentUrl.startsWith('blob:')) {
+                    window.URL.revokeObjectURL(viewDocumentUrl);
+                  }
+                  setViewDocumentUrl(null);
+                  setViewDocumentFilename(null);
+                  setViewDocumentType(null);
+                  setViewDocumentSubmissionId(null);
+                  setDocxBlob(null);
+                  if (docxContainerRef.current) {
+                    docxContainerRef.current.innerHTML = '';
+                  }
+                }}
+                className="p-2 hover:bg-[#5a1519] rounded-md transition-colors"
+                aria-label="Close"
+              >
+                <FaClose className="text-xl" />
+              </button>
+            </div>
+
+            {/* Document Viewer */}
+            <div className="flex-1 overflow-hidden">
+              {viewDocumentType === 'docx' || viewDocumentType === 'doc' ? (
+                // For DOCX files, use docx-preview
+                <div className="w-full h-full overflow-auto bg-white">
+                  <div 
+                    ref={docxContainerRef}
+                    className="docx-wrapper p-4"
+                    style={{ minHeight: '100%' }}
+                  />
+                  {docxBlob && docxContainerRef.current && (
+                    <DocxViewer 
+                      blob={docxBlob} 
+                      containerRef={docxContainerRef}
+                      onError={(error) => {
+                        console.error('Error rendering DOCX:', error);
+                        if (docxContainerRef.current) {
+                          docxContainerRef.current.innerHTML = `
+                            <div class="p-8 text-center">
+                              <p class="text-red-600 mb-4">Error rendering document. Please try downloading it instead.</p>
+          <button 
+                                onclick="window.location.reload()" 
+                                class="px-6 py-3 bg-[#7C1D23] text-white rounded-md hover:bg-[#5a1519] transition-colors"
+                              >
+                                Download Document
+          </button>
+        </div>
+                          `;
+                        }
+                      }}
+                    />
+                  )}
+      </div>
+              ) : viewDocumentUrl ? (
+                // For PDF and other files, use iframe
+                <iframe
+                  src={viewDocumentUrl}
+                  className="w-full h-full border-0"
+                  title="Document Viewer"
+                  style={{ minHeight: '100%' }}
+                />
+              ) : null}
+      </div>
+          </div>
         </div>
       )}
     </div>
@@ -1580,12 +2185,12 @@ const ComplianceForms = ({ myResearch, onFormUpload }) => {
             Supported formats: PDF, DOC, DOCX (Max 10MB)
           </p>
           <div className="flex gap-3 justify-center">
-            <button
+        <button
               onClick={() => fileInputRef.current?.click()}
               className="px-4 py-2 bg-[#7C1D23] text-white rounded-md hover:bg-[#5a1519] transition-colors text-sm font-medium"
-            >
+        >
               Select File from Computer
-            </button>
+        </button>
             <DriveUploader
               defaultType="compliance"
               driveButtonLabel="Upload from Google Drive"
@@ -1594,7 +2199,7 @@ const ComplianceForms = ({ myResearch, onFormUpload }) => {
               skipBackendSave={true}
               onFilePicked={handleGoogleDriveFileSelected}
             />
-          </div>
+      </div>
           <input
             ref={fileInputRef}
             type="file"
@@ -1602,12 +2207,13 @@ const ComplianceForms = ({ myResearch, onFormUpload }) => {
             accept=".pdf,.doc,.docx"
             className="hidden"
           />
-        </div>
-      </div>
+            </div>
+          </div>
 
       {/* Upload Modal */}
       {showUploadModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
+        // Match global modal overlay style (Dean / Export PDF-Excel)
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4 py-6">
           <div className="bg-white rounded-lg shadow-lg max-w-md w-full p-6">
             <div className="flex justify-between items-center mb-4">
               <h3 className="text-lg font-semibold text-gray-800">Upload Compliance Form</h3>
@@ -1620,7 +2226,7 @@ const ComplianceForms = ({ myResearch, onFormUpload }) => {
               >
                 <FaClose className="h-6 w-6" />
               </button>
-            </div>
+        </div>
 
             {selectedFile && (
               <div className="mb-4 p-3 bg-gray-50 rounded-lg">
@@ -1632,7 +2238,7 @@ const ComplianceForms = ({ myResearch, onFormUpload }) => {
                 {selectedFile.isDriveFile && (
                   <p className="text-xs text-blue-600 mt-1">📁 From Google Drive</p>
                 )}
-              </div>
+            </div>
             )}
 
             <div className="mb-4">
@@ -1650,7 +2256,7 @@ const ComplianceForms = ({ myResearch, onFormUpload }) => {
                 <option value="authorization">Authorization</option>
                 <option value="other">Other</option>
               </select>
-            </div>
+      </div>
 
             <div className="flex justify-end space-x-3">
               <button
@@ -1669,7 +2275,7 @@ const ComplianceForms = ({ myResearch, onFormUpload }) => {
               >
                 {uploading ? 'Uploading...' : 'Upload Compliance Form'}
               </button>
-            </div>
+              </div>
           </div>
         </div>
       )}
@@ -1686,7 +2292,7 @@ const ComplianceForms = ({ myResearch, onFormUpload }) => {
             <p className="text-gray-500 text-sm">No compliance forms uploaded yet.</p>
           </div>
         ) : (
-          <div className="space-y-4">
+      <div className="space-y-4">
             {Object.values(groupedForms).map((form) => (
               <div key={form._id} className="border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow">
                 <div className="flex items-start justify-between">
@@ -1695,7 +2301,7 @@ const ComplianceForms = ({ myResearch, onFormUpload }) => {
                       <h4 className="font-semibold text-gray-800">{getFormTypeLabel(form.formType)}</h4>
                       <span className={`px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(form.status)}`}>
                         {form.status.charAt(0).toUpperCase() + form.status.slice(1)}
-                      </span>
+                    </span>
                       {form.version > 1 && (
                         <span className="px-2 py-1 bg-blue-100 text-blue-700 rounded-full text-xs font-medium">
                           Version {form.version}
@@ -1715,7 +2321,7 @@ const ComplianceForms = ({ myResearch, onFormUpload }) => {
                       <div className="mt-2 p-2 bg-gray-50 rounded text-sm text-gray-700">
                         <p className="font-medium">Review Comments:</p>
                         <p>{form.reviewComments}</p>
-                      </div>
+                  </div>
                     )}
                   </div>
                   <div className="flex flex-col gap-2 ml-4">
@@ -1739,8 +2345,8 @@ const ComplianceForms = ({ myResearch, onFormUpload }) => {
                         History
                       </button>
                     )}
-                  </div>
                 </div>
+              </div>
               </div>
             ))}
           </div>
@@ -1772,7 +2378,7 @@ const ComplianceForms = ({ myResearch, onFormUpload }) => {
               ].sort((a, b) => b.version - a.version);
               
               return allVersions.length > 0 ? (
-                <div className="space-y-4">
+              <div className="space-y-4">
                   {allVersions.map((version) => (
                     <div key={version._id} className="border border-gray-200 rounded-lg p-4">
                       <div className="flex items-center justify-between mb-2">
@@ -1785,23 +2391,23 @@ const ComplianceForms = ({ myResearch, onFormUpload }) => {
                             <span className="px-2 py-1 bg-green-100 text-green-700 rounded-full text-xs font-medium">
                               Current
                             </span>
-                          )}
-                        </div>
+                      )}
+                    </div>
                         <div className="flex gap-2">
-                          <button
+                  <button
                             onClick={() => handleView(version._id)}
                             className="px-3 py-1 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors text-xs font-medium"
-                          >
+                  >
                             View
-                          </button>
-                          <button
+                  </button>
+                  <button
                             onClick={() => handleDownload(version._id)}
                             className="px-3 py-1 bg-gray-600 text-white rounded-md hover:bg-gray-700 transition-colors text-xs font-medium"
-                          >
+                  >
                             Download
-                          </button>
-                        </div>
-                      </div>
+                  </button>
+                </div>
+              </div>
                       <p className="text-sm text-gray-600 mb-1">{version.filename}</p>
                       <p className="text-xs text-gray-500">
                         Uploaded: {new Date(version.uploadedAt).toLocaleString()}
@@ -1921,12 +2527,12 @@ const ProgressTracking = ({ data, loading, error, onRefresh, fallback, feedback 
       </div>
     );
   }
-
+  
   return (
     <div className="space-y-5">
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
         <div>
-          <h2 className="text-xl font-bold text-gray-800">Progress Tracking</h2>
+      <h2 className="text-xl font-bold text-gray-800">Progress Tracking</h2>
           {researchInfo && (
             <p className="text-sm text-gray-500">
               {researchInfo.title}
@@ -1951,12 +2557,12 @@ const ProgressTracking = ({ data, loading, error, onRefresh, fallback, feedback 
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
         <div className="space-y-5 xl:col-span-2">
-          <div className="bg-white rounded-lg border border-gray-200 p-5">
+      <div className="bg-white rounded-lg border border-gray-200 p-5">
             <div className="flex items-center justify-between mb-4">
               <div>
                 <p className="text-xs uppercase tracking-wide text-gray-400">Overall Completion</p>
                 <p className="text-3xl font-bold text-[#7C1D23]">{Math.min(100, Math.max(0, percentage))}%</p>
-              </div>
+          </div>
               <div className="text-right">
                 <p className="text-xs uppercase tracking-wide text-gray-400">Milestones</p>
                 <p className="text-lg font-semibold text-gray-700">
@@ -1965,22 +2571,22 @@ const ProgressTracking = ({ data, loading, error, onRefresh, fallback, feedback 
               </div>
             </div>
             <div className="w-full bg-gray-200 rounded-full h-3 mb-4">
-              <div
-                className="bg-[#7C1D23] h-3 rounded-full transition-all duration-500"
+            <div
+              className="bg-[#7C1D23] h-3 rounded-full transition-all duration-500"
                 style={{ width: `${Math.min(100, Math.max(0, percentage))}%` }}
-              ></div>
-            </div>
+            ></div>
+          </div>
             <p className="text-xs text-gray-500">
               Keep completing milestones to reach 100%. Automatic updates occur when submissions are approved or defenses are completed.
             </p>
-          </div>
+        </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
             <div className="bg-white rounded-lg border border-gray-200 p-5">
               <div className="flex items-center gap-2 mb-3">
                 <FaClock className="text-[#7C1D23]" />
                 <h3 className="text-sm font-semibold text-gray-800">Upcoming & Overdue Deadlines</h3>
-              </div>
+          </div>
               {upcomingDeadlines.length === 0 ? (
                 <p className="text-sm text-gray-500">No urgent deadlines in the next 7 days.</p>
               ) : (
@@ -2007,17 +2613,17 @@ const ProgressTracking = ({ data, loading, error, onRefresh, fallback, feedback 
                             ? `Overdue by ${Math.abs(deadline.daysUntilDue)} day(s)`
                             : `Due in ${deadline.daysUntilDue} day(s)`}
                         </span>
-                      </div>
+          </div>
                       <p className="text-xs text-gray-500 mt-1">
                         Due date: {formatDate(deadline.dueDate)}
                       </p>
-                    </div>
+          </div>
                   ))}
-                </div>
+        </div>
               )}
-            </div>
+      </div>
 
-            <div className="bg-white rounded-lg border border-gray-200 p-5">
+        <div className="bg-white rounded-lg border border-gray-200 p-5">
               <div className="flex items-center gap-2 mb-3">
                 <FaInfoCircle className="text-[#7C1D23]" />
                 <h3 className="text-sm font-semibold text-gray-800">Deadline Notifications</h3>
@@ -2058,7 +2664,7 @@ const ProgressTracking = ({ data, loading, error, onRefresh, fallback, feedback 
                 Milestone details are not available yet. Progress will appear as soon as milestones are defined.
               </p>
             ) : (
-              <div className="space-y-3">
+          <div className="space-y-3">
                 {milestones.map((milestone) => {
                   const isActive = selectedMilestone?.id === milestone.id;
                   return (
@@ -2077,7 +2683,7 @@ const ProgressTracking = ({ data, loading, error, onRefresh, fallback, feedback 
                             className={`px-2 py-1 text-xs font-semibold rounded-full ${statusStyles[milestone.status]}`}
                           >
                             {statusLabels[milestone.status]}
-                          </span>
+              </span>
                           <div>
                             <p className="text-sm font-semibold text-gray-800">
                               {milestone.title}
@@ -2087,7 +2693,7 @@ const ProgressTracking = ({ data, loading, error, onRefresh, fallback, feedback 
                                 Due {formatDate(milestone.dueDate)}
                               </p>
                             )}
-                          </div>
+            </div>
                         </div>
                         <FaChevronRight
                           className={`text-sm transition-transform ${
@@ -2127,14 +2733,14 @@ const ProgressTracking = ({ data, loading, error, onRefresh, fallback, feedback 
                     <span className="text-xs text-gray-500">Status</span>
                     <span className={`px-2 py-1 text-xs font-semibold rounded-full ${statusStyles[selectedMilestone.status]}`}>
                       {statusLabels[selectedMilestone.status]}
-                    </span>
-                  </div>
+              </span>
+            </div>
                   <div className="flex items-center justify-between">
                     <span className="text-xs text-gray-500">Due Date</span>
                     <span className="text-xs text-gray-700">
                       {formatDate(selectedMilestone.dueDate)}
                     </span>
-                  </div>
+          </div>
                   <div className="flex items-center justify-between">
                     <span className="text-xs text-gray-500">Completed</span>
                     <span className="text-xs text-gray-700">
@@ -2142,7 +2748,7 @@ const ProgressTracking = ({ data, loading, error, onRefresh, fallback, feedback 
                         ? formatDate(selectedMilestone.completedAt)
                         : "Not yet completed"}
                     </span>
-                  </div>
+        </div>
                 </div>
 
                 {selectedMilestone.submissionLink && (
@@ -2157,13 +2763,13 @@ const ProgressTracking = ({ data, loading, error, onRefresh, fallback, feedback 
             )}
           </div>
 
-          <div className="bg-white rounded-lg border border-gray-200 p-5">
+      <div className="bg-white rounded-lg border border-gray-200 p-5">
             <h3 className="text-sm font-semibold text-gray-800 mb-3">Recent Adviser Feedback</h3>
             <div className="space-y-3 max-h-80 overflow-y-auto">
-              {feedback && feedback.length > 0 ? (
+          {feedback && feedback.length > 0 ? (
                 feedback.slice(0, 5).map((item, index) => (
-                  <div
-                    key={index}
+              <div 
+                key={index} 
                     className={`p-3 rounded-lg border-l-4 ${
                       item.type === "approval"
                         ? "bg-green-50 border-green-500"
@@ -2176,19 +2782,19 @@ const ProgressTracking = ({ data, loading, error, onRefresh, fallback, feedback 
                   >
                     <div className="flex items-center justify-between mb-1">
                       <div className="flex items-center gap-2">
-                        <span className="text-sm font-semibold text-gray-800">
+                    <span className="text-sm font-semibold text-gray-800">
                           {item.adviser?.name || "Adviser"}
-                        </span>
+                    </span>
                         {item.commentCount > 0 && (
                           <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-yellow-100 text-yellow-800 rounded-full text-xs font-medium">
                             <FaComments className="text-xs" />
                             {item.commentCount} {item.commentCount === 1 ? 'comment' : 'comments'}
                           </span>
                         )}
-                      </div>
+                  </div>
                       <span className="text-xs text-gray-400">
                         {new Date(item.createdAt).toLocaleDateString()}
-                      </span>
+                    </span>
                     </div>
                     <p className="text-xs text-gray-500 capitalize mb-1">{item.type}</p>
                     <p className="text-sm text-gray-700 mb-2">{item.message}</p>
@@ -2265,7 +2871,7 @@ const CompletedThesis = () => {
       setShowDetails(true);
     } catch (error) {
       console.error('Error fetching thesis details:', error);
-      alert('Failed to fetch thesis details');
+      showError('Error', 'Failed to fetch thesis details');
     }
   };
 
@@ -2573,22 +3179,22 @@ const CompletedThesis = () => {
                         </p>
                       )}
                       {feedback.status && (
-                        <p className="text-xs text-gray-500 mt-1">
+                    <p className="text-xs text-gray-500 mt-1">
                           Status: {feedback.status}
-                        </p>
+                    </p>
                       )}
-                    </div>
+                  </div>
                   ))}
                 </div>
-              </div>
-            )}
+                  </div>
+                )}
 
             {(!selectedThesis.panelFeedbackData?.feedback || selectedThesis.panelFeedbackData.feedback.length === 0) && (
               <div className="mb-6">
                 <h4 className="text-md font-semibold text-gray-800 mb-4">Panel Feedback</h4>
                 <div className="bg-gray-50 rounded-lg p-4 text-center">
                   <p className="text-sm text-gray-500">No panel feedback available.</p>
-                </div>
+              </div>
               </div>
             )}
 
@@ -2617,6 +3223,12 @@ const DocumentsView = () => {
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("all");
+  const [viewerOpen, setViewerOpen] = useState(false);
+  const [viewerTitle, setViewerTitle] = useState("");
+  const [viewerType, setViewerType] = useState(null); // 'docx' | 'pdf' | 'other'
+  const [viewerUrl, setViewerUrl] = useState(null);
+  const [docViewerBlob, setDocViewerBlob] = useState(null);
+  const docViewerContainerRef = useRef(null);
 
   useEffect(() => {
     fetchDocuments();
@@ -2670,24 +3282,58 @@ const DocumentsView = () => {
       window.URL.revokeObjectURL(url);
     } catch (error) {
       console.error('Error downloading document:', error);
-      alert('Error downloading document: ' + (error.response?.data?.message || error.message));
+      showError('Error', 'Error downloading document: ' + (error.response?.data?.message || error.message));
     }
   };
 
   const handleView = async (doc) => {
     try {
       const token = localStorage.getItem('token');
-      const response = await axios.get(`/api/student/documents/${doc._id}`, {
-        headers: { Authorization: `Bearer ${token}` },
-        responseType: 'blob'
-      });
-      
-      const blob = new Blob([response.data], { type: doc.mimeType });
-      const url = URL.createObjectURL(blob);
-      window.open(url, '_blank');
+      const filename = doc.filename || '';
+      const extension = filename.split('.').pop()?.toLowerCase();
+      const mimeType = doc.mimeType || '';
+
+      setViewerTitle(doc.title || filename || 'Document');
+
+      // Use DOCX preview for Word documents
+      if (
+        extension === 'docx' ||
+        extension === 'doc' ||
+        mimeType.includes('wordprocessingml') ||
+        mimeType.includes('msword')
+      ) {
+        const response = await axios.get(`/api/student/documents/${doc._id}`, {
+          headers: { Authorization: `Bearer ${token}` },
+          responseType: 'arraybuffer'
+        });
+
+        if (!response.data || response.data.byteLength === 0) {
+          throw new Error('File is empty or invalid');
+        }
+
+        setDocViewerBlob(response.data);
+        setViewerType('docx');
+        setViewerUrl(null);
+        setViewerOpen(true);
+      } else {
+        // For PDF and other types, show in an embedded viewer
+        const response = await axios.get(`/api/student/documents/${doc._id}`, {
+          headers: { Authorization: `Bearer ${token}` },
+          responseType: 'blob'
+        });
+
+        const contentType = response.headers['content-type'] || mimeType || 'application/pdf';
+        const blob = new Blob([response.data], { type: contentType });
+        const url = URL.createObjectURL(blob);
+
+        setViewerType('pdf');
+        setViewerUrl(url);
+        setDocViewerBlob(null);
+        setViewerOpen(true);
+      }
     } catch (error) {
       console.error('Error viewing document:', error);
-      alert('Error viewing document');
+      showError('Error', 'Error viewing document: ' + (error.response?.data?.message || error.message));
     }
   };
 
@@ -2726,6 +3372,58 @@ const DocumentsView = () => {
 
   return (
     <div className="space-y-5">
+      {/* Document Viewer Modal */}
+      {viewerOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4 py-6">
+          <div className="bg-white rounded-lg shadow-lg max-w-5xl w-full max-h-[90vh] flex flex-col">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200">
+              <h3 className="text-sm font-semibold text-gray-800 truncate">
+                {viewerTitle}
+              </h3>
+              <button
+                type="button"
+                onClick={() => {
+                  setViewerOpen(false);
+                  if (viewerUrl) {
+                    URL.revokeObjectURL(viewerUrl);
+                  }
+                  setViewerUrl(null);
+                  setDocViewerBlob(null);
+                  setViewerType(null);
+                }}
+                className="text-gray-500 hover:text-gray-700"
+              >
+                <FaClose className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="flex-1 bg-gray-50">
+              {viewerType === 'docx' && (
+                <div className="w-full h-[calc(90vh-3rem)] overflow-auto">
+                  <div
+                    ref={docViewerContainerRef}
+                    className="docx-viewer p-4"
+                  />
+                  <DocxViewer
+                    blob={docViewerBlob}
+                    containerRef={docViewerContainerRef}
+                    onError={(err) => {
+                      console.error('DOCX viewer error:', err);
+                      showError('Error', 'Failed to render DOCX document.');
+                    }}
+                  />
+                </div>
+              )}
+              {viewerType !== 'docx' && viewerUrl && (
+                <iframe
+                  src={viewerUrl}
+                  title="Document preview"
+                  className="w-full h-[calc(90vh-3rem)] border-0"
+                />
+              )}
+            </div>
+          </div>
+        </div>
+      )}
       <div className="flex justify-between items-center">
         <h2 className="text-xl font-bold text-gray-800">Available Documents</h2>
         <span className="text-sm text-gray-600">{filteredDocuments.length} document(s)</span>
@@ -2778,7 +3476,7 @@ const DocumentsView = () => {
                       <span className={`px-2 py-1 rounded-full text-xs font-medium ${getCategoryColor(doc.category)}`}>
                         {doc.category}
                       </span>
-                    </div>
+            </div>
                     {doc.description && (
                       <p className="text-sm text-gray-600 mb-2">{doc.description}</p>
                     )}
@@ -2788,7 +3486,7 @@ const DocumentsView = () => {
                       <span>{new Date(doc.createdAt).toLocaleDateString()}</span>
                       <span>•</span>
                       <span>{formatFileSize(doc.fileSize)}</span>
-                    </div>
+        </div>
                   </div>
                   <div className="flex items-center space-x-2 ml-4">
                     <button
@@ -2796,7 +3494,7 @@ const DocumentsView = () => {
                       className="p-2 text-gray-600 hover:text-blue-600 transition-colors"
                       title="View Document"
                     >
-                      <FaFileAlt className="h-4 w-4" />
+                      <FaEye className="h-4 w-4" />
                     </button>
                     <button
                       onClick={() => handleDownload(doc)}
