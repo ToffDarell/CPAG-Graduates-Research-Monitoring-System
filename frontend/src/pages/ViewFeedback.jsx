@@ -1,10 +1,11 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { FaTimes as FaClose, FaComments, FaArrowLeft } from "react-icons/fa";
 import axios from "axios";
 import { Document, Page, pdfjs } from 'react-pdf';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
+import { renderAsync } from "docx-preview";
 import ErrorBoundary from '../components/ErrorBoundary';
 
 // Configure PDF.js worker
@@ -25,6 +26,9 @@ const ViewFeedback = ({ setUser }) => {
   const [loadingComments, setLoadingComments] = useState(false);
   const [error, setError] = useState(null);
   const [pdfLoaded, setPdfLoaded] = useState(false);
+  const [documentBlob, setDocumentBlob] = useState(null);
+  const [docxError, setDocxError] = useState(null);
+  const docxContainerRef = useRef(null);
 
   useEffect(() => {
     fetchFeedbackData();
@@ -87,6 +91,7 @@ const ViewFeedback = ({ setUser }) => {
           const mimeType = feedbackData.file?.mimetype || fileRes.headers['content-type'] || 'application/pdf';
           const blob = new Blob([fileRes.data], { type: mimeType });
           const blobUrl = URL.createObjectURL(blob);
+          setDocumentBlob(blob);
           setDocumentBlobUrl(blobUrl);
           setError(null); // Clear any previous errors
           setPdfLoaded(false); // Reset PDF loaded state when new document is set
@@ -119,10 +124,14 @@ const ViewFeedback = ({ setUser }) => {
           
           // Don't throw - allow page to load even if file fails
           setError(`Document not available: ${errorMsg}`);
+          setDocumentBlob(null);
+          setDocumentBlobUrl(null);
         }
       } else {
         console.log('[VIEW FEEDBACK] No file attached to feedback');
         setError('No file attached to this feedback');
+        setDocumentBlob(null);
+        setDocumentBlobUrl(null);
       }
 
       // Fetch comments (even if file failed)
@@ -156,6 +165,45 @@ const ViewFeedback = ({ setUser }) => {
     }
   };
 
+  useEffect(() => {
+    if (
+      !documentBlob ||
+      !feedback?.file?.mimetype ||
+      feedback.file.mimetype !== 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+      !docxContainerRef.current
+    ) {
+      if (docxContainerRef.current) {
+        docxContainerRef.current.innerHTML = '';
+      }
+      return;
+    }
+
+    docxContainerRef.current.innerHTML = '';
+    setDocxError(null);
+
+    renderAsync(documentBlob, docxContainerRef.current, null, {
+      className: "docx",
+      inWrapper: true,
+      ignoreWidth: false,
+      ignoreHeight: false,
+      breakPages: true,
+      renderComments: false,
+    })
+      .then(() => {
+        console.log('[VIEW FEEDBACK] DOCX rendered successfully');
+      })
+      .catch((docError) => {
+        console.error('[VIEW FEEDBACK] Error rendering DOCX:', docError);
+        setDocxError('Failed to render this document. Please download it instead.');
+      });
+
+    return () => {
+      if (docxContainerRef.current) {
+        docxContainerRef.current.innerHTML = '';
+      }
+    };
+  }, [documentBlob, feedback?.file?.mimetype]);
+
   const onDocumentLoadSuccess = ({ numPages }) => {
     console.log('[VIEW FEEDBACK] PDF loaded successfully:', { numPages });
     setNumPages(numPages);
@@ -175,6 +223,9 @@ const ViewFeedback = ({ setUser }) => {
   const handleGoBack = () => {
     navigate('/dashboard/graduate?tab=progress');
   };
+
+  const hasGeneralFeedback = Boolean(feedback?.message && feedback.message.trim().length > 0);
+  const totalCommentCount = comments.length + (hasGeneralFeedback ? 1 : 0);
 
   if (loading) {
     return (
@@ -280,7 +331,7 @@ const ViewFeedback = ({ setUser }) => {
                 </button>
               </div>
             </div>
-          ) : feedback.file?.mimetype === 'application/pdf' ? (
+        ) : feedback.file?.mimetype === 'application/pdf' ? (
             <div className="flex flex-col items-center">
               {/* PDF Controls */}
               <div className="mb-4 flex items-center space-x-4 bg-white p-3 rounded-lg shadow sticky top-4 z-20">
@@ -376,7 +427,51 @@ const ViewFeedback = ({ setUser }) => {
                 </div>
               )}
             </div>
-          ) : feedback.file?.mimetype?.startsWith('image/') ? (
+        ) : feedback.file?.mimetype === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ? (
+          <div className="flex flex-col h-full">
+            <div className="mb-4 flex items-center justify-between bg-white p-3 rounded-lg shadow">
+              <div>
+                <p className="text-sm font-semibold text-gray-800">DOCX Preview</p>
+                <p className="text-xs text-gray-500">Rendered for quick viewing. Download for the original file.</p>
+              </div>
+              {documentBlobUrl && (
+                <button
+                  onClick={() => {
+                    const link = document.createElement('a');
+                    link.href = documentBlobUrl;
+                    link.download = feedback.file.filename;
+                    link.click();
+                  }}
+                  className="px-4 py-2 bg-[#7C1D23] text-white rounded-md hover:bg-[#5a1519] text-sm font-medium"
+                >
+                  Download
+                </button>
+              )}
+            </div>
+            <div className="flex-1 overflow-auto bg-white rounded-lg shadow border border-gray-200">
+              {docxError ? (
+                <div className="h-full flex flex-col items-center justify-center text-center p-8">
+                  <p className="text-sm text-red-600 mb-2">{docxError}</p>
+                  {documentBlobUrl && (
+                    <button
+                      onClick={() => {
+                        const link = document.createElement('a');
+                        link.href = documentBlobUrl;
+                        link.download = feedback.file.filename;
+                        link.click();
+                      }}
+                      className="px-4 py-2 bg-[#7C1D23] text-white rounded-md hover:bg-[#5a1519] text-sm"
+                    >
+                      Download Document
+                    </button>
+                  )}
+                </div>
+              ) : (
+                <div ref={docxContainerRef} className="docx-viewer p-6 text-sm text-gray-800 leading-relaxed"></div>
+              )}
+            </div>
+          </div>
+        ) : feedback.file?.mimetype?.startsWith('image/') ? (
             <div className="flex items-center justify-center h-full">
               {documentBlobUrl && (
                 <img 
@@ -409,7 +504,7 @@ const ViewFeedback = ({ setUser }) => {
         {/* Comments Panel (Right) - Read-only for students */}
         <div className="w-96 border-l border-gray-200 bg-white flex flex-col">
           <div className="p-4 border-b border-gray-200 bg-gray-50 sticky top-0 z-20">
-            <h4 className="font-semibold text-gray-800 text-lg">Comments ({comments.length})</h4>
+            <h4 className="font-semibold text-gray-800 text-lg">Comments ({totalCommentCount})</h4>
             <p className="text-xs text-gray-500 mt-1">Read-only view of faculty comments</p>
           </div>
           
@@ -419,63 +514,88 @@ const ViewFeedback = ({ setUser }) => {
                 <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-[#7C1D23]"></div>
                 <p className="mt-2 text-gray-500 text-sm">Loading comments...</p>
               </div>
-            ) : comments.length === 0 ? (
+            ) : !hasGeneralFeedback && comments.length === 0 ? (
               <div className="text-center py-12">
                 <FaComments className="mx-auto h-16 w-16 text-gray-300 mb-4" />
                 <p className="text-gray-500 text-sm">No comments yet.</p>
                 <p className="text-xs text-gray-400 mt-2">Faculty comments will appear here</p>
               </div>
             ) : (
-              comments.map((comment) => (
-                <div
-                  key={comment._id}
-                  className={`p-4 rounded-lg border-l-4 shadow-sm ${
-                    comment.resolved
-                      ? 'bg-gray-50 border-gray-300'
-                      : 'bg-yellow-50 border-yellow-400'
-                  }`}
-                >
-                  <div className="flex items-start justify-between mb-2">
-                    <div className="flex-1">
-                      <span className="font-semibold text-sm text-gray-800">
-                        {comment.createdBy?.name || 'Faculty'}
-                      </span>
-                      {comment.position?.pageNumber && (
-                        <span className="text-xs text-gray-500 ml-2">
-                          • Page {comment.position.pageNumber}
+              <>
+                {/* General feedback message from upload form */}
+                {hasGeneralFeedback && (
+                  <div className="p-4 rounded-lg border-l-4 border-[#7C1D23] bg-[#fdf5f5] shadow-sm">
+                    <div className="flex items-start justify-between mb-2">
+                      <div className="flex-1">
+                        <span className="font-semibold text-sm text-gray-800">
+                          {feedback.adviser?.name || 'Faculty Adviser'}
                         </span>
-                      )}
+                        <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded-full bg-[#7C1D23]/10 text-[#7C1D23] text-[11px] font-semibold uppercase tracking-wide">
+                          General Feedback
+                        </span>
+                      </div>
+                      <span className="text-xs text-gray-500">
+                        {new Date(feedback.createdAt).toLocaleDateString()}
+                      </span>
                     </div>
-                    <span className="text-xs text-gray-500">
-                      {new Date(comment.createdAt).toLocaleDateString()}
-                    </span>
+                    <p className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap">
+                      {feedback.message}
+                    </p>
                   </div>
-                  
-                  {comment.position?.selectedText && (
-                    <div className="mb-3 p-3 bg-white rounded border-l-2 border-yellow-400">
-                      <p className="text-xs text-gray-500 uppercase tracking-wide mb-1">Selected Text:</p>
-                      <p className="text-sm text-gray-700 italic">
-                        "{comment.position.selectedText}"
-                      </p>
+                )}
+
+                {/* Inline comments from PDF/doc viewer */}
+                {comments.length > 0 && comments.map((comment) => (
+                  <div
+                    key={comment._id}
+                    className={`p-4 rounded-lg border-l-4 shadow-sm ${
+                      comment.resolved
+                        ? 'bg-gray-50 border-gray-300'
+                        : 'bg-yellow-50 border-yellow-400'
+                    }`}
+                  >
+                    <div className="flex items-start justify-between mb-2">
+                      <div className="flex-1">
+                        <span className="font-semibold text-sm text-gray-800">
+                          {comment.createdBy?.name || 'Faculty'}
+                        </span>
+                        {comment.position?.pageNumber && (
+                          <span className="text-xs text-gray-500 ml-2">
+                            • Page {comment.position.pageNumber}
+                          </span>
+                        )}
+                      </div>
+                      <span className="text-xs text-gray-500">
+                        {new Date(comment.createdAt).toLocaleDateString()}
+                      </span>
                     </div>
-                  )}
-                  
-                  <p className="text-sm text-gray-700 mb-2 leading-relaxed">{comment.comment}</p>
-                  
-                  {comment.resolved && comment.resolvedBy && (
-                    <div className="mt-3 pt-2 border-t border-gray-200">
-                      <p className="text-xs text-green-600 font-medium">
-                        ✓ Resolved by {comment.resolvedBy.name}
-                      </p>
-                      {comment.resolvedAt && (
-                        <p className="text-xs text-gray-500 mt-1">
-                          {new Date(comment.resolvedAt).toLocaleDateString()}
+                    
+                    {comment.position?.selectedText && (
+                      <div className="mb-3 p-3 bg-white rounded border-l-2 border-yellow-400">
+                        <p className="text-xs text-gray-500 uppercase tracking-wide mb-1">Selected Text:</p>
+                        <p className="text-sm text-gray-700 italic">
+                          "{comment.position.selectedText}"
                         </p>
-                      )}
-                    </div>
-                  )}
-                </div>
-              ))
+                      </div>
+                    )}
+                    
+                    <p className="text-sm text-gray-700 mb-2 leading-relaxed">{comment.comment}</p>
+                    
+                    {comment.resolved && comment.resolvedBy && (
+                      <div className="mt-3 pt-2 border-t border-gray-200">
+                        <p className="text-xs text-green-600 font-medium">
+                          ✓ Resolved by {comment.resolvedBy.name}
+                        </p>
+                        {comment.resolvedAt && (
+                          <p className="text-xs text-gray-500 mt-1">
+                            {new Date(comment.resolvedAt).toLocaleDateString()}
+                          </p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </>
             )}
           </div>
         </div>

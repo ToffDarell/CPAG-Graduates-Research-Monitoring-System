@@ -5,8 +5,8 @@ import { FaUserGraduate, FaUserShield } from 'react-icons/fa';
 const RoleSelection = () => {
   const navigate = useNavigate();
 
+  // Only students can self-register; deans are invited by the Administrator
   const roles = [
-    { value: "dean", label: "Dean", icon: FaUserShield },
     { value: "graduate student", label: "Student", icon: FaUserGraduate }
   ];
 
@@ -20,18 +20,7 @@ const RoleSelection = () => {
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4">
       <div className="bg-white p-8 rounded-xl shadow-2xl w-full max-w-4xl border border-gray-100">
-        {/* Logo Section */}
-        <div className="flex justify-center mb-6">
-          <img 
-            src="/logo.jpg" 
-            alt="Department Logo" 
-            className="h-30 w-30 object-contain"
-            onError={(e) => {
-              // Hide image if logo doesn't exist
-              e.target.style.display = 'none';
-            }}
-          />
-        </div>
+        {/* (Logo removed as requested) */}
 
         <div className="text-center mb-8">
           <h1 className="text-4xl font-bold text-gray-800 mb-2">
@@ -42,14 +31,14 @@ const RoleSelection = () => {
           </p>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-2xl mx-auto">
+        <div className="flex justify-center">
           {roles.map((role) => {
             const Icon = role.icon;
             return (
               <button
                 key={role.value}
                 onClick={() => handleRoleSelect(role.value)}
-                className="p-8 rounded-xl border-2 border-gray-200 bg-white hover:border-[#7C1D23] hover:shadow-xl transition-all duration-300 flex flex-col items-center justify-center space-y-4 group"
+                className="w-full max-w-sm p-8 rounded-xl border-2 border-gray-200 bg-white hover:border-[#7C1D23] hover:shadow-xl transition-all duration-300 flex flex-col items-center justify-center space-y-4 group"
               >
                 <div className="w-24 h-24 rounded-full bg-gray-100 group-hover:bg-[#7C1D23]/10 flex items-center justify-center transition-colors duration-300">
                   <Icon className="text-5xl text-gray-600 group-hover:text-[#7C1D23] transition-colors duration-300" />
@@ -76,7 +65,7 @@ const RoleSelection = () => {
             </button>
           </p>
           <p className="text-xs text-gray-500 mt-4 p-3 bg-[#7C1D23]/10 rounded-lg">
-            <strong>Note:</strong> Faculty Advisers and Program Heads can only register through invitation links sent by the Dean.
+            <strong>Note:</strong> Deans must be invited by the Administrator. Faculty Advisers and Program Heads are invited by the Dean through email invitations.
           </p>
         </div>
       </div>

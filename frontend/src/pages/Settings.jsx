@@ -7,6 +7,7 @@ import {
   FaExclamationCircle,
   FaGoogle,
   FaGoogleDrive,
+  FaTable,
   FaLock,
   FaSyncAlt,
   FaUserCog,
@@ -59,6 +60,7 @@ const Settings = ({ user, setUser, embedded = false, onClose }) => {
   const [profileForm, setProfileForm] = useState({
     name: user?.name || "",
     email: user?.email || "",
+    version: user?.version || 0,
   });
   const [passwordForm, setPasswordForm] = useState({
     currentPassword: "",
@@ -91,7 +93,14 @@ const Settings = ({ user, setUser, embedded = false, onClose }) => {
     loading: true,
     expiresAt: null,
   });
+  const [sheetsStatus, setSheetsStatus] = useState({
+    connected: false,
+    needsReauth: false,
+    loading: true,
+    expiresAt: null,
+  });
   const [driveMessage, setDriveMessage] = useState({ type: "", text: "" });
+  const [sheetsMessage, setSheetsMessage] = useState({ type: "", text: "" });
   const [calendarMessage, setCalendarMessage] = useState({
     type: "",
     text: "",
@@ -110,6 +119,7 @@ const Settings = ({ user, setUser, embedded = false, onClose }) => {
     setProfileForm({
       name: user?.name || "",
       email: user?.email || "",
+      version: user?.version || 0,
     });
   }, [user]);
 
@@ -159,9 +169,33 @@ const Settings = ({ user, setUser, embedded = false, onClose }) => {
     }
   };
 
+  const fetchSheetsStatus = async () => {
+    setSheetsStatus((prev) => ({ ...prev, loading: true }));
+    setSheetsMessage({ type: "", text: "" });
+    try {
+      const { data } = await axios.get("/api/google-sheets/status", authHeaders);
+      setSheetsStatus({
+        connected: data.connected,
+        needsReauth: data.needsReauth,
+        loading: false,
+        expiresAt: data.tokenExpiresAt,
+      });
+    } catch (error) {
+      console.error("Sheets status error:", error);
+      setSheetsStatus((prev) => ({ ...prev, loading: false }));
+      setSheetsMessage({
+        type: "error",
+        text:
+          error.response?.data?.message ||
+          "Unable to determine Google Sheets status.",
+      });
+    }
+  };
+
   useEffect(() => {
     fetchCalendarStatus();
     fetchDriveStatus();
+    fetchSheetsStatus();
   }, []);
 
   useEffect(() => {
@@ -177,6 +211,17 @@ const Settings = ({ user, setUser, embedded = false, onClose }) => {
         setDriveMessage({
           type: "error",
           text: "Google Drive connection failed. Please try again.",
+        });
+      } else if (event.data?.type === "SHEETS_CONNECT_SUCCESS") {
+        setSheetsMessage({
+          type: "success",
+          text: "Google Sheets connected successfully.",
+        });
+        fetchSheetsStatus();
+      } else if (event.data?.type === "SHEETS_CONNECT_ERROR") {
+        setSheetsMessage({
+          type: "error",
+          text: "Google Sheets connection failed. Please try again.",
         });
       }
     };
@@ -260,6 +305,7 @@ const Settings = ({ user, setUser, embedded = false, onClose }) => {
         {
           name: trimmedName,
           email: trimmedEmail,
+          version: profileForm.version,
         },
         authHeaders
       );
@@ -269,10 +315,23 @@ const Settings = ({ user, setUser, embedded = false, onClose }) => {
       });
       if (data.user) {
         setUser(data.user);
+        // Update local form version to match server
+        setProfileForm(prev => ({ ...prev, version: data.user.version || 0 }));
       }
     } catch (error) {
       console.error("Profile update error:", error);
       console.error("Error response:", error.response?.data);
+      
+      // Handle version mismatch (409 Conflict)
+      if (error.response?.status === 409) {
+        setProfileMessage({
+          type: "error",
+          text: error.response.data?.message || "This profile was updated by another user. Please reload the page to see the latest changes and try again.",
+        });
+        // Optionally reload user data to get latest version
+        // The user should reload the page as instructed in the error message
+        return;
+      }
       
       // Show server error message if available, otherwise show generic error
       let errorMessage = "Failed to update profile. Please try again.";
@@ -521,6 +580,84 @@ const Settings = ({ user, setUser, embedded = false, onClose }) => {
         text: error.response?.data?.message || "Failed to disconnect Google Drive.",
       });
       setDriveStatus((prev) => ({ ...prev, loading: false }));
+    }
+  };
+
+  const connectSheets = async () => {
+    setSheetsMessage({ type: "", text: "" });
+    setSheetsStatus((prev) => ({ ...prev, loading: true }));
+    try {
+      const { data } = await axios.get("/api/google-sheets/auth-url", authHeaders);
+      const width = 600;
+      const height = 650;
+      const left = window.screenX + Math.max(0, (window.outerWidth - width) / 2);
+      const top = window.screenY + Math.max(0, (window.outerHeight - height) / 2);
+      const popup = window.open(
+        data?.authUrl,
+        "sheetsConnectWindow",
+        `width=${width},height=${height},left=${left},top=${top}`
+      );
+      if (!popup) {
+        setSheetsMessage({
+          type: "error",
+          text: "Popup blocked. Please allow popups and try again.",
+        });
+      } else {
+        popup.focus();
+      }
+    } catch (error) {
+      console.error("Sheets connect error:", error);
+      setSheetsMessage({
+        type: "error",
+        text: error.response?.data?.message || "Failed to start Google Sheets connection.",
+      });
+    } finally {
+      setSheetsStatus((prev) => ({ ...prev, loading: false }));
+    }
+  };
+
+  const disconnectSheets = async () => {
+    const result = await Swal.fire({
+      title: "Disconnect Google Sheets?",
+      text: "You will need to reconnect to export data to Sheets.",
+      icon: "warning",
+      showCancelButton: true,
+      confirmButtonColor: "#7C1D23",
+      cancelButtonColor: "#6B7280",
+      confirmButtonText: "Yes, disconnect",
+      cancelButtonText: "Cancel",
+      reverseButtons: true,
+    });
+
+    if (!result.isConfirmed) return;
+
+    setSheetsStatus((prev) => ({ ...prev, loading: true }));
+    try {
+      const { data } = await axios.post("/api/google-sheets/disconnect", {}, authHeaders);
+      await Swal.fire({
+        title: "Disconnected!",
+        text: data.message || "Google Sheets has been disconnected successfully.",
+        icon: "success",
+        confirmButtonColor: "#7C1D23",
+      });
+      setSheetsMessage({
+        type: "success",
+        text: data.message || "Google Sheets disconnected.",
+      });
+      await fetchSheetsStatus();
+    } catch (error) {
+      console.error("Sheets disconnect error:", error);
+      await Swal.fire({
+        title: "Error",
+        text: error.response?.data?.message || "Failed to disconnect Google Sheets.",
+        icon: "error",
+        confirmButtonColor: "#7C1D23",
+      });
+      setSheetsMessage({
+        type: "error",
+        text: error.response?.data?.message || "Failed to disconnect Google Sheets.",
+      });
+      setSheetsStatus((prev) => ({ ...prev, loading: false }));
     }
   };
 
@@ -839,6 +976,56 @@ const Settings = ({ user, setUser, embedded = false, onClose }) => {
             </button>
             <button
               onClick={fetchDriveStatus}
+              className="px-4 py-2 rounded-md border border-gray-300 text-sm font-medium text-gray-700 hover:bg-gray-50"
+            >
+              Refresh status
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
+        <div className="flex items-center justify-between flex-wrap gap-4">
+          <div className="flex items-center space-x-3">
+            <div className="p-3 bg-[#E8F5E9] text-[#0F9D58] rounded-full">
+              <FaTable className="text-xl" />
+            </div>
+            <div>
+              <h2 className="text-lg font-semibold text-gray-900">
+                Google Sheets
+              </h2>
+              <p className="text-sm text-gray-500">
+                Export research data, activity logs, and reports to Google Sheets.
+              </p>
+            </div>
+          </div>
+          {statusBadge(sheetsStatus.connected, sheetsStatus.needsReauth)}
+        </div>
+
+        <div className="mt-4 space-y-3">
+          <Alert type={sheetsMessage.type} message={sheetsMessage.text} />
+          <p className="text-xs text-gray-500">
+            Token expires: {formatExpiry(sheetsStatus.expiresAt)}
+          </p>
+
+          <div className="flex flex-wrap gap-3">
+            <button
+              onClick={sheetsStatus.connected ? disconnectSheets : connectSheets}
+              disabled={sheetsStatus.loading}
+              className={`px-4 py-2 rounded-md font-medium text-sm text-white ${
+                sheetsStatus.connected
+                  ? "bg-red-500 hover:bg-red-600"
+                  : "bg-[#0F9D58] hover:bg-[#0B8043]"
+              } disabled:opacity-60`}
+            >
+              {sheetsStatus.loading
+                ? "Please wait..."
+                : sheetsStatus.connected
+                ? "Disconnect Sheets"
+                : "Connect Sheets"}
+            </button>
+            <button
+              onClick={fetchSheetsStatus}
               className="px-4 py-2 rounded-md border border-gray-300 text-sm font-medium text-gray-700 hover:bg-gray-50"
             >
               Refresh status

@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
 import axios from 'axios';
 import { FaCheckCircle, FaExclamationCircle, FaSpinner, FaFileAlt, FaDownload, FaFilePdf, FaFileWord } from 'react-icons/fa';
+import { showError, showWarning } from '../utils/sweetAlert';
 
 const PanelReview = () => {
   const { token } = useParams();
@@ -39,11 +40,11 @@ const PanelReview = () => {
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!reviewForm.comments.trim()) {
-      alert('Please provide review comments');
+      showWarning('Validation Error', 'Please provide review comments');
       return;
     }
     if (reviewForm.recommendation === 'pending') {
-      alert('Please select a recommendation');
+      showWarning('Validation Error', 'Please select a recommendation');
       return;
     }
 
@@ -56,7 +57,7 @@ const PanelReview = () => {
       setSuccess(true);
       fetchPanelData(); // Refresh to show updated status
     } catch (err) {
-      alert(err.response?.data?.message || 'Failed to submit review');
+      showError('Error', err.response?.data?.message || 'Failed to submit review');
     } finally {
       setSubmitting(false);
     }
@@ -187,7 +188,7 @@ const PanelReview = () => {
                           link.remove();
                           window.URL.revokeObjectURL(url);
                         } catch (err) {
-                          alert(err.response?.data?.message || 'Failed to download document');
+                          showError('Error', err.response?.data?.message || 'Failed to download document');
                         }
                       }}
                       className="ml-4 px-4 py-2 bg-[#7C1D23] text-white rounded-md text-sm font-medium hover:bg-[#5a1519] transition-colors flex items-center gap-2"
