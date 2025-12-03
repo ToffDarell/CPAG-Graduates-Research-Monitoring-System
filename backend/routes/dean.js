@@ -3,6 +3,7 @@ import multer from "multer";
 import path from "path";
 import fs from "fs";
 import { protect, checkAuth } from "../middleware/auth.js";
+import { checkPermission } from "../middleware/permissions.js";
 import {
   getFaculty,
   deleteFaculty,
@@ -39,6 +40,7 @@ import {
   bulkApproveResearch,
   bulkShareResearch,
   exportResearchRecords,
+  exportDefenseSchedule,
     } from "../controllers/deanController.js";
 
 
@@ -98,11 +100,12 @@ router.get("/faculty", getFaculty);
 router.post("/faculty", createFaculty);
 router.put("/faculty/:id", updateFaculty);
 router.delete("/faculty/:id", deleteFaculty);
-router.put("/faculty/:id/toggle-status", toggleFacultyActivation);
+router.put("/faculty/:id/toggle-status", checkPermission("activate_users"), toggleFacultyActivation);
 
 // Research records and analytics     
 router.get("/research", getResearchRecords);
 router.post("/research/export", exportResearchRecords);
+router.post("/defense-schedule/export", exportDefenseSchedule);
 router.post("/research/bulk-archive", bulkArchiveResearch);
 router.post("/research/bulk-approve", bulkApproveResearch);
 router.post("/research/bulk-share", bulkShareResearch);
@@ -143,7 +146,7 @@ router.get("/settings", getSettings);
 router.post("/logout", logout);
 
 // Invite faculty
-router.post("/invite-faculty", inviteFaculty);
+router.post("/invite-faculty", checkPermission("invite_users"), inviteFaculty);
 
 // Send email
 router.post("/send-email", sendEmail);

@@ -28,6 +28,8 @@ import {
   getAvailableDocuments,
   downloadDocument,
   viewDocument,
+  deleteChapterSubmission,
+  viewChapterSubmission,
 } from "../controllers/facultyController.js";
 
 const router = express.Router();
@@ -50,11 +52,18 @@ router.use(protect, checkAuth(["faculty adviser"]));
 // Student submissions
 router.get("/submissions", getStudentSubmissions);
 
-// Thesis status management
-router.put("/thesis/:id/status", updateThesisStatus);
+// View chapter submission (faculty can view student submissions)
+router.get("/submissions/:submissionId/view", viewChapterSubmission);
+
+// Delete chapter submission (faculty can delete any submission including approved)
+// Must be before /submissions/approve-reject to avoid route conflicts
+router.delete("/submissions/:submissionId", deleteChapterSubmission);
 
 // Approve/reject submissions
 router.post("/submissions/approve-reject", approveRejectSubmission);
+
+// Thesis status management
+router.put("/thesis/:id/status", updateThesisStatus);
 
 // Feedback management
 router.post("/feedback", upload.single("file"), uploadFeedback);

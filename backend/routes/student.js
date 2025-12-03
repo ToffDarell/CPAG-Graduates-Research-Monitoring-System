@@ -2,12 +2,10 @@ import express from "express";
 import multer from "multer";
 import path from "path";
 import fs from "fs";
-import jwt from "jsonwebtoken";
 import { protect, checkAuth } from "../middleware/auth.js";
-import Research from "../models/Research.js";
-import Schedule from "../models/Schedule.js";
-import User from "../models/User.js";
+import { checkPermission as checkRolePermission } from "../middleware/permissions.js";
 import { 
+  login,
   getAvailableDocuments, 
   downloadDocument, 
   viewDocument,
@@ -19,6 +17,9 @@ import {
   viewComplianceForm,
   uploadChapter,
   uploadChapterFromDrive,
+  deleteChapterSubmission,
+  viewChapterSubmission,
+  downloadChapterSubmission,
   getChapterSubmissions,
   getProgressOverview,
   getDriveStatus,
@@ -27,15 +28,15 @@ import {
   getAdviserFeedback,
   viewFeedbackFile,
   getFeedbackComments,
-  exportScheduleICS
+  exportScheduleICS,
+  getAvailableSlots,
+  requestConsultation,
+  createCustomConsultationRequest,
+  getCompletedThesis,
+  getPanelFeedback
 } from "../controllers/studentController.js";
 
 const router = express.Router();
-
-// JWT Token Generator
-const generateToken = (id) => {
-  return jwt.sign({ id }, process.env.JWT_SECRET, { expiresIn: '30d' });
-};
 
 // Create uploads directory if it doesn't exist
 const uploadsDir = path.join(process.cwd(), 'uploads');
@@ -70,39 +71,7 @@ const upload = multer({
 
 
 // Login route (no authentication required)
-router.post("/login", async (req, res) => {
-  try {
-    const { email, password } = req.body;
-
-    if (!email || !password) {
-      return res.status(400).json({ message: "Email and password are required" });
-    }
-
-    // Find user by email (instead of username)
-    const user = await User.findOne({ email });
-    
-    if (!user) {
-      return res.status(401).json({ message: "Invalid email or password" });
-    }
-
-    const isMatch = await user.matchPassword(password);
-    if (!isMatch) {
-      return res.status(401).json({ message: "Invalid email or password" });
-    }
-
-    // Return user data using name instead of username
-    res.json({
-      _id: user._id,
-      name: user.name,
-      email: user.email,
-      role: user.role,
-      studentId: user.studentId,
-      token: generateToken(user._id)
-    });
-  } catch (error) {
-    res.status(500).json({ message: error.message });
-  }
-});
+router.post("/login", login);
 
 // Apply authentication middleware to all routes below
 router.use(protect, checkAuth(["graduate student"]));
@@ -122,6 +91,9 @@ router.get("/progress", getProgressOverview);
 router.get("/drive-status", getDriveStatus);
 router.post("/chapter", upload.single("file"), uploadChapter);
 router.post("/chapter-from-drive", uploadChapterFromDrive);
+router.get("/chapter-submissions/:submissionId/view", viewChapterSubmission);
+router.get("/chapter-submissions/:submissionId/download", downloadChapterSubmission);
+router.delete("/chapter-submissions/:submissionId", deleteChapterSubmission);
 
 // Schedule routes
 router.get("/schedules", getMySchedules);
@@ -131,94 +103,21 @@ router.get("/feedback/view/:feedbackId", viewFeedbackFile);
 router.get("/feedback/:feedbackId/comments", getFeedbackComments);
 
 // Get available consultation slots from adviser
-router.get("/available-slots", async (req, res) => {
-  try {
-    if (req.user.level !== "graduate") {
-      return res.status(403).json({ message: "Only graduate students can view available slots." });
-    }
+  router.get("/available-slots", (req, res, next) => {
+  console.log('[ROUTE] /available-slots hit');
+  console.log('[ROUTE] User:', req.user?._id?.toString(), req.user?.name, req.user?.role);
+  next();
+}, getAvailableSlots);
 
-    // Find student's research to get their adviser
-    const research = await Research.findOne({ students: req.user._id })
-      .populate("adviser", "name email");
+// Request consultation (from existing slot)
+router.post("/request-consultation", requestConsultation);
 
-    if (!research || !research.adviser) {
-      return res.json({ message: "You don't have an assigned adviser yet.", slots: [] });
-    }
-
-    // Find available consultation slots (no student assigned yet or status is 'scheduled')
-    const availableSlots = await Schedule.find({
-      "participants.user": research.adviser._id,
-      "participants.role": "adviser",
-      type: "consultation",
-      datetime: { $gte: new Date() }, // Only future slots
-      status: "scheduled",
-      $or: [
-        { "participants.1": { $exists: false } }, // No student participant yet
-        { "participants.role": { $ne: "student" } } // No student role in participants
-      ]
-    })
-      .populate("participants.user", "name email")
-      .populate("createdBy", "name email")
-      .sort({ datetime: 1 });
-
-    res.json({ adviser: research.adviser, slots: availableSlots });
-  } catch (error) {
-    console.error("Error fetching available slots:", error);
-    res.status(500).json({ message: error.message });
-  }
-});
-
-// Request consultation
-router.post("/request-consultation", async (req, res) => {
-  try {
-    if (req.user.level !== "graduate") {
-      return res.status(403).json({ message: "Only graduate students can request consultations." });
-    }
-
-    const { scheduleId, message } = req.body;
-
-    const schedule = await Schedule.findById(scheduleId)
-      .populate("participants.user", "name email");
-
-    if (!schedule) {
-      return res.status(404).json({ message: "Schedule not found" });
-    }
-
-    // Check if slot is still available
-    const hasStudent = schedule.participants.some(p => p.role === "student");
-    if (hasStudent) {
-      return res.status(400).json({ message: "This slot has already been requested by another student." });
-    }
-
-    // Check if schedule is in the past
-    if (new Date(schedule.datetime) < new Date()) {
-      return res.status(400).json({ message: "Cannot request past consultation slots." });
-    }
-
-    // Add student as participant
-    schedule.participants.push({
-      user: req.user._id,
-      role: "student",
-      status: "invited"
-    });
-
-    await schedule.save();
-
-    // TODO: Send notification to adviser about the request
-
-    const updatedSchedule = await Schedule.findById(scheduleId)
-      .populate("participants.user", "name email")
-      .populate("createdBy", "name email");
-
-    res.json({ 
-      message: "Consultation request submitted successfully. Your adviser will review it soon.", 
-      schedule: updatedSchedule 
-    });
-  } catch (error) {
-    console.error("Error requesting consultation:", error);
-    res.status(500).json({ message: error.message });
-  }
-});
+// Create custom consultation request (student creates their own request)
+router.post("/create-consultation-request", (req, res, next) => {
+  console.log('[ROUTE] /create-consultation-request hit');
+  console.log('[ROUTE] User:', req.user?._id?.toString(), req.user?.name, req.user?.role);
+  next();
+}, createCustomConsultationRequest);
 
 // Logout
 router.post("/logout", async (req, res) => {
@@ -230,6 +129,10 @@ router.post("/logout", async (req, res) => {
 router.get("/documents", getAvailableDocuments);
 router.get("/documents/:id", viewDocument);
 router.get("/documents/:id/download", downloadDocument);
+
+// Completed thesis routes
+router.get("/completed-thesis", getCompletedThesis);
+router.get("/completed-thesis/:id/panel-feedback", getPanelFeedback);
 
 export default router;
 

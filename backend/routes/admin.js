@@ -12,6 +12,10 @@ import {
   updatePermission,
   getUsers,
   updateUserRole,
+  updateUserProfileByAdmin,
+  deleteUser,
+  getAllActivityLogs,
+  inviteDean,
 } from "../controllers/adminController.js";
 
 const router = express.Router();
@@ -36,6 +40,14 @@ router.put("/permissions/:id", updatePermission);
 // User role management
 router.get("/users", getUsers);
 router.put("/users/:id/role", updateUserRole);
+router.put("/users/:id", updateUserProfileByAdmin);
+router.delete("/users/:id", deleteUser);
+
+// Dean invitations
+router.post("/invite-dean", inviteDean);
+
+// Activity logs
+router.get("/activity-logs", getAllActivityLogs);
 
 export default router;
 

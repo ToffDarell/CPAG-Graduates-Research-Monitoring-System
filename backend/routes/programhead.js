@@ -47,6 +47,7 @@ import {
   getPanelRecords,
   getPanelRecordDetails,
   exportPanelRecords,
+  exportDefenseSchedule,
   updatePanelStatus,
   getSchedulesForFinalization,
   finalizeSchedule,
@@ -57,6 +58,7 @@ import {
   getAvailableDocuments,
   downloadDocument,
   viewDocument,
+  updateResearchTitle,
 } from "../controllers/programHeadController.js";
 
 const router = express.Router();
@@ -157,6 +159,7 @@ router.get("/students", checkPermission("view_users"), getStudents);
 router.post("/research/add-students", checkPermission("manage_users"), addStudentsToResearch);
 
 // Research title management
+router.put("/research/:id", checkPermission("create_research"), updateResearchTitle);
 router.delete("/research/:id", checkPermission("delete_research"), deleteResearchTitle);
 
 // Activity logs
@@ -166,7 +169,10 @@ router.get("/activity-stats", checkPermission("view_activity"), getActivityStats
 // Panel Records (PROGRAM HEAD – 0006)
 router.get("/panel-records", checkPermission("view_research"), getPanelRecords);
 router.get("/panel-records/:id", checkPermission("view_research"), getPanelRecordDetails);
-router.get("/panel-records/export/csv", checkPermission("export_activity"), exportPanelRecords);
+router.post("/panel-records/export", checkPermission("export_activity"), exportPanelRecords);
+
+// Schedule Export
+router.post("/schedules/export", checkPermission("export_activity"), exportDefenseSchedule);
 
 // Document routes
 router.get("/documents", checkPermission("view_documents"), getAvailableDocuments);
