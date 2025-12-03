@@ -28,16 +28,7 @@ const ForgotPassword = () => {
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4">
       <div className="bg-white p-8 rounded-xl shadow-2xl w-full max-w-md border border-gray-100">
-        <div className="flex justify-center mb-6">
-          <img 
-            src="/logo.jpg" 
-            alt="Department Logo" 
-            className="h-25 w-25 object-contain"
-            onError={(e) => {
-              e.target.style.display = 'none';
-            }}
-          />
-        </div>
+        {/* (Logo removed as requested) */}
 
         <h2 className="text-3xl font-bold mb-4 text-center text-gray-800">
           Forgot Password?

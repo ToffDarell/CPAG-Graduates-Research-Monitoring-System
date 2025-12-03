@@ -43,8 +43,15 @@ const Login = ({ setUser }) => {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    setError(""); // Clear previous errors
     setIsLoading(true);
     try {
+      // Check if reCAPTCHA is required and provided
+      if (siteKey && !recaptchaToken) {
+        setError("Please complete the reCAPTCHA verification");
+        setIsLoading(false);
+        return;
+      }
 
       const res = await axios.post("/api/users/login", { 
         email: formData.email,
@@ -56,7 +63,13 @@ const Login = ({ setUser }) => {
       // Use the helper function for navigation
       navigate(`/dashboard/${getDashboardPath(res.data.role)}`);
     } catch (err) {
-      setError(err.response?.data?.message || "Login failed");
+      // Better error handling
+      const errorMessage = err.response?.data?.message || 
+                          err.response?.status === 401 ? "Invalid email or password" :
+                          err.response?.status === 400 ? "Invalid request. Please check your input." :
+                          err.message || "Login failed. Please try again.";
+      setError(errorMessage);
+      console.error("Login error:", err.response?.data || err.message);
     } finally {
       setIsLoading(false);
     }
@@ -77,8 +90,28 @@ const Login = ({ setUser }) => {
   };
 
   const handleGoogleLoginError = (error) => {
-    console.log(error);
-    setError(error.error);
+    // Ignore AbortError and NetworkError from FedCM - these happen when:
+    // - Component unmounts or navigation occurs during Google Sign-In initialization
+    // - FedCM is disabled or network issues occur (browser will fallback to popup)
+    if (error?.error === 'popup_closed_by_user' || 
+        error?.type === 'popup_closed_by_user' ||
+        error?.name === 'AbortError' ||
+        error?.name === 'NetworkError' ||
+        error?.message?.includes('aborted') ||
+        error?.message?.includes('NetworkError') ||
+        error?.message?.includes('FedCM')) {
+      // These are expected - browser will fallback to popup or user cancelled
+      // Don't show error to user for these cases
+      return;
+    }
+    
+    // Only show actual errors to the user
+    if (error?.error && error.error !== 'popup_closed_by_user') {
+      setError(error.error);
+    } else if (error?.type && error.type !== 'popup_closed_by_user') {
+      setError('Google Sign-In failed. Please try again.');
+    }
+    // Silently ignore FedCM-related errors as they're handled by fallback
   };
 
 
@@ -86,11 +119,11 @@ const Login = ({ setUser }) => {
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4">
       <div className="bg-white p-8 rounded-xl shadow-2xl w-full max-w-md border border-gray-100">
-        {/* Logo Section */}
+        {/* Logo Section (image only, no text) */}
         <div className="flex justify-center mb-6">
           <img 
             src="/logo.jpg" 
-            alt="Department Logo" 
+            alt="" 
             className="h-25 w-25 object-contain"
             onError={(e) => {
               // Hide image if logo doesn't exist

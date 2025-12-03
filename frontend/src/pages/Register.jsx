@@ -24,8 +24,8 @@ const Register = ({ setUser }) => {
   const navigate = useNavigate();
   const siteKey = import.meta.env.VITE_RECAPTCHA_SITE_KEY;
 
+  // Only students can self-register; deans use invitation links from the Admin
   const roles = [
-    { value: "dean", label: "Dean", icon: FaUserShield },
     { value: "graduate student", label: "Student", icon: FaUserGraduate }
   ];
 
@@ -166,8 +166,28 @@ const Register = ({ setUser }) => {
   };
 
   const handleGoogleLoginError = (error) => {
-    console.log(error);
-    setError(error.error);
+    // Ignore AbortError and NetworkError from FedCM - these happen when:
+    // - Component unmounts or navigation occurs during Google Sign-In initialization
+    // - FedCM is disabled or network issues occur (browser will fallback to popup)
+    if (error?.error === 'popup_closed_by_user' || 
+        error?.type === 'popup_closed_by_user' ||
+        error?.name === 'AbortError' ||
+        error?.name === 'NetworkError' ||
+        error?.message?.includes('aborted') ||
+        error?.message?.includes('NetworkError') ||
+        error?.message?.includes('FedCM')) {
+      // These are expected - browser will fallback to popup or user cancelled
+      // Don't show error to user for these cases
+      return;
+    }
+    
+    // Only show actual errors to the user
+    if (error?.error && error.error !== 'popup_closed_by_user') {
+      setError(error.error);
+    } else if (error?.type && error.type !== 'popup_closed_by_user') {
+      setError('Google Sign-In failed. Please try again.');
+    }
+    // Silently ignore FedCM-related errors as they're handled by fallback
   };
 
   // Get the selected role details for display
@@ -176,11 +196,11 @@ const Register = ({ setUser }) => {
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4">
       <div className="bg-white p-8 rounded-xl shadow-2xl w-full max-w-md border border-gray-100">
-        {/* Logo Section */}
+        {/* Logo Section (image only, no text) */}
         <div className="flex justify-center mb-6">
           <img 
             src="/logo.jpg" 
-            alt="Department Logo" 
+            alt="" 
             className="h-25 w-25 object-contain"
             onError={(e) => {
               // Hide image if logo doesn't exist
@@ -205,10 +225,16 @@ const Register = ({ setUser }) => {
           <div className="mb-6 p-4 bg-[#7C1D23]/10 rounded-lg border border-[#7C1D23]/20">
             <div className="text-center">
               <h3 className="text-lg font-semibold text-[#7C1D23] mb-1">
-                Faculty Invitation
+                {invitationData?.role === "dean" ? "Dean Invitation" : "Faculty Invitation"}
               </h3>
               <p className="text-sm text-gray-600">
-                Complete your registration as {invitationData?.role}
+                Complete your registration as{" "}
+                {invitationData?.role
+                  ? invitationData.role
+                      .split(" ")
+                      .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+                      .join(" ")
+                  : ""}
               </p>
             </div>
           </div>
