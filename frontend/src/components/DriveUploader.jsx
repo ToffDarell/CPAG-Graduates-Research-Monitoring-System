@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { showError } from '../utils/sweetAlert';
 
 const SCOPES = [
   'https://www.googleapis.com/auth/drive.file',
@@ -112,20 +113,26 @@ export default function DriveUploader({
                 });
 
                 // Initialize One Tap to capture a hint (email) silently
+                // This helps pre-select the account when showing account chooser
                 try {
                   googleObj.accounts.id.initialize({
                     client_id: clientId,
-                    auto_select: true,
+                    auto_select: false, // Don't auto-select, just capture hint
+                    cancel_on_tap_outside: true,
                     callback: (cred) => {
                       const payload = parseJwt(cred.credential || '');
                       if (payload && payload.email) {
                         setAccountHint(payload.email);
                         try { localStorage.setItem('google_account_hint', payload.email); } catch {}
+                        console.log('One Tap captured email hint:', payload.email);
                       }
                     },
                   });
                   // Trigger silent prompt (will not show if not eligible)
-                  googleObj.accounts.id.prompt(() => {});
+                  googleObj.accounts.id.prompt((notification) => {
+                    // One Tap might not show if user isn't signed in or has dismissed it
+                    // That's okay, we'll use the email from Settings instead
+                  });
                 } catch (_) {}
 
                 if (!cancelled) setPickerReady(true);
@@ -157,9 +164,55 @@ export default function DriveUploader({
 
   const ensureAuth = useCallback(async () => {
     if (oauthTokenRef.current) return oauthTokenRef.current;
+    
+    // First, try to get token from backend (if user connected Drive in Settings)
+    // This ensures we use the exact same account that was connected
+    try {
+      const response = await fetch(`${apiBase}/api/google-drive/access-token`, {
+        headers: headers,
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        if (data.accessToken) {
+          // Try using backend token directly - Google Picker might accept it
+          // If not, we'll fall back to GIS but with the same account email
+          console.log('✅ Using backend Drive token from Settings');
+          oauthTokenRef.current = data.accessToken;
+          try {
+            window.gapi?.client?.setToken?.({ access_token: data.accessToken });
+          } catch (_) {}
+          return data.accessToken;
+        }
+      }
+    } catch (error) {
+      console.log('Backend token not available, using GIS');
+    }
+    
+    // Fallback to GIS if backend token is not available or doesn't work
+    // Get the exact email from Settings to ensure same account is used
+    let userEmail = accountHint;
+    
+    try {
+      const statusResponse = await fetch(`${apiBase}/api/google-drive/status`, {
+        headers: headers,
+      });
+      
+      if (statusResponse.ok) {
+        const statusData = await statusResponse.json();
+        if (statusData.email) {
+          userEmail = statusData.email;
+          console.log('Using same account from Settings:', userEmail);
+        }
+      }
+    } catch (error) {
+      console.log('Could not fetch Drive status');
+    }
+    
+    // Use GIS to get token (required for Google Picker)
     if (!tokenClientRef.current) throw new Error('Token client not ready');
-    // Try silent token first; fall back to consent prompt only if required
-    const requestToken = (promptValue, hintValue) =>
+    
+    const requestToken = (promptValue) =>
       new Promise((resolve, reject) => {
         try {
           tokenClientRef.current.callback = (tokenResponse) => {
@@ -171,7 +224,11 @@ export default function DriveUploader({
               reject(new Error('Failed to obtain access token'));
             }
           };
-          tokenClientRef.current.requestAccessToken({ prompt: promptValue, hint: hintValue });
+          // Use login_hint parameter to ensure same account is selected
+          tokenClientRef.current.requestAccessToken({ 
+            prompt: promptValue,
+            login_hint: userEmail || undefined
+          });
         } catch (e) {
           reject(e);
         }
@@ -179,18 +236,21 @@ export default function DriveUploader({
 
     let token;
     try {
-      // Silent (no account chooser if possible)
-      token = await requestToken('', accountHint || undefined);
+      // Try silent authentication first - uses the account from Settings
+      token = await requestToken('');
+      console.log('✅ Got GIS token silently with Settings account');
     } catch (silentErr) {
-      // Only then ask for consent (shows account chooser)
-      token = await requestToken('consent', accountHint || undefined);
+      console.log('Silent auth failed, using account from Settings');
+      // Use select_account with login_hint to pre-select the exact account from Settings
+      token = await requestToken('select_account');
+      console.log('✅ Got GIS token with Settings account selected');
     }
     oauthTokenRef.current = token;
     try {
       window.gapi?.client?.setToken?.({ access_token: token });
     } catch (_) {}
     return token;
-  }, []);
+  }, [apiBase, headers, accountHint]);
 
   const openPicker = useCallback(async () => {
     try {
@@ -280,7 +340,7 @@ export default function DriveUploader({
       picker.setVisible(true);
     } catch (e) {
       console.error('Picker error', e);
-      alert(e.message);
+      showError('Error', e.message);
     } finally {
       setBusy(false);
     }
@@ -312,7 +372,7 @@ export default function DriveUploader({
         if (fileInputRef.current) fileInputRef.current.value = '';
       } catch (e2) {
         console.error(e2);
-        alert(e2.message);
+        showError('Error', e2.message);
       } finally {
         setBusy(false);
       }

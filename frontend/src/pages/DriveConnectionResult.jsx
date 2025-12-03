@@ -3,14 +3,14 @@ import { useEffect } from "react";
 const messages = {
   success: {
     title: "Google Drive Connected",
-    description: "You can close this window and return to the dashboard.",
+    description: "You can close this window and return to the dashboard or the Settings page.",
     bg: "bg-green-50",
     border: "border-green-200",
     text: "text-green-800",
   },
   error: {
     title: "Connection Failed",
-    description: "Please close this window and try connecting again.",
+    description: "Please close this window and try connecting again from Settings.",
     bg: "bg-red-50",
     border: "border-red-200",
     text: "text-red-800",
@@ -22,12 +22,25 @@ export default function DriveConnectionResult({ status = "success" }) {
 
   useEffect(() => {
     if (window.opener && !window.opener.closed) {
-      window.opener.postMessage(
-        {
-          type: status === "success" ? "DRIVE_CONNECT_SUCCESS" : "DRIVE_CONNECT_ERROR",
-        },
-        window.location.origin || "*"
-      );
+      // Check if this is a Sheets connection by checking the URL or window name
+      const isSheetsConnection = window.location.pathname.includes('sheets') || 
+                                 window.name === 'sheetsConnectWindow';
+      
+      if (isSheetsConnection) {
+        window.opener.postMessage(
+          {
+            type: status === "success" ? "SHEETS_CONNECT_SUCCESS" : "SHEETS_CONNECT_ERROR",
+          },
+          window.location.origin || "*"
+        );
+      } else {
+        window.opener.postMessage(
+          {
+            type: status === "success" ? "DRIVE_CONNECT_SUCCESS" : "DRIVE_CONNECT_ERROR",
+          },
+          window.location.origin || "*"
+        );
+      }
     }
 
     const timer = setTimeout(() => {

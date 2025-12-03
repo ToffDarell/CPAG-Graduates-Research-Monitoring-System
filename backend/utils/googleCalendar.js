@@ -24,7 +24,6 @@ export const getCalendarClient = async (userId, accessToken, refreshToken) => {
         if (tokens.expiry_date) {
           updateData.googleTokenExpiry = new Date(tokens.expiry_date);
         } else {
-          // Default to 1 hour if no expiry date provided
           updateData.googleTokenExpiry = new Date(Date.now() + 3600000);
         }
         
@@ -36,159 +35,73 @@ export const getCalendarClient = async (userId, accessToken, refreshToken) => {
     }
   });
 
-  // Set initial credentials
   oauth2Client.setCredentials({
     access_token: accessToken,
     refresh_token: refreshToken,
   });
-
-  // Note: Token refresh will happen automatically by googleapis when making API calls
-  // if the token is expired and a refresh token is available. We don't need to
-  // proactively refresh here - the oauth2Client will handle it automatically.
 
   return google.calendar({ version: 'v3', auth: oauth2Client });
 };
 
 /**
  * Create a consultation event in Google Calendar
+ * Uses toISOString() with timeZone: 'Asia/Manila' - same approach as working implementations
  */
-// Helper function to convert UTC datetime to Manila timezone for Google Calendar
-const formatDateTimeForManila = (date) => {
-  if (!(date instanceof Date) || isNaN(date.getTime())) {
-    throw new Error('Invalid date object');
-  }
-
-  // Get UTC milliseconds (always UTC, regardless of server timezone)
-  const utcMilliseconds = date.getTime();
-  
-  // Manila is UTC+8, so add 8 hours (8 * 60 * 60 * 1000 milliseconds)
-  const manilaMilliseconds = utcMilliseconds + (8 * 60 * 60 * 1000);
-  
-  // Create a Date object representing Manila time
-  // Note: This Date object still represents the same moment in time, just displayed differently
-  const manilaDate = new Date(manilaMilliseconds);
-  
-  // Now format this as if it were in Manila timezone
-  // We'll use Intl.DateTimeFormat to format it, but we need to be careful
-  // The Date object represents UTC time, but we want Manila time components
-  
-  // Actually, the simplest approach: Get UTC components after adding 8 hours
-  // This works because we're adding 8 hours to UTC, which gives us Manila time
-  const manilaYear = manilaDate.getUTCFullYear();
-  const manilaMonth = manilaDate.getUTCMonth();
-  const manilaDay = manilaDate.getUTCDate();
-  const manilaHours = manilaDate.getUTCHours();
-  const manilaMinutes = manilaDate.getUTCMinutes();
-  const manilaSeconds = manilaDate.getUTCSeconds();
-  
-  // Format with leading zeros
-  const year = String(manilaYear);
-  const month = String(manilaMonth + 1).padStart(2, '0');
-  const day = String(manilaDay).padStart(2, '0');
-  const hour = String(manilaHours).padStart(2, '0');
-  const minute = String(manilaMinutes).padStart(2, '0');
-  const second = String(manilaSeconds).padStart(2, '0');
-
-  const result = `${year}-${month}-${day}T${hour}:${minute}:${second}`;
-  
-  // Debug logging
-  const originalUTCHours = date.getUTCHours();
-  const convertedManilaHours = parseInt(hour);
-  console.log('[formatDateTimeForManila] Manual conversion:', {
-    inputUTC: date.toISOString(),
-    inputUTCHours: originalUTCHours,
-    outputManila: result,
-    manilaHours: convertedManilaHours,
-    expected: originalUTCHours + 8 >= 24 ? (originalUTCHours + 8 - 24) : (originalUTCHours + 8),
-    conversionMethod: 'manual (UTC+8)',
-    conversionCorrect: convertedManilaHours === (originalUTCHours + 8 >= 24 ? (originalUTCHours + 8 - 24) : (originalUTCHours + 8))
-  });
-
-  // Return RFC3339 format: "YYYY-MM-DDTHH:mm:ss"
-  // When combined with timeZone: 'Asia/Manila', Google Calendar will interpret
-  // this datetime as being in Manila timezone
-  return result;
-};
-
 export const createConsultationEvent = async (scheduleData, accessToken, refreshToken, userId) => {
   try {
     console.log('[Google Calendar] Creating event:', {
       title: scheduleData.title,
       datetime: scheduleData.datetime,
       datetimeType: typeof scheduleData.datetime,
+      duration: scheduleData.duration,
       location: scheduleData.location,
-      hasAccessToken: !!accessToken,
-      hasRefreshToken: !!refreshToken,
       userId: userId
     });
     
     const calendar = await getCalendarClient(userId, accessToken, refreshToken);
 
-    // The datetime from database is in UTC, convert to Manila timezone for Google Calendar
-    // Database: 2025-11-23T07:00:00.000Z (7:00 AM UTC)
-    // Should send: 2025-11-23T15:00:00 (3:00 PM Manila time = 7 AM UTC + 8 hours)
+    // Convert datetime to Date object (UTC from database)
+    const startTime = new Date(scheduleData.datetime);
     
-    // IMPORTANT: Ensure we're working with UTC time
-    // scheduleData.datetime might be a Date object, Mongoose Date, or string
-    // Convert to ISO string first to ensure UTC, then create Date object
-    let startTime;
-    if (scheduleData.datetime instanceof Date) {
-      // If it's already a Date object, use toISOString() to get UTC string, then parse
-      startTime = new Date(scheduleData.datetime.toISOString());
-    } else if (typeof scheduleData.datetime === 'string') {
-      // If it's a string, parse it directly
-      startTime = new Date(scheduleData.datetime);
-    } else {
-      // Fallback: try to convert
-      startTime = new Date(scheduleData.datetime);
-    }
-    
-    // Ensure we have a valid UTC Date object by using getTime() which always returns UTC milliseconds
-    const utcMilliseconds = startTime.getTime();
-    if (isNaN(utcMilliseconds)) {
+    if (isNaN(startTime.getTime())) {
       throw new Error(`Invalid datetime: ${scheduleData.datetime}`);
     }
     
-    // Create fresh Date objects from UTC milliseconds to avoid timezone issues
-    startTime = new Date(utcMilliseconds);
-    const endTime = new Date(utcMilliseconds + (scheduleData.duration || 60) * 60000);
+    // Calculate end time (duration is in minutes)
+    const durationMs = (scheduleData.duration || 30) * 60000;
+    const endTime = new Date(startTime.getTime() + durationMs);
 
-    // Verify the Date object is correct
-    console.log('[Google Calendar] Date object created:', {
-      inputDatetime: scheduleData.datetime,
-      inputType: typeof scheduleData.datetime,
-      inputIsDate: scheduleData.datetime instanceof Date,
-      startTimeISO: startTime.toISOString(),
-      startTimeUTC: startTime.toUTCString(),
-      startTimeUTCHours: startTime.getUTCHours(),
-      startTimeUTCMinutes: startTime.getUTCMinutes(),
-      startTimeMilliseconds: startTime.getTime(),
-      serverTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone
-    });
+    // Convert UTC time to Manila timezone format for Google Calendar
+    // Google Calendar API expects datetime in the specified timezone, not UTC
+    // Format: "2025-12-12T10:30:00" (without Z, represents local time in Asia/Manila)
+    const formatDateTimeForManila = (date) => {
+      // The date object from database is in UTC
+      // Manila is UTC+8, so we add 8 hours to get Manila time
+      const manilaOffsetMs = 8 * 60 * 60 * 1000; // 8 hours in milliseconds
+      const manilaTime = new Date(date.getTime() + manilaOffsetMs);
+      
+      // Format as YYYY-MM-DDTHH:mm:ss (no Z, no milliseconds)
+      const year = manilaTime.getUTCFullYear();
+      const month = String(manilaTime.getUTCMonth() + 1).padStart(2, '0');
+      const day = String(manilaTime.getUTCDate()).padStart(2, '0');
+      const hours = String(manilaTime.getUTCHours()).padStart(2, '0');
+      const minutes = String(manilaTime.getUTCMinutes()).padStart(2, '0');
+      const seconds = String(manilaTime.getUTCSeconds()).padStart(2, '0');
+      
+      return `${year}-${month}-${day}T${hours}:${minutes}:${seconds}`;
+    };
 
-    const startDateTime = formatDateTimeForManila(startTime);
-    const endDateTime = formatDateTimeForManila(endTime);
+    const startDateTimeManila = formatDateTimeForManila(startTime);
+    const endDateTimeManila = formatDateTimeForManila(endTime);
 
-    // Debug logging to verify conversion
-    // Get UTC hours for logging (always get it fresh to avoid any scope issues)
-    const utcHoursForLogging = startTime.getUTCHours();
-    const manilaHoursForLogging = parseInt(startDateTime.split('T')[1].split(':')[0]);
-    let expectedManilaHoursForLogging = utcHoursForLogging + 8;
-    if (expectedManilaHoursForLogging >= 24) {
-      expectedManilaHoursForLogging = expectedManilaHoursForLogging - 24;
-    }
-
-    console.log('[Google Calendar] Datetime conversion:', {
-      originalUTC: startTime.toISOString(),
-      originalUTCHours: utcHoursForLogging,
-      originalUTCMinutes: startTime.getUTCMinutes(),
-      convertedManila: startDateTime,
-      manilaHours: manilaHoursForLogging,
-      manilaMinutes: parseInt(startDateTime.split('T')[1].split(':')[1]),
-      expectedManilaHours: expectedManilaHoursForLogging,
-      conversionCorrect: manilaHoursForLogging === expectedManilaHoursForLogging,
-      timeDifference: manilaHoursForLogging - utcHoursForLogging,
-      expectedDifference: 8
+    console.log('[Google Calendar] Datetime handling:', {
+      inputFromDB: scheduleData.datetime,
+      startTimeUTC: startTime.toISOString(),
+      endTimeUTC: endTime.toISOString(),
+      startTimeManila: startDateTimeManila,
+      endTimeManila: endDateTimeManila,
+      durationMinutes: scheduleData.duration || 30,
+      note: 'Converted UTC to Manila timezone format for Google Calendar'
     });
 
     const event = {
@@ -202,11 +115,11 @@ ${scheduleData.researchTitle ? `Research: ${scheduleData.researchTitle}` : ''}
       `.trim(),
       location: scheduleData.location,
       start: {
-        dateTime: startDateTime,
-        timeZone: 'Asia/Manila',
+        dateTime: startDateTimeManila,  // Manila timezone format: "2025-12-12T10:30:00"
+        timeZone: 'Asia/Manila',         // Specifies this datetime is in Manila timezone
       },
       end: {
-        dateTime: endDateTime,
+        dateTime: endDateTimeManila,     // Manila timezone format
         timeZone: 'Asia/Manila',
       },
       attendees: scheduleData.attendeeEmails?.map(email => ({ email })) || [],
@@ -225,30 +138,13 @@ ${scheduleData.researchTitle ? `Research: ${scheduleData.researchTitle}` : ''}
       },
     };
 
-    // CRITICAL: Log exactly what we're sending to Google Calendar
-    console.log('[Google Calendar] FINAL EVENT DATA BEING SENT:', {
+    console.log('[Google Calendar] ⚡ SENDING TO GOOGLE:', {
       summary: event.summary,
-      start: {
-        dateTime: event.start.dateTime,
-        timeZone: event.start.timeZone,
-        // Verify what Google Calendar will receive
-        willShowAs: `Google Calendar will show this as: ${event.start.dateTime} ${event.start.timeZone}`
-      },
-      end: {
-        dateTime: event.end.dateTime,
-        timeZone: event.end.timeZone
-      },
-      location: event.location
+      startDateTime: event.start.dateTime,
+      startTimeZone: event.start.timeZone,
+      endDateTime: event.end.dateTime,
+      endTimeZone: event.end.timeZone,
     });
-    
-    // Double-check: If we're sending 07:00:00, it will show as 7:00 AM Manila time
-    // If we're sending 15:00:00, it will show as 3:00 PM Manila time
-    const startHour = parseInt(event.start.dateTime.split('T')[1].split(':')[0]);
-    const checkUTCHours = startTime.getUTCHours();
-    if (startHour === 7 && checkUTCHours === 7) {
-      console.error('[Google Calendar] ERROR: Sending UTC time (07:00) instead of Manila time (15:00)!');
-      console.error('[Google Calendar] Conversion did not work! UTC hours:', checkUTCHours, 'Manila hours:', startHour);
-    }
     
     const response = await calendar.events.insert({
       calendarId: 'primary',
@@ -257,31 +153,98 @@ ${scheduleData.researchTitle ? `Research: ${scheduleData.researchTitle}` : ''}
       sendUpdates: 'all',
     });
 
-    console.log('[Google Calendar] Response from Google Calendar API:', {
-      eventId: response.data.id,
-      start: response.data.start,
-      end: response.data.end,
-      startDateTime: response.data.start.dateTime,
-      startTimeZone: response.data.start.timeZone,
-      htmlLink: response.data.htmlLink
-    });
-    
-    // Verify what Google Calendar actually stored
-    const responseStartHour = response.data.start.dateTime 
-      ? parseInt(response.data.start.dateTime.split('T')[1]?.split(':')[0] || '0')
-      : null;
-    console.log('[Google Calendar] Event stored in Google Calendar with hour:', responseStartHour);
+    // Extract meeting link from response
+    let meetLink = null;
+    if (response.data.hangoutLink) {
+      meetLink = response.data.hangoutLink;
+    } else if (response.data.conferenceData?.entryPoints) {
+      const videoEntry = response.data.conferenceData.entryPoints.find(
+        entry => entry.entryPointType === 'video' || entry.entryPointType === 'more'
+      );
+      if (videoEntry) {
+        meetLink = videoEntry.uri;
+      } else if (response.data.conferenceData.entryPoints.length > 0) {
+        meetLink = response.data.conferenceData.entryPoints[0].uri;
+      }
+    }
 
-    console.log('[Google Calendar] Event created successfully:', {
+    // If no meeting link found, try fetching the event again
+    if (!meetLink && response.data.id) {
+      try {
+        const fetchedEvent = await calendar.events.get({
+          calendarId: 'primary',
+          eventId: response.data.id,
+          conferenceDataVersion: 1
+        });
+        
+        if (fetchedEvent.data.hangoutLink) {
+          meetLink = fetchedEvent.data.hangoutLink;
+        } else if (fetchedEvent.data.conferenceData?.entryPoints) {
+          const videoEntry = fetchedEvent.data.conferenceData.entryPoints.find(
+            entry => entry.entryPointType === 'video' || entry.entryPointType === 'more'
+          );
+          if (videoEntry) {
+            meetLink = videoEntry.uri;
+          } else if (fetchedEvent.data.conferenceData.entryPoints.length > 0) {
+            meetLink = fetchedEvent.data.conferenceData.entryPoints[0].uri;
+          }
+        }
+      } catch (fetchError) {
+        console.warn('[Google Calendar] Could not fetch event for meeting link:', fetchError.message);
+      }
+    }
+
+    // Use htmlLink from Google Calendar API - this is the official link format
+    // The htmlLink should be in format: https://www.google.com/calendar/event?eid=...
+    let calendarLink = response.data.htmlLink;
+    
+    // Verify htmlLink is valid and properly formatted
+    if (!calendarLink || !calendarLink.includes('google.com/calendar/event')) {
+      console.warn('[Google Calendar] htmlLink is missing or invalid, constructing from event ID');
+      console.warn('[Google Calendar] htmlLink value:', calendarLink);
+      
+      // If htmlLink is not available or invalid, construct it from event ID
+      if (response.data.id) {
+        calendarLink = constructCalendarLink(response.data.id);
+      } else {
+        console.error('[Google Calendar] No event ID available to construct calendar link');
+        calendarLink = null;
+      }
+    } else {
+      // htmlLink is present and valid - use it directly
+      console.log('[Google Calendar] Using htmlLink from API response');
+    }
+    
+    // Log the calendar link for debugging
+    console.log('[Google Calendar] Calendar link:', {
+      htmlLink: response.data.htmlLink,
+      finalLink: calendarLink,
       eventId: response.data.id,
-      eventLink: response.data.htmlLink,
-      meetLink: response.data.hangoutLink
+      linkValid: calendarLink && calendarLink.includes('google.com/calendar/event')
+    });
+
+    console.log('[Google Calendar] ✅ SUCCESS! Event created:', {
+      eventId: response.data.id,
+      eventLink: calendarLink,
+      meetLink: meetLink || 'Not available',
+      googleStoredStart: response.data.start.dateTime,
+      googleStoredTimeZone: response.data.start.timeZone
+    });
+
+    // ✅ SUCCESS: Google Calendar event added
+    console.log('✅ [SUCCESS] Consultation successfully added to Google Calendar:', {
+      eventId: response.data.id,
+      title: scheduleData.title,
+      datetime: scheduleData.datetime,
+      googleCalendarLink: calendarLink,
+      googleMeetLink: meetLink || 'Not available',
+      timeZone: 'Asia/Manila'
     });
 
     return {
       eventId: response.data.id,
-      eventLink: response.data.htmlLink,
-      meetLink: response.data.hangoutLink,
+      eventLink: calendarLink,
+      meetLink: meetLink,
       success: true,
     };
   } catch (error) {
@@ -294,6 +257,55 @@ ${scheduleData.researchTitle ? `Research: ${scheduleData.researchTitle}` : ''}
       statusText: error.response?.statusText
     });
     throw new Error(`Failed to create calendar event: ${error.message}`);
+  }
+};
+
+/**
+ * Get calendar event link - verifies event exists and returns valid link
+ */
+export const getCalendarEventLink = async (eventId, accessToken, refreshToken, userId) => {
+  try {
+    const calendar = await getCalendarClient(userId, accessToken, refreshToken);
+    
+    // Fetch the event to get the htmlLink
+    const event = await calendar.events.get({
+      calendarId: 'primary',
+      eventId: eventId,
+    });
+    
+    if (event.data.htmlLink) {
+      return event.data.htmlLink;
+    }
+    
+    // If htmlLink is not available, construct it
+    return constructCalendarLink(eventId);
+  } catch (error) {
+    console.error('[Google Calendar] Error fetching event for link:', error);
+    // Return constructed link as fallback
+    return constructCalendarLink(eventId);
+  }
+};
+
+/**
+ * Construct a Google Calendar event link from event ID
+ * This function is exported so it can be used in controllers
+ */
+export const constructCalendarLink = (eventId) => {
+  if (!eventId) return null;
+  
+  try {
+    // Google Calendar event IDs need to be base64url encoded
+    // Format: eventId@google.com needs to be base64url encoded
+    const base64EventId = Buffer.from(eventId)
+      .toString('base64')
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=+$/, '');
+    return `https://www.google.com/calendar/event?eid=${base64EventId}`;
+  } catch (error) {
+    console.warn('[Google Calendar] Error constructing calendar link:', error);
+    // Fallback: use URL encoding
+    return `https://www.google.com/calendar/event?eid=${encodeURIComponent(eventId)}`;
   }
 };
 
@@ -320,22 +332,47 @@ export const updateCalendarEvent = async (eventId, updates, accessToken, refresh
 
     if (updates.datetime) {
       const startTime = new Date(updates.datetime);
-      const endTime = new Date(startTime.getTime() + (updates.duration || 60) * 60000);
       
-      // Use the shared formatDateTimeForManila function
+      if (isNaN(startTime.getTime())) {
+        throw new Error(`Invalid datetime: ${updates.datetime}`);
+      }
+      
+      const durationMs = (updates.duration || 30) * 60000;
+      const endTime = new Date(startTime.getTime() + durationMs);
+
+      // Convert UTC time to Manila timezone format for Google Calendar
+      const formatDateTimeForManila = (date) => {
+        // The date object from database is in UTC
+        // Manila is UTC+8, so we add 8 hours to get Manila time
+        const manilaOffsetMs = 8 * 60 * 60 * 1000; // 8 hours in milliseconds
+        const manilaTime = new Date(date.getTime() + manilaOffsetMs);
+        
+        // Format as YYYY-MM-DDTHH:mm:ss (no Z, no milliseconds)
+        const year = manilaTime.getUTCFullYear();
+        const month = String(manilaTime.getUTCMonth() + 1).padStart(2, '0');
+        const day = String(manilaTime.getUTCDate()).padStart(2, '0');
+        const hours = String(manilaTime.getUTCHours()).padStart(2, '0');
+        const minutes = String(manilaTime.getUTCMinutes()).padStart(2, '0');
+        const seconds = String(manilaTime.getUTCSeconds()).padStart(2, '0');
+        
+        return `${year}-${month}-${day}T${hours}:${minutes}:${seconds}`;
+      };
+      
       updateData.start = {
-        dateTime: formatDateTimeForManila(startTime),
+        dateTime: formatDateTimeForManila(startTime),  // Manila timezone format
         timeZone: 'Asia/Manila',
       };
       updateData.end = {
-        dateTime: formatDateTimeForManila(endTime),
+        dateTime: formatDateTimeForManila(endTime),   // Manila timezone format
         timeZone: 'Asia/Manila',
       };
 
-      console.log('[Google Calendar] Update datetime conversion:', {
-        originalUTC: startTime.toISOString(),
-        convertedManila: updateData.start.dateTime,
-        timeZone: 'Asia/Manila'
+      console.log('[Google Calendar] Update datetime:', {
+        inputDatetime: updates.datetime,
+        startTimeUTC: startTime.toISOString(),
+        endTimeUTC: endTime.toISOString(),
+        startTimeManila: formatDateTimeForManila(startTime),
+        endTimeManila: formatDateTimeForManila(endTime),
       });
     }
 
@@ -350,14 +387,35 @@ export const updateCalendarEvent = async (eventId, updates, accessToken, refresh
       sendUpdates: 'all',
     });
 
+    // Extract meeting link
+    let meetLink = null;
+    if (response.data.hangoutLink) {
+      meetLink = response.data.hangoutLink;
+    } else if (response.data.conferenceData?.entryPoints) {
+      const videoEntry = response.data.conferenceData.entryPoints.find(
+        entry => entry.entryPointType === 'video' || entry.entryPointType === 'more'
+      );
+      if (videoEntry) {
+        meetLink = videoEntry.uri;
+      } else if (response.data.conferenceData.entryPoints.length > 0) {
+        meetLink = response.data.conferenceData.entryPoints[0].uri;
+      }
+    }
+
+    console.log('[Google Calendar] Event updated successfully:', {
+      eventId: response.data.id,
+      eventLink: response.data.htmlLink,
+      meetLink: meetLink
+    });
+
     return {
       eventId: response.data.id,
       eventLink: response.data.htmlLink,
-      meetLink: response.data.hangoutLink,
+      meetLink: meetLink,
       success: true,
     };
   } catch (error) {
-    console.error('Error updating calendar event:', error);
+    console.error('[Google Calendar] Error updating event:', error);
     throw new Error(`Failed to update calendar event: ${error.message}`);
   }
 };
@@ -375,9 +433,11 @@ export const deleteCalendarEvent = async (eventId, accessToken, refreshToken, us
       sendUpdates: 'all',
     });
 
+    console.log('[Google Calendar] Event deleted successfully:', eventId);
+
     return { success: true, message: 'Event deleted successfully' };
   } catch (error) {
-    console.error('Error deleting calendar event:', error);
+    console.error('[Google Calendar] Error deleting event:', error);
     throw new Error(`Failed to delete calendar event: ${error.message}`);
   }
 };
@@ -397,11 +457,15 @@ export const getCalendarEvents = async (startDate, endDate, accessToken, refresh
       orderBy: 'startTime',
     });
 
+    console.log('[Google Calendar] Fetched events:', {
+      count: response.data.items?.length || 0,
+      dateRange: `${startDate.toISOString()} to ${endDate.toISOString()}`
+    });
+
     return response.data.items || [];
   } catch (error) {
-    console.error('Error fetching calendar events:', error);
+    console.error('[Google Calendar] Error fetching events:', error);
     throw new Error(`Failed to fetch calendar events: ${error.message}`);
   }
 };
-
-
+  

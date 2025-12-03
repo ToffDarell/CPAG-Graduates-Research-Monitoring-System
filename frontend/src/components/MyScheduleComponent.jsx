@@ -3,6 +3,7 @@ import { FaCalendar, FaCheckCircle, FaClock, FaTimes as FaClose, FaTimesCircle, 
 import { Calendar, momentLocalizer } from 'react-big-calendar';
 import moment from 'moment';
 import axios from "axios";
+import { showError } from "../utils/sweetAlert";
 import 'react-big-calendar/lib/css/react-big-calendar.css';
 
 const localizer = momentLocalizer(moment);
@@ -14,6 +15,7 @@ const MySchedule = ({ schedules, onRefresh }) => {
   const [selectedEvent, setSelectedEvent] = useState(null);
   const [showEventModal, setShowEventModal] = useState(false);
   const [showRequestModal, setShowRequestModal] = useState(false);
+  const [showCustomRequestModal, setShowCustomRequestModal] = useState(false);
   const [availableSlots, setAvailableSlots] = useState([]);
   const [adviserInfo, setAdviserInfo] = useState(null);
   const [selectedSlot, setSelectedSlot] = useState(null);
@@ -21,6 +23,16 @@ const MySchedule = ({ schedules, onRefresh }) => {
   const [message, setMessage] = useState("");
   const [successMessage, setSuccessMessage] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
+  // Custom request form state
+  const [customRequest, setCustomRequest] = useState({
+    title: "",
+    description: "",
+    datetime: "",
+    duration: 60,
+    location: "",
+    message: "",
+    consultationType: "face-to-face"
+  });
   const [showFilters, setShowFilters] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [filters, setFilters] = useState({
@@ -73,6 +85,43 @@ const MySchedule = ({ schedules, onRefresh }) => {
     }
   };
 
+  const handleCreateCustomRequest = async () => {
+    setLoading(true);
+    setErrorMessage("");
+    try {
+      const token = localStorage.getItem('token');
+      const res = await axios.post('/api/student/create-consultation-request', {
+        title: customRequest.title,
+        description: customRequest.description,
+        datetime: customRequest.datetime,
+        duration: customRequest.duration,
+        location: customRequest.location,
+        message: customRequest.message,
+        consultationType: customRequest.consultationType
+      }, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+
+      setSuccessMessage(res.data.message || "Custom consultation request created successfully!");
+      setShowCustomRequestModal(false);
+      setCustomRequest({
+        title: "",
+        description: "",
+        datetime: "",
+        duration: 60,
+        location: "",
+        message: "",
+        consultationType: "face-to-face"
+      });
+      onRefresh && onRefresh();
+    } catch (error) {
+      console.error('Error creating custom consultation request:', error);
+      setErrorMessage(error.response?.data?.message || 'Failed to create custom consultation request');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleExportICS = async (scheduleId) => {
     try {
       const token = localStorage.getItem('token');
@@ -91,7 +140,7 @@ const MySchedule = ({ schedules, onRefresh }) => {
       window.URL.revokeObjectURL(url);
     } catch (error) {
       console.error('Error exporting schedule:', error);
-      alert('Error exporting schedule to calendar');
+      showError('Error', 'Error exporting schedule to calendar');
     }
   };
 
@@ -326,14 +375,24 @@ const MySchedule = ({ schedules, onRefresh }) => {
             Filter
           </button>
 
-          {/* Request Consultation Button */}
+          {/* Show Consultation Slot Button */}
           <button
             onClick={fetchAvailableSlots}
             disabled={loading}
             className="px-4 py-2 bg-[#7C1D23] text-white rounded-md hover:bg-[#5a1519] transition-colors text-sm font-medium disabled:opacity-50"
           >
             <FaCalendar className="inline mr-2" />
-            {loading ? "Loading..." : "Request Consultation"}
+            {loading ? "Loading..." : "Show Consultation Slot"}
+          </button>
+
+          {/* Create Custom Request Button */}
+          <button
+            onClick={() => setShowCustomRequestModal(true)}
+            disabled={loading}
+            className="px-4 py-2 bg-[#2563eb] text-white rounded-md hover:bg-[#1d4ed8] transition-colors text-sm font-medium disabled:opacity-50"
+          >
+            <FaCalendar className="inline mr-2" />
+            Create Custom Request
           </button>
         </div>
       </div>
@@ -766,7 +825,7 @@ const MySchedule = ({ schedules, onRefresh }) => {
             <div className="bg-gray-50 rounded-lg border border-gray-200 p-8">
               <FaCalendar className="mx-auto h-12 w-12 text-gray-400 mb-3" />
               <p className="text-gray-500 text-center text-sm">No scheduled sessions yet.</p>
-              <p className="text-gray-400 text-center text-xs mt-1">Click "Request Consultation" to schedule a meeting with your adviser.</p>
+              <p className="text-gray-400 text-center text-xs mt-1">Click "Show Consultation Slot" to view available consultation slots from your adviser.</p>
             </div>
           )}
         </>
@@ -774,7 +833,8 @@ const MySchedule = ({ schedules, onRefresh }) => {
 
       {/* Request Consultation Modal */}
       {showRequestModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
+        // Match global modal overlay style (Dean / Export PDF-Excel)
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4 py-6">
           <div className="bg-white rounded-lg shadow-lg max-w-3xl w-full p-6 max-h-[90vh] overflow-y-auto">
             <div className="flex justify-between items-center mb-4">
               <div>
@@ -854,6 +914,186 @@ const MySchedule = ({ schedules, onRefresh }) => {
                 </div>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Create Custom Consultation Request Modal */}
+      {showCustomRequestModal && (
+        // Match global modal overlay style (Dean / Export PDF-Excel)
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4 py-6">
+          <div className="bg-white rounded-lg shadow-lg max-w-2xl w-full p-6 max-h-[90vh] overflow-y-auto">
+            <div className="flex justify-between items-center mb-4">
+              <div>
+                <h3 className="text-lg font-semibold text-gray-800">Create Custom Consultation Request</h3>
+                <p className="text-sm text-gray-600 mt-1">
+                  Request a consultation with your preferred date and time
+                </p>
+              </div>
+              <button
+                onClick={() => setShowCustomRequestModal(false)}
+                className="text-gray-500 hover:text-gray-700"
+              >
+                <FaClose className="h-6 w-6" />
+              </button>
+            </div>
+
+            {errorMessage && (
+              <div className="mb-4 bg-red-50 border-l-4 border-red-500 p-4 rounded">
+                <div className="flex items-center">
+                  <FaTimesCircle className="h-5 w-5 text-red-500 mr-3" />
+                  <p className="text-red-700 text-sm">{errorMessage}</p>
+                </div>
+              </div>
+            )}
+
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Consultation Title <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  value={customRequest.title}
+                  onChange={(e) => setCustomRequest({...customRequest, title: e.target.value})}
+                  placeholder="e.g., Chapter 1 Review, Progress Discussion"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-transparent"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Date & Time <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="datetime-local"
+                  value={customRequest.datetime}
+                  onChange={(e) => setCustomRequest({...customRequest, datetime: e.target.value})}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-transparent"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Consultation Type <span className="text-red-500">*</span>
+                </label>
+                <select
+                  value={customRequest.consultationType}
+                  onChange={(e) => {
+                    const newType = e.target.value;
+                    setCustomRequest({
+                      ...customRequest, 
+                      consultationType: newType,
+                      location: newType === "online" ? "Online" : customRequest.location
+                    });
+                  }}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-transparent"
+                  required
+                >
+                  <option value="face-to-face">Face-to-Face</option>
+                  <option value="online">Online</option>
+                </select>
+                {customRequest.consultationType === "online" && (
+                  <p className="text-xs text-blue-600 mt-1">
+                    A Google Meet link will be automatically generated if your adviser has Google Calendar connected.
+                  </p>
+                )}
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Duration (minutes)
+                  </label>
+                  <input
+                    type="number"
+                    value={customRequest.duration}
+                    onChange={(e) => setCustomRequest({...customRequest, duration: parseInt(e.target.value) || 60})}
+                    min="15"
+                    max="240"
+                    step="15"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-transparent"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Location <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={customRequest.location}
+                    onChange={(e) => setCustomRequest({...customRequest, location: e.target.value})}
+                    placeholder={customRequest.consultationType === "online" ? "Will be set to 'Online'" : "e.g., Room 101"}
+                    disabled={customRequest.consultationType === "online"}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-transparent disabled:bg-gray-100 disabled:cursor-not-allowed"
+                    required
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Description
+                </label>
+                <textarea
+                  value={customRequest.description}
+                  onChange={(e) => setCustomRequest({...customRequest, description: e.target.value})}
+                  placeholder="Brief description of what you'd like to discuss..."
+                  rows="3"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-transparent"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Additional Message (Optional)
+                </label>
+                <textarea
+                  value={customRequest.message}
+                  onChange={(e) => setCustomRequest({...customRequest, message: e.target.value})}
+                  placeholder="Any additional information or special requests..."
+                  rows="3"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-transparent"
+                />
+              </div>
+
+              <div className="flex justify-end space-x-3 pt-4">
+                <button
+                  onClick={() => {
+                    setShowCustomRequestModal(false);
+                    setCustomRequest({
+                      title: "",
+                      description: "",
+                      datetime: "",
+                      duration: 60,
+                      location: "",
+                      message: "",
+                      consultationType: "face-to-face"
+                    });
+                    setErrorMessage("");
+                  }}
+                  className="px-4 py-2 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300 transition-colors text-sm font-medium"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleCreateCustomRequest}
+                  disabled={
+                    !customRequest.title || 
+                    !customRequest.datetime || 
+                    (customRequest.consultationType === "face-to-face" && !customRequest.location) ||
+                    (customRequest.consultationType === "online" && customRequest.location !== "Online") ||
+                    loading
+                  }
+                  className="px-6 py-2 bg-[#2563eb] text-white rounded-md hover:bg-[#1d4ed8] transition-colors text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {loading ? "Creating..." : "Create Request"}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}
