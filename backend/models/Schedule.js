@@ -29,6 +29,11 @@ const scheduleSchema = new mongoose.Schema(
       type: String,
       required: true,
     },
+    consultationType: {
+      type: String,
+      enum: ["face-to-face", "online"],
+      default: "face-to-face",
+    },
     participants: [
       {
         user: {
@@ -38,7 +43,7 @@ const scheduleSchema = new mongoose.Schema(
         },
         role: {
           type: String,
-          enum: ["student", "adviser", "panel_member", "chair"],
+          enum: ["student", "adviser", "panel_member", "chair", "secretary"],
           required: true,
         },
         status: {
@@ -85,6 +90,10 @@ const scheduleSchema = new mongoose.Schema(
     calendarSynced: {
       type: Boolean,
       default: false,
+    },
+    // Rejection reason (when consultation is declined)
+    rejectionReason: {
+      type: String,
     },
   },
   { timestamps: true }

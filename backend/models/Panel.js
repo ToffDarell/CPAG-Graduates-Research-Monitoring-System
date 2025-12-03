@@ -46,7 +46,7 @@ const panelSchema = new mongoose.Schema(
         },
         role: {
           type: String,
-          enum: ["chair", "member", "external_examiner"],
+          enum: ["chair", "member", "external_examiner", "secretary"],
           required: true,
         },
         status: {
@@ -176,6 +176,16 @@ const panelSchema = new mongoose.Schema(
           type: String,
           required: true,
         },
+        driveFileId: String,
+        driveFileLink: String,
+        driveFileName: String,
+        driveMimeType: String,
+        driveFolderId: String,
+        storageLocation: {
+          type: String,
+          enum: ["local", "google-drive", "local+google-drive"],
+          default: "local",
+        },
         uploadedBy: {
           type: mongoose.Schema.Types.ObjectId,
           ref: "User",
@@ -220,6 +230,15 @@ const panelSchema = new mongoose.Schema(
             changeDescription: {
               type: String,
               default: "",
+            },
+            driveFileId: String,
+            driveFileLink: String,
+            driveFileName: String,
+            driveMimeType: String,
+            driveFolderId: String,
+            storageLocation: {
+              type: String,
+              enum: ["local", "google-drive", "local+google-drive"],
             },
           },
         ],

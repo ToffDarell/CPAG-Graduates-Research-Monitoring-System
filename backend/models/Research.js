@@ -54,13 +54,35 @@ const researchSchema = new mongoose.Schema(
           enum: ["proposal", "chapter1", "chapter2", "chapter3", "compliance", "other"],
           default: "other",
         },
+        partName: { 
+          type: String, 
+          default: null // null means full chapter upload, string means specific part
+        },
+        version: { 
+          type: Number, 
+          default: 1 // Version number for this part (auto-incremented per part)
+        },
         status: {
           type: String,
           enum: ["pending", "approved", "rejected", "revision"],
           default: "pending",
         },
+        feedback: { 
+          type: String, 
+          default: null // Adviser feedback for this submission
+        },
         uploadedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
         uploadedAt: { type: Date, default: Date.now },
+        driveFileId: { type: String },
+        driveFileLink: { type: String },
+        driveFileName: { type: String },
+        driveMimeType: { type: String },
+        driveFolderId: { type: String },
+        storageLocation: {
+          type: String,
+          enum: ["local", "google-drive", "local+google-drive"],
+          default: "local",
+        },
       },
     ],
 
@@ -76,6 +98,10 @@ const researchSchema = new mongoose.Schema(
     archivedBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
+    },
+    statusBeforeArchive: {
+      type: String,
+      enum: ["pending", "approved", "rejected", "in-progress", "for-revision", "completed"],
     },
     
     // Sharing with Dean
