@@ -6,6 +6,7 @@ import User from "../models/User.js";
 import Activity from "../models/Activity.js";
 import Panel from "../models/Panel.js";
 import Document from "../models/Document.js";
+import mongoose from "mongoose";
 import fs from "fs";
 import path from "path";
 import { 
@@ -13,6 +14,33 @@ import {
   updateCalendarEvent,
   deleteCalendarEvent 
 } from "../utils/googleCalendar.js";
+
+// Helper function to send email notification
+const sendNotificationEmail = async (to, subject, message, html) => {
+  try {
+    const nodemailer = await import('nodemailer');
+    const transporter = nodemailer.default.createTransport({
+      host: process.env.SMTP_HOST,
+      port: process.env.SMTP_PORT,
+      secure: false,
+      auth: {
+        user: process.env.SMTP_USER,
+        pass: process.env.SMTP_PASS,
+      },
+    });
+
+    await transporter.sendMail({
+      from: process.env.SMTP_FROM || process.env.SMTP_USER,
+      to,
+      subject,
+      text: message,
+      html: html || message,
+    });
+  } catch (error) {
+    console.error("Error sending notification email:", error);
+    // Don't throw error, just log it
+  }
+};
 
 // Get student submissions
 export const getStudentSubmissions = async (req, res) => {
@@ -35,7 +63,6 @@ export const updateThesisStatus = async (req, res) => {
   try {
     const { id } = req.params;
     const { status, stage, progress } = req.body;
-
 
     const oldResearch = await Research.findById(id);
     if(!oldResearch) {
@@ -75,7 +102,6 @@ export const updateThesisStatus = async (req, res) => {
 export const approveRejectSubmission = async (req, res) => {
   try {
     const { researchId, fileId, action, message } = req.body;
-    
     const research = await Research.findById(researchId)
       .populate("students", "name email");
     if (!research) {
@@ -96,13 +122,13 @@ export const approveRejectSubmission = async (req, res) => {
 
     // Prepare file information from form
     let fileInfo = null;
-    console.log('[APPROVE SUBMISSION] Form file info:', {
-      hasFilepath: !!form.filepath,
-      filepath: form.filepath,
-      filename: form.filename,
-      formType: form.type
-    });
-    
+  console.log('[APPROVE SUBMISSION] Form file info:', {
+    hasFilepath: !!form.filepath,
+    filepath: form.filepath,
+    filename: form.filename,
+    formType: form.type
+  });
+  
     if (form.filepath) {
       // Get file stats if file exists
       let filesize = null;
@@ -183,6 +209,80 @@ export const approveRejectSubmission = async (req, res) => {
       }
     });
 
+    // Get adviser name for email
+    const adviserName = req.user.name || "Your Adviser";
+    const formTypeLabel = form.type ? form.type.charAt(0).toUpperCase() + form.type.slice(1) : "Document";
+
+    // Send email notifications to all students
+    if (research.students && research.students.length > 0) {
+      for (const student of research.students) {
+        if (student.email) {
+          try {
+            if (action === "approved") {
+              // Approval email
+              await sendNotificationEmail(
+                student.email,
+                `Submission Approved: ${form.filename || formTypeLabel}`,
+                `Your ${formTypeLabel} submission for "${research.title}" has been approved by ${adviserName}.`,
+                `
+                  <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+                    <h2 style="color: #7C1D23;">Submission Approved</h2>
+                    <p>Hello ${student.name},</p>
+                    <p>Great news! Your <strong>${formTypeLabel}</strong> submission has been <strong style="color: #22c55e;">approved</strong> by ${adviserName}.</p>
+                    <div style="background-color: #f3f4f6; padding: 15px; border-radius: 8px; margin: 20px 0;">
+                      <p style="margin: 5px 0;"><strong>Research Title:</strong> ${research.title}</p>
+                      <p style="margin: 5px 0;"><strong>Document:</strong> ${form.filename || formTypeLabel}</p>
+                      <p style="margin: 5px 0;"><strong>Submission Type:</strong> ${formTypeLabel}</p>
+                      <p style="margin: 5px 0;"><strong>Status:</strong> <span style="color: #22c55e; font-weight: bold;">Approved</span></p>
+                    </div>
+                    <p>You can view the details in your student dashboard.</p>
+                    <hr style="margin: 30px 0; border: none; border-top: 1px solid #ddd;" />
+                    <p style="color: #999; font-size: 12px;">This is an automated notification from the Masteral Archive and Monitoring System.</p>
+                  </div>
+                `
+              );
+            } else {
+              // Rejection email with reason
+              const rejectionReasonSection = message 
+                ? `
+                  <div style="background-color: #fee2e2; border-left: 4px solid #ef4444; padding: 15px; margin: 20px 0; border-radius: 4px;">
+                    <p style="margin: 0; font-weight: bold; color: #991b1b; margin-bottom: 10px;">Rejection Reason:</p>
+                    <p style="margin: 0; color: #333;">${message}</p>
+                  </div>
+                `
+                : '';
+
+              await sendNotificationEmail(
+                student.email,
+                `Submission Rejected: ${form.filename || formTypeLabel}`,
+                `Your ${formTypeLabel} submission for "${research.title}" has been rejected by ${adviserName}.${message ? ` Reason: ${message}` : ''}`,
+                `
+                  <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+                    <h2 style="color: #7C1D23;">Submission Rejected</h2>
+                    <p>Hello ${student.name},</p>
+                    <p>Your <strong>${formTypeLabel}</strong> submission has been <strong style="color: #ef4444;">rejected</strong> by ${adviserName}.</p>
+                    <div style="background-color: #f3f4f6; padding: 15px; border-radius: 8px; margin: 20px 0;">
+                      <p style="margin: 5px 0;"><strong>Research Title:</strong> ${research.title}</p>
+                      <p style="margin: 5px 0;"><strong>Document:</strong> ${form.filename || formTypeLabel}</p>
+                      <p style="margin: 5px 0;"><strong>Submission Type:</strong> ${formTypeLabel}</p>
+                      <p style="margin: 5px 0;"><strong>Status:</strong> <span style="color: #ef4444; font-weight: bold;">Rejected</span></p>
+                    </div>
+                    ${rejectionReasonSection}
+                    <p>Please review the feedback and make the necessary revisions. You can resubmit the document after addressing the concerns.</p>
+                    <hr style="margin: 30px 0; border: none; border-top: 1px solid #ddd;" />
+                    <p style="color: #999; font-size: 12px;">This is an automated notification from the Masteral Archive and Monitoring System.</p>
+                  </div>
+                `
+              );
+            }
+          } catch (emailError) {
+            console.error(`Error sending email to ${student.email}:`, emailError);
+            // Don't fail the request if email fails
+          }
+        }
+      }
+    }
+
     // Prepare appropriate success message
     const successMessage = action === "approved" 
       ? "Submission has been approved successfully."
@@ -195,6 +295,218 @@ export const approveRejectSubmission = async (req, res) => {
     });
   } catch (error) {
     console.error("Error in approveRejectSubmission:", error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// View chapter submission file (faculty can view student submissions)
+export const viewChapterSubmission = async (req, res) => {
+  try {
+    const { submissionId } = req.params;
+
+    const research = await Research.findOne({
+      "forms._id": submissionId,
+      adviser: req.user._id, // Faculty must be the adviser
+    })
+      .populate("students", "name email");
+
+    if (!research) {
+      return res.status(404).json({ message: "Submission not found or you do not have access to it." });
+    }
+
+    const submission = research.forms.id(submissionId);
+    if (!submission) {
+      return res.status(404).json({ message: "Submission not found." });
+    }
+
+    // Determine MIME type
+    let mimeType = submission.driveMimeType || 'application/pdf';
+    if (!mimeType || mimeType === 'application/octet-stream') {
+      const ext = path.extname(submission.filename).toLowerCase();
+      const mimeTypes = {
+        '.pdf': 'application/pdf',
+        '.doc': 'application/msword',
+        '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      };
+      mimeType = mimeTypes[ext] || 'application/pdf';
+    }
+
+    // If file is in Google Drive, download and serve it
+    if (submission.driveFileId && (submission.storageLocation === "google-drive" || submission.storageLocation === "local+google-drive")) {
+      try {
+        // Get user's Google Drive tokens
+        const user = await User.findById(req.user.id).select('driveAccessToken driveRefreshToken driveTokenExpiry');
+        
+        if (!user || !user.driveAccessToken) {
+          return res.status(400).json({ message: "Google Drive access token not found. Please reconnect your Drive account." });
+        }
+
+        const { downloadFileFromDrive } = await import("../utils/googleDrive.js");
+        const result = await downloadFileFromDrive(submission.driveFileId, user.driveAccessToken);
+        
+        // Convert stream to buffer
+        const chunks = [];
+        for await (const chunk of result.stream) {
+          chunks.push(chunk);
+        }
+        const buffer = Buffer.concat(chunks);
+        
+        // Determine MIME type from metadata
+        const fileMimeType = result.metadata.mimeType || mimeType;
+        
+        // Set appropriate headers for viewing (inline)
+        res.setHeader('Content-Type', fileMimeType);
+        res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(submission.filename || result.metadata.name || 'document')}"`);
+        res.send(buffer);
+        return;
+      } catch (error) {
+        console.error("Error downloading from Google Drive for viewing:", error);
+        // Fall back to local file if available
+        if (submission.filepath) {
+          const localPath = path.isAbsolute(submission.filepath) 
+            ? submission.filepath 
+            : path.join(process.cwd(), submission.filepath);
+          if (fs.existsSync(localPath)) {
+            // Continue to local file serving below
+          } else {
+            return res.status(500).json({ message: `Failed to retrieve file from Google Drive: ${error.message}` });
+          }
+        } else {
+          return res.status(500).json({ message: `Failed to retrieve file from Google Drive: ${error.message}` });
+        }
+      }
+    }
+
+    // Serve local file
+    let filePath;
+    if (path.isAbsolute(submission.filepath)) {
+      filePath = submission.filepath;
+    } else {
+      filePath = path.join(process.cwd(), submission.filepath);
+    }
+
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ message: "File not found on server" });
+    }
+
+    // Log activity
+    await Activity.create({
+      user: req.user.id,
+      action: "view",
+      entityType: "research",
+      entityId: research._id,
+      entityName: research.title,
+      description: `Viewed chapter submission: ${submission.filename}`,
+      metadata: {
+        researchId: research._id,
+        submissionId,
+        chapterType: submission.type,
+        filename: submission.filename,
+        studentName: research.students?.[0]?.name || "Unknown"
+      },
+      ipAddress: req.ip,
+      userAgent: req.get("user-agent"),
+    });
+
+    // Set headers for inline viewing
+    res.setHeader('Content-Type', mimeType);
+    res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(submission.filename)}"`);
+    
+    // Read file as buffer and send (better for arraybuffer requests)
+    const fileBuffer = fs.readFileSync(filePath);
+    res.send(fileBuffer);
+  } catch (error) {
+    console.error("Error viewing chapter submission:", error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Delete chapter submission (faculty can delete any submission, including approved ones)
+export const deleteChapterSubmission = async (req, res) => {
+  try {
+    const { submissionId } = req.params;
+    console.log('[DELETE SUBMISSION] Request received:', { submissionId, userId: req.user._id });
+    
+    if (!submissionId) {
+      return res.status(400).json({ message: "Submission ID is required" });
+    }
+
+    const research = await Research.findOne({
+      "forms._id": submissionId,
+      adviser: req.user._id, // Faculty must be the adviser
+    })
+      .populate("students", "name email");
+    
+    console.log('[DELETE SUBMISSION] Research found:', research ? 'Yes' : 'No');
+
+    if (!research) {
+      return res.status(404).json({ message: "Submission not found or you do not have access to it." });
+    }
+
+    const submission = research.forms.id(submissionId);
+    if (!submission) {
+      return res.status(404).json({ message: "Submission not found." });
+    }
+
+    // Store submission info for logging before deletion
+    const submissionInfo = {
+      filename: submission.filename,
+      type: submission.type,
+      version: submission.version,
+      status: submission.status,
+      partName: submission.partName,
+      studentName: research.students?.[0]?.name || "Unknown"
+    };
+
+    const filePath = submission.filepath;
+
+    // Remove the submission from the forms array
+    research.forms.pull(submissionId);
+    await research.save();
+
+    // Delete local file if it exists
+    if (filePath) {
+      try {
+        const fullPath = path.isAbsolute(filePath) 
+          ? filePath 
+          : path.join(process.cwd(), filePath);
+        if (fs.existsSync(fullPath)) {
+          fs.unlink(fullPath, (err) => {
+            if (err) {
+              console.warn("Unable to delete local file for submission:", err.message);
+            }
+          });
+        }
+      } catch (error) {
+        console.warn("Error deleting local file:", error.message);
+      }
+    }
+
+    // Log the activity
+    await Activity.create({
+      user: req.user.id,
+      action: "delete",
+      entityType: "research",
+      entityId: research._id,
+      entityName: research.title,
+      description: `Deleted ${submissionInfo.type || "chapter"} submission (Version ${submissionInfo.version || "n/a"})${submissionInfo.partName ? ` - ${submissionInfo.partName}` : ""} from student ${submissionInfo.studentName}`,
+      metadata: {
+        researchId: research._id,
+        submissionId,
+        chapterType: submissionInfo.type,
+        filename: submissionInfo.filename,
+        status: submissionInfo.status,
+        version: submissionInfo.version,
+        partName: submissionInfo.partName,
+        studentName: submissionInfo.studentName
+      },
+      ipAddress: req.ip,
+      userAgent: req.get("user-agent"),
+    });
+
+    res.json({ message: "Submission deleted successfully." });
+  } catch (error) {
+    console.error("Error deleting chapter submission:", error);
     res.status(500).json({ message: error.message });
   }
 };
@@ -673,47 +985,60 @@ export const deleteFeedback = async (req, res) => {
   try {
     const { feedbackId } = req.params;
 
+    // Validate ID format (avoid cast errors causing 500)
+    if (!mongoose.Types.ObjectId.isValid(feedbackId)) {
+      return res.status(400).json({ message: "Invalid feedback ID format." });
+    }
+
     const feedback = await Feedback.findById(feedbackId)
       .populate("student", "name email")
-      .populate("research", "title");
+      .populate("research", "title adviser");
 
     if (!feedback) {
       return res.status(404).json({ message: "Feedback not found" });
     }
 
-    // Verify authorization
-    if (feedback.adviser.toString() !== req.user.id) {
+    // Verify authorization (only the adviser who created it can delete)
+    if (!feedback.adviser || feedback.adviser.toString() !== req.user.id) {
       return res.status(403).json({ message: "Unauthorized to delete this feedback" });
     }
 
-    // Store details for logging
+    // Store details for logging (defensive: handle missing populated refs)
     const feedbackDetails = {
       id: feedback._id,
-      studentName: feedback.student.name,
-      researchTitle: feedback.research.title,
-      filename: feedback.file?.filename,
-      category: feedback.category,
-      version: feedback.version
+      studentId: feedback.student?._id,
+      studentName: feedback.student?.name || "Unknown student",
+      researchId: feedback.research?._id,
+      researchTitle: feedback.research?.title || "Unknown research",
+      filename: feedback.file?.filename || null,
+      category: feedback.category || null,
+      version: feedback.version || 1,
+      createdAt: feedback.createdAt,
+      adviserId: feedback.adviser,
     };
 
     // Delete the feedback
     await Feedback.findByIdAndDelete(feedbackId);
 
-    // Log the activity
-    await Activity.create({
-      user: req.user.id,
-      action: "delete",
-      entityType: "feedback",
-      entityId: feedbackId,
-      entityName: `Feedback for ${feedbackDetails.studentName}`,
-      description: `Deleted feedback: ${feedbackDetails.filename || 'No file'}`,
-      metadata: feedbackDetails
-    });
+    // Log the activity (don't let logging failure break delete)
+    try {
+      await Activity.create({
+        user: req.user.id,
+        action: "delete",
+        entityType: "feedback",
+        entityId: feedbackId,
+        entityName: `Feedback for ${feedbackDetails.studentName}`,
+        description: `Deleted feedback: ${feedbackDetails.filename || "No file attached"}`,
+        metadata: feedbackDetails,
+      });
+    } catch (logError) {
+      console.error("Error logging feedback delete activity:", logError);
+    }
 
     res.json({ message: "Feedback deleted successfully" });
   } catch (error) {
     console.error("Error deleting feedback:", error);
-    res.status(500).json({ message: error.message });
+    res.status(500).json({ message: "Failed to delete feedback. Please try again." });
   }
 };
 
@@ -738,21 +1063,98 @@ export const getConsultationSchedules = async (req, res) => {
 // Create consultation slot (Faculty Adviser)
 export const createConsultationSlot = async (req, res) => {
   try {
-    const { title, description, datetime, duration, location, research, syncToCalendar } = req.body;
+    const { title, description, datetime, duration, location, research, syncToCalendar, consultationType } = req.body;
+
+    console.log('[CREATE CONSULTATION] Received request:', {
+      title,
+      description,
+      datetime,
+      datetimeType: typeof datetime,
+      duration,
+      location,
+      research,
+      syncToCalendar,
+      bodyKeys: Object.keys(req.body)
+    });
 
     // Validate required fields
+    if (!title || !title.trim()) {
+      return res.status(400).json({ message: "Title is required" });
+    }
+    
+    if (!location || !location.trim()) {
+      return res.status(400).json({ message: "Location is required" });
+    }
+    
     if (!datetime) {
       return res.status(400).json({ message: "Date and time are required" });
     }
 
-    // Check for double-booking (prevent overlapping time slots)
-    const startTime = new Date(datetime);
+    // Parse datetime as Manila time (since the system is for Philippine users)
+    // The datetime from frontend should be treated as Manila local time and converted to UTC for storage
+    let startTime;
+    
+    if (typeof datetime === 'string') {
+      // If it's an ISO string with timezone (Z or +/-), parse directly
+      if (datetime.includes('Z') || datetime.match(/[+-]\d{2}:\d{2}$/)) {
+        startTime = new Date(datetime);
+      } else if (datetime.includes('T') && !datetime.includes('Z') && !datetime.includes('+')) {
+        // This is datetime-local format (YYYY-MM-DDTHH:mm) - treat as Manila time
+        // Parse as Manila timezone explicitly and convert to UTC
+        // Example: "2025-11-29T03:00" should be interpreted as 3:00 AM Manila time = 2025-11-28 19:00 UTC
+        const [datePart, timePart] = datetime.split('T');
+        const [year, month, day] = datePart.split('-').map(Number);
+        const [hour, minute] = timePart.split(':').map(Number);
+        
+        // Create a date object treating the input as Manila time (UTC+8)
+        // We'll create it as UTC first, then subtract 8 hours to get the correct UTC time
+        // Create date string in ISO format with Manila timezone offset
+        const manilaTimeString = `${year}-${month.toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}T${hour.toString().padStart(2, '0')}:${(minute || 0).toString().padStart(2, '0')}:00+08:00`;
+        startTime = new Date(manilaTimeString);
+        
+        // Fallback if above doesn't work: manually calculate UTC
+        if (isNaN(startTime.getTime())) {
+          // Manila is UTC+8, so subtract 8 hours (8 * 60 * 60 * 1000 ms) to get UTC
+          const manilaDate = new Date(Date.UTC(year, month - 1, day, hour, minute || 0, 0, 0));
+          const manilaOffsetMs = 8 * 60 * 60 * 1000; // 8 hours in milliseconds
+          startTime = new Date(manilaDate.getTime() - manilaOffsetMs);
+        }
+        
+        console.log('[CREATE CONSULTATION] Datetime parsing:', {
+          input: datetime,
+          parsedAsManila: `${year}-${month.toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}T${hour.toString().padStart(2, '0')}:${(minute || 0).toString().padStart(2, '0')}:00 (Manila UTC+8)`,
+          utcEquivalent: startTime.toISOString(),
+          manilaEquivalent: startTime.toLocaleString('en-US', { 
+            timeZone: 'Asia/Manila', 
+            hour12: false,
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit'
+          })
+        });
+      } else {
+        startTime = new Date(datetime);
+      }
+    } else {
+      // Already a Date object
+      startTime = new Date(datetime);
+    }
     
     // Validate that datetime is a valid date
     if (isNaN(startTime.getTime())) {
-      return res.status(400).json({ message: "Invalid date format. Please select a valid date and time." });
+      console.error('[CREATE CONSULTATION] Invalid datetime received:', {
+        input: datetime,
+        inputType: typeof datetime,
+        parsedStartTime: startTime
+      });
+      return res.status(400).json({ 
+        message: "Invalid date format. Please select a valid date and time.",
+        received: datetime
+      });
     }
-
+    
     const endTime = new Date(startTime.getTime() + (duration || 60) * 60000);
 
     const overlappingSchedules = await Schedule.find({
@@ -779,7 +1181,8 @@ export const createConsultationSlot = async (req, res) => {
       description: description || "Available for consultation",
       datetime: startTime,
       duration: duration || 60,
-      location,
+      location: consultationType === "online" ? "Online" : location,
+      consultationType: consultationType || "face-to-face",
       participants: [
         {
           user: req.user.id,
@@ -856,6 +1259,16 @@ export const createConsultationSlot = async (req, res) => {
           meetLink: calendarEvent.meetLink
         });
 
+        // ✅ SUCCESS: Google Calendar event added
+        console.log('✅ [SUCCESS] Consultation added to Google Calendar:', {
+          scheduleId: schedule._id,
+          scheduleTitle: schedule.title,
+          googleCalendarEventId: calendarEvent.eventId,
+          googleCalendarLink: calendarEvent.eventLink,
+          googleMeetLink: calendarEvent.meetLink,
+          datetime: schedule.datetime
+        });
+
         // Update schedule with Google Calendar event details
         schedule.googleCalendarEventId = calendarEvent.eventId;
         schedule.googleCalendarLink = calendarEvent.eventLink;
@@ -894,7 +1307,61 @@ export const createConsultationSlot = async (req, res) => {
       schedule.calendarSynced = false;
     }
 
+    // If consultation type is "online" and no Meet link was created via calendar sync, create one manually
+    if (schedule.consultationType === "online" && !schedule.googleMeetLink && user?.calendarConnected && user?.googleAccessToken && user?.googleRefreshToken) {
+      try {
+        console.log('[CREATE CONSULTATION SLOT] Creating Google Meet link for online consultation');
+        
+        // Collect attendee emails
+        const attendeeEmails = [];
+        if (researchData && researchData.students) {
+          attendeeEmails.push(...researchData.students.map(s => s.email));
+        }
+
+        // Create a minimal calendar event just to get the Meet link
+        calendarEvent = await createConsultationEvent(
+          {
+            title: schedule.title,
+            description: schedule.description,
+            datetime: schedule.datetime,
+            duration: schedule.duration,
+            location: "Online",
+            type: schedule.type,
+            researchTitle: researchData?.title,
+            attendeeEmails,
+          },
+          user.googleAccessToken,
+          user.googleRefreshToken,
+          user._id.toString()
+        );
+
+        if (calendarEvent.meetLink) {
+          schedule.googleMeetLink = calendarEvent.meetLink;
+          schedule.googleCalendarEventId = calendarEvent.eventId;
+          schedule.googleCalendarLink = calendarEvent.eventLink;
+          schedule.calendarSynced = true;
+          console.log('[CREATE CONSULTATION SLOT] Google Meet link created:', calendarEvent.meetLink);
+        }
+      } catch (error) {
+        console.error('[CREATE CONSULTATION SLOT] Error creating Google Meet link:', error);
+        // Continue without Meet link
+      }
+    }
+
     await schedule.save();
+
+    // ✅ SUCCESS: Consultation schedule created
+    console.log('✅ [SUCCESS] Consultation schedule created successfully:', {
+      scheduleId: schedule._id,
+      title: schedule.title,
+      datetime: schedule.datetime,
+      duration: schedule.duration,
+      location: schedule.location,
+      createdBy: req.user.id,
+      calendarSynced: schedule.calendarSynced,
+      googleCalendarEventId: schedule.googleCalendarEventId || null,
+      googleMeetLink: schedule.googleMeetLink || null
+    });
 
     // Log the activity
     await Activity.create({
@@ -913,6 +1380,105 @@ export const createConsultationSlot = async (req, res) => {
         googleMeetLink: schedule.googleMeetLink
       }
     });
+
+    // Send email notification to students associated with the research
+    if (researchData && researchData.students && researchData.students.length > 0) {
+      const adviserName = req.user.name || "Your Adviser";
+      const formattedDate = new Date(schedule.datetime).toLocaleString('en-US', {
+        weekday: 'long',
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+      });
+
+      // Send email to each student
+      for (const student of researchData.students) {
+        if (student.email) {
+          await sendNotificationEmail(
+            student.email,
+            `New Consultation Slot Available: ${schedule.title}`,
+            `${adviserName} has created a new consultation slot available for booking.`,
+            `
+              <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+                <h2 style="color: #7C1D23;">New Consultation Slot Available</h2>
+                <p>Hello ${student.name},</p>
+                <p><strong>${adviserName}</strong> has created a new consultation slot that is now available for booking.</p>
+                <div style="background-color: #f0f9ff; padding: 15px; margin: 20px 0; border-left: 4px solid #2563eb; border-radius: 4px;">
+                  <p style="margin: 8px 0;"><strong style="color: #333;">Consultation Title:</strong> ${schedule.title}</p>
+                  <p style="margin: 8px 0;"><strong style="color: #333;">Date & Time:</strong> ${formattedDate}</p>
+                  <p style="margin: 8px 0;"><strong style="color: #333;">Duration:</strong> ${schedule.duration || 60} minutes</p>
+                  <p style="margin: 8px 0;"><strong style="color: #333;">Location:</strong> ${schedule.location}</p>
+                ${schedule.description ? `<p style="margin: 8px 0;"><strong style="color: #333;">Description:</strong> ${schedule.description}</p>` : ''}
+                ${schedule.consultationType === "online" && schedule.googleMeetLink ? `<p style="margin: 8px 0;"><strong style="color: #333;">Virtual Meeting:</strong> <a href="${schedule.googleMeetLink}" style="color: #2563eb; text-decoration: none;">${schedule.googleMeetLink}</a></p>` : ''}
+                </div>
+                <p>You can request this consultation slot from your dashboard. Log in to view and request available consultation slots.</p>
+                <hr style="margin: 30px 0; border: none; border-top: 1px solid #ddd;" />
+                <p style="color: #999; font-size: 12px;">This is an automated notification from the Masteral Archive and Monitoring System.</p>
+              </div>
+            `
+          );
+        }
+      }
+    } else if (!research) {
+      // If no specific research, find all students with this adviser
+      const allResearchWithAdviser = await Research.find({ adviser: req.user.id })
+        .populate("students", "name email");
+      
+      const allStudents = new Set();
+      allResearchWithAdviser.forEach(r => {
+        if (r.students) {
+          r.students.forEach(s => allStudents.add(s._id.toString()));
+        }
+      });
+
+      const uniqueStudents = Array.from(allStudents).map(id => 
+        allResearchWithAdviser
+          .flatMap(r => r.students || [])
+          .find(s => s._id.toString() === id)
+      ).filter(Boolean);
+
+      if (uniqueStudents.length > 0) {
+        const adviserName = req.user.name || "Your Adviser";
+        const formattedDate = new Date(schedule.datetime).toLocaleString('en-US', {
+          weekday: 'long',
+          year: 'numeric',
+          month: 'long',
+          day: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit'
+        });
+
+        for (const student of uniqueStudents) {
+          if (student.email) {
+            await sendNotificationEmail(
+              student.email,
+              `New Consultation Slot Available: ${schedule.title}`,
+              `${adviserName} has created a new consultation slot available for booking.`,
+              `
+                <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+                  <h2 style="color: #7C1D23;">New Consultation Slot Available</h2>
+                  <p>Hello ${student.name},</p>
+                  <p><strong>${adviserName}</strong> has created a new consultation slot that is now available for booking.</p>
+                  <div style="background-color: #f0f9ff; padding: 15px; margin: 20px 0; border-left: 4px solid #2563eb; border-radius: 4px;">
+                    <p style="margin: 8px 0;"><strong style="color: #333;">Consultation Title:</strong> ${schedule.title}</p>
+                    <p style="margin: 8px 0;"><strong style="color: #333;">Date & Time:</strong> ${formattedDate}</p>
+                    <p style="margin: 8px 0;"><strong style="color: #333;">Duration:</strong> ${schedule.duration || 60} minutes</p>
+                    <p style="margin: 8px 0;"><strong style="color: #333;">Location:</strong> ${schedule.location}</p>
+                ${schedule.description ? `<p style="margin: 8px 0;"><strong style="color: #333;">Description:</strong> ${schedule.description}</p>` : ''}
+                ${schedule.consultationType === "online" && schedule.googleMeetLink ? `<p style="margin: 8px 0;"><strong style="color: #333;">Virtual Meeting:</strong> <a href="${schedule.googleMeetLink}" style="color: #2563eb; text-decoration: none;">${schedule.googleMeetLink}</a></p>` : ''}
+                  </div>
+                  <p>You can request this consultation slot from your dashboard. Log in to view and request available consultation slots.</p>
+                  <hr style="margin: 30px 0; border: none; border-top: 1px solid #ddd;" />
+                  <p style="color: #999; font-size: 12px;">This is an automated notification from the Masteral Archive and Monitoring System.</p>
+                </div>
+              `
+            );
+          }
+        }
+      }
+    }
 
     const populatedSchedule = await Schedule.findById(schedule._id)
       .populate("participants.user", "name email")
@@ -947,7 +1513,7 @@ export const createConsultationSlot = async (req, res) => {
 // Update consultation schedule status (approve/decline request)
 export const updateConsultationStatus = async (req, res) => {
   try {
-    const { scheduleId, action, participantId } = req.body; // action: "approve" or "decline"
+    const { scheduleId, action, participantId, rejectionReason } = req.body; // action: "approve" or "decline"
 
     const schedule = await Schedule.findById(scheduleId)
       .populate("participants.user", "name email")
@@ -979,6 +1545,79 @@ export const updateConsultationStatus = async (req, res) => {
       studentParticipant.status = "confirmed";
       schedule.status = "confirmed";
       
+      // Sync to Google Calendar if adviser has calendar connected
+      const adviser = await User.findById(req.user.id);
+      let calendarEvent = null;
+      
+      if (adviser?.calendarConnected && adviser?.googleAccessToken && adviser?.googleRefreshToken) {
+        try {
+          console.log('[APPROVE CONSULTATION] Syncing to Google Calendar');
+          
+          // Collect attendee emails
+          const attendeeEmails = [];
+          if (studentParticipant.user?.email) {
+            attendeeEmails.push(studentParticipant.user.email);
+          }
+          if (adviser.email) {
+            attendeeEmails.push(adviser.email);
+          }
+
+          // Create Google Calendar event
+          const { createConsultationEvent } = await import("../utils/googleCalendar.js");
+          
+          calendarEvent = await createConsultationEvent(
+            {
+              title: schedule.title,
+              description: schedule.description || `Consultation with ${studentParticipant.user.name}`,
+              datetime: schedule.datetime,
+              duration: schedule.duration || 60,
+              location: schedule.location,
+              type: schedule.type,
+              researchTitle: schedule.research?.title,
+              attendeeEmails,
+            },
+            adviser.googleAccessToken,
+            adviser.googleRefreshToken,
+            adviser._id.toString()
+          );
+
+          // Update schedule with Google Calendar event details
+          if (calendarEvent.eventId) {
+            schedule.googleCalendarEventId = calendarEvent.eventId;
+            // Use the eventLink from calendarEvent, or construct it if not available
+            if (calendarEvent.eventLink) {
+              schedule.googleCalendarLink = calendarEvent.eventLink;
+            } else {
+              // Construct calendar link from event ID using proper base64url encoding
+              const { constructCalendarLink } = await import("../utils/googleCalendar.js");
+              schedule.googleCalendarLink = constructCalendarLink(calendarEvent.eventId);
+            }
+            schedule.calendarSynced = true;
+            
+            // If consultation is online or Meet link was created, save it
+            if (calendarEvent.meetLink) {
+              schedule.googleMeetLink = calendarEvent.meetLink;
+            } else if (schedule.consultationType === "online" && !schedule.googleMeetLink) {
+              // If online but no Meet link, try to get it from the event
+              console.log('[APPROVE CONSULTATION] Online consultation - Meet link should be in calendar event');
+            }
+            
+            console.log('[APPROVE CONSULTATION] Successfully synced to Google Calendar:', {
+              eventId: calendarEvent.eventId,
+              eventLink: schedule.googleCalendarLink,
+              meetLink: calendarEvent.meetLink
+            });
+          }
+        } catch (error) {
+          console.error('[APPROVE CONSULTATION] Error syncing to Google Calendar:', error);
+          // Don't fail the approval if calendar sync fails
+          schedule.calendarSynced = false;
+        }
+      } else {
+        console.log('[APPROVE CONSULTATION] Google Calendar not connected, skipping sync');
+        schedule.calendarSynced = false;
+      }
+      
       // Log the activity
       await Activity.create({
         user: req.user.id,
@@ -986,16 +1625,68 @@ export const updateConsultationStatus = async (req, res) => {
         entityType: "schedule",
         entityId: schedule._id,
         entityName: schedule.title,
-        description: `Approved consultation request from ${studentParticipant.user.name}`,
+        description: `Approved consultation request from ${studentParticipant.user.name}${calendarEvent ? ' (synced to Google Calendar)' : ''}`,
         metadata: {
           studentId: studentParticipant.user._id,
           studentName: studentParticipant.user.name,
           datetime: schedule.datetime,
-          location: schedule.location
+          location: schedule.location,
+          calendarSynced: schedule.calendarSynced,
+          googleMeetLink: schedule.googleMeetLink
         }
       });
+
+      // Save schedule first to ensure calendar sync data is persisted
+      await schedule.save();
+      
+      // Fetch updated schedule with calendar info
+      const scheduleWithCalendar = await Schedule.findById(scheduleId);
+
+      // Send email notification to student about approval
+      if (studentParticipant.user && studentParticipant.user.email) {
+        const adviserName = req.user.name || "Your Adviser";
+        const formattedDate = new Date(schedule.datetime).toLocaleString('en-US', {
+          weekday: 'long',
+          year: 'numeric',
+          month: 'long',
+          day: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit'
+        });
+
+        await sendNotificationEmail(
+          studentParticipant.user.email,
+          `Consultation Request Approved: ${schedule.title}`,
+          `Your consultation request has been approved by ${adviserName}.`,
+          `
+            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+              <h2 style="color: #7C1D23;">Consultation Request Approved</h2>
+              <p>Hello ${studentParticipant.user.name},</p>
+              <p>Great news! Your consultation request has been <strong style="color: #22c55e;">approved</strong> by ${adviserName}.</p>
+              <div style="background-color: #f0fdf4; padding: 15px; margin: 20px 0; border-left: 4px solid #22c55e; border-radius: 4px;">
+                <p style="margin: 8px 0;"><strong style="color: #333;">Consultation Title:</strong> ${schedule.title}</p>
+                <p style="margin: 8px 0;"><strong style="color: #333;">Date & Time:</strong> ${formattedDate}</p>
+                <p style="margin: 8px 0;"><strong style="color: #333;">Duration:</strong> ${schedule.duration || 60} minutes</p>
+                <p style="margin: 8px 0;"><strong style="color: #333;">Location:</strong> ${schedule.location}</p>
+                ${schedule.description ? `<p style="margin: 8px 0;"><strong style="color: #333;">Description:</strong> ${schedule.description}</p>` : ''}
+                ${scheduleWithCalendar?.consultationType === "online" && scheduleWithCalendar?.googleMeetLink ? `<p style="margin: 8px 0;"><strong style="color: #333;">Virtual Meeting:</strong> <a href="${scheduleWithCalendar.googleMeetLink}" style="color: #2563eb; text-decoration: none;">${scheduleWithCalendar.googleMeetLink}</a></p>` : ''}
+                ${scheduleWithCalendar?.googleCalendarLink ? `<p style="margin: 8px 0;"><strong style="color: #333;">Calendar Event:</strong> <a href="${scheduleWithCalendar.googleCalendarLink}" target="_blank" rel="noopener noreferrer" style="color: #2563eb; text-decoration: none;">View in Google Calendar</a></p>` : ''}
+                ${scheduleWithCalendar?.googleCalendarEventId && !scheduleWithCalendar?.googleCalendarLink ? `<p style="margin: 8px 0;"><strong style="color: #333;">Calendar Event ID:</strong> ${scheduleWithCalendar.googleCalendarEventId}</p>` : ''}
+              </div>
+              ${scheduleWithCalendar?.calendarSynced ? '<p>This consultation has been added to your adviser\'s Google Calendar. Please mark this date and time in your calendar. We look forward to meeting with you!</p>' : '<p>Please mark this date and time in your calendar. We look forward to meeting with you!</p>'}
+              <hr style="margin: 30px 0; border: none; border-top: 1px solid #ddd;" />
+              <p style="color: #999; font-size: 12px;">This is an automated notification from the Masteral Archive and Monitoring System.</p>
+            </div>
+          `
+        );
+      }
     } else if (action === "decline") {
       studentParticipant.status = "declined";
+      
+      // Store rejection reason if provided
+      if (rejectionReason) {
+        schedule.rejectionReason = rejectionReason;
+      }
       
       // Log the activity
       await Activity.create({
@@ -1004,27 +1695,84 @@ export const updateConsultationStatus = async (req, res) => {
         entityType: "schedule",
         entityId: schedule._id,
         entityName: schedule.title,
-        description: `Declined consultation request from ${studentParticipant.user.name}`,
+        description: `Declined consultation request from ${studentParticipant.user.name}${rejectionReason ? ` - Reason: ${rejectionReason}` : ''}`,
         metadata: {
           studentId: studentParticipant.user._id,
           studentName: studentParticipant.user.name,
-          datetime: schedule.datetime
+          datetime: schedule.datetime,
+          rejectionReason: rejectionReason || null
         }
       });
+
+      // Send email notification to student about decline
+      if (studentParticipant.user && studentParticipant.user.email) {
+        const adviserName = req.user.name || "Your Adviser";
+        const formattedDate = new Date(schedule.datetime).toLocaleString('en-US', {
+          weekday: 'long',
+          year: 'numeric',
+          month: 'long',
+          day: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit'
+        });
+
+        // Build rejection reason section for email
+        const rejectionReasonSection = schedule.rejectionReason 
+          ? `
+              <div style="background-color: #fff7ed; padding: 15px; margin: 20px 0; border-left: 4px solid #f59e0b; border-radius: 4px;">
+                <p style="margin: 0 0 8px 0;"><strong style="color: #333;">Reason for Decline:</strong></p>
+                <p style="margin: 0; color: #333;">${schedule.rejectionReason}</p>
+              </div>
+            `
+          : '';
+
+        await sendNotificationEmail(
+          studentParticipant.user.email,
+          `Consultation Request Declined: ${schedule.title}`,
+          `Your consultation request for ${formattedDate} has been declined by ${adviserName}.${schedule.rejectionReason ? ` Reason: ${schedule.rejectionReason}` : ''}`,
+          `
+            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+              <h2 style="color: #7C1D23;">Consultation Request Declined</h2>
+              <p>Hello ${studentParticipant.user.name},</p>
+              <p>Your consultation request has been <strong style="color: #dc2626;">declined</strong> by ${adviserName}.</p>
+              <div style="background-color: #fef2f2; padding: 15px; margin: 20px 0; border-left: 4px solid #dc2626; border-radius: 4px;">
+                <p style="margin: 8px 0;"><strong style="color: #333;">Consultation Title:</strong> ${schedule.title}</p>
+                <p style="margin: 8px 0;"><strong style="color: #333;">Requested Date & Time:</strong> ${formattedDate}</p>
+                <p style="margin: 8px 0;"><strong style="color: #333;">Location:</strong> ${schedule.location}</p>
+                ${schedule.consultationType ? `<p style="margin: 8px 0;"><strong style="color: #333;">Consultation Type:</strong> ${schedule.consultationType === "online" ? "Online" : "Face-to-Face"}</p>` : ''}
+              </div>
+              ${rejectionReasonSection}
+              <p>You may request a different consultation slot that better fits your adviser's schedule.</p>
+              <hr style="margin: 30px 0; border: none; border-top: 1px solid #ddd;" />
+              <p style="color: #999; font-size: 12px;">This is an automated notification from the Masteral Archive and Monitoring System.</p>
+            </div>
+          `
+        );
+      }
     }
 
-    await schedule.save();
+    // Save schedule (if not already saved in approve action)
+    if (action !== "approve") {
+      await schedule.save();
+    }
 
-    // TODO: Send notification to student (email/in-app notification)
-
+    // Fetch updated schedule with all populated fields for response
     const updatedSchedule = await Schedule.findById(scheduleId)
       .populate("participants.user", "name email")
       .populate("research", "title")
       .populate("createdBy", "name email");
 
+    // Prepare response message
+    let responseMessage = `Consultation request ${action}d successfully.`;
+    if (action === "approve" && updatedSchedule.calendarSynced) {
+      responseMessage += " The consultation has been added to Google Calendar.";
+    }
+
     res.json({ 
-      message: `Consultation request ${action}d successfully.`, 
-      schedule: updatedSchedule 
+      message: responseMessage, 
+      schedule: updatedSchedule,
+      calendarSynced: action === "approve" ? updatedSchedule.calendarSynced : undefined,
+      googleMeetLink: action === "approve" ? updatedSchedule.googleMeetLink : undefined
     });
   } catch (error) {
     console.error("Error updating consultation status:", error);
@@ -1110,39 +1858,66 @@ export const updateConsultationSlot = async (req, res) => {
       description: schedule.description
     };
 
-    // Check for double-booking if datetime is being changed
-    if (datetime && new Date(datetime).getTime() !== new Date(schedule.datetime).getTime()) {
-      const startTime = new Date(datetime);
+    // Parse datetime as Manila time if provided (same logic as create)
+    let startTime;
+    if (datetime) {
+      // Parse datetime as Manila time
+      if (typeof datetime === 'string') {
+        if (datetime.includes('Z') || datetime.match(/[+-]\d{2}:\d{2}$/)) {
+          startTime = new Date(datetime);
+        } else if (datetime.includes('T') && !datetime.includes('Z') && !datetime.includes('+')) {
+          const [datePart, timePart] = datetime.split('T');
+          const [year, month, day] = datePart.split('-').map(Number);
+          const [hour, minute] = timePart.split(':').map(Number);
+          const manilaTimeString = `${year}-${month.toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}T${hour.toString().padStart(2, '0')}:${(minute || 0).toString().padStart(2, '0')}:00+08:00`;
+          startTime = new Date(manilaTimeString);
+          if (isNaN(startTime.getTime())) {
+            const manilaDate = new Date(Date.UTC(year, month - 1, day, hour, minute || 0, 0, 0));
+            const manilaOffsetMs = 8 * 60 * 60 * 1000;
+            startTime = new Date(manilaDate.getTime() - manilaOffsetMs);
+          }
+        } else {
+          startTime = new Date(datetime);
+        }
+      } else {
+        startTime = new Date(datetime);
+      }
       
       // Validate that datetime is a valid date
       if (isNaN(startTime.getTime())) {
         return res.status(400).json({ message: "Invalid date format. Please select a valid date and time." });
       }
       
-      const endTime = new Date(startTime.getTime() + (duration || schedule.duration) * 60000);
+      // Check for double-booking if datetime is being changed
+      if (startTime.getTime() !== new Date(schedule.datetime).getTime()) {
+        const endTime = new Date(startTime.getTime() + (duration || schedule.duration) * 60000);
 
-      const overlappingSchedules = await Schedule.find({
-        _id: { $ne: scheduleId }, // Exclude current schedule
-        "participants.user": req.user.id,
-        "participants.role": "adviser",
-        datetime: {
-          $gte: new Date(startTime.getTime() - 60 * 60000),
-          $lte: new Date(endTime.getTime() + 60 * 60000)
-        },
-        status: { $ne: "cancelled" }
-      });
-
-      if (overlappingSchedules.length > 0) {
-        return res.status(400).json({ 
-          message: "Time slot conflicts with existing schedule. Please choose a different time." 
+        const overlappingSchedules = await Schedule.find({
+          _id: { $ne: scheduleId }, // Exclude current schedule
+          "participants.user": req.user.id,
+          "participants.role": "adviser",
+          datetime: {
+            $gte: new Date(startTime.getTime() - 60 * 60000),
+            $lte: new Date(endTime.getTime() + 60 * 60000)
+          },
+          status: { $ne: "cancelled" }
         });
+
+        if (overlappingSchedules.length > 0) {
+          return res.status(400).json({ 
+            message: "Time slot conflicts with existing schedule. Please choose a different time." 
+          });
+        }
       }
     }
 
     // Update the schedule
     if (title) schedule.title = title;
     if (description !== undefined) schedule.description = description;
-    if (datetime) schedule.datetime = new Date(datetime);
+    if (datetime) {
+      // Use the parsed startTime that was already calculated
+      schedule.datetime = startTime;
+    }
     if (duration) schedule.duration = duration;
     if (location) schedule.location = location;
 
@@ -1151,8 +1926,8 @@ export const updateConsultationSlot = async (req, res) => {
     // Log the activity
     const changes = [];
     if (title && title !== oldValues.title) changes.push(`title: "${oldValues.title}" → "${title}"`);
-    if (datetime && new Date(datetime).getTime() !== new Date(oldValues.datetime).getTime()) {
-      changes.push(`datetime: "${new Date(oldValues.datetime).toLocaleString()}" → "${new Date(datetime).toLocaleString()}"`);
+    if (datetime && startTime && startTime.getTime() !== new Date(oldValues.datetime).getTime()) {
+      changes.push(`datetime: "${new Date(oldValues.datetime).toLocaleString()}" → "${startTime.toLocaleString()}"`);
     }
     if (duration && duration !== oldValues.duration) changes.push(`duration: ${oldValues.duration} → ${duration} minutes`);
     if (location && location !== oldValues.location) changes.push(`location: "${oldValues.location}" → "${location}"`);
@@ -1325,34 +2100,54 @@ export const getDetailedStudentInfo = async (req, res) => {
   }
 };
 
-// Get panels assigned to the faculty member
+// Get panels assigned to the faculty member OR panels for their students' research
 export const getMyPanels = async (req, res) => {
   try {
     const userId = req.user.id.toString();
     
     // Find all panels first, then filter in code
     const allPanels = await Panel.find()
-      .populate("research", "title students abstract")
+      .populate("research", "title students abstract adviser")
       .populate("members.faculty", "name email")
       .populate("reviews.panelist", "name email")
       .populate("assignedBy", "name")
       .sort({ createdAt: -1 });
 
-    // Filter to only show panels where user is selected as active panelist
+    // Filter to show panels where:
+    // 1. Research still exists (not deleted)
+    // 2. User is selected as active panelist, OR
+    // 3. User is the adviser of the research (so they can see all reviews including external)
     const myPanels = allPanels.filter(panel => {
+      // Skip panels where research has been deleted
+      if (!panel.research) {
+        return false;
+      }
+      
+      // Check if user is a panelist
       const myMember = panel.members.find(m => {
         const facultyId = m.faculty?._id || m.faculty;
         const facultyIdStr = facultyId?.toString() || facultyId;
         return facultyIdStr === userId && m.isSelected === true;
       });
-      return myMember !== undefined;
+      
+      // Check if user is the adviser of the research
+      const researchAdviserId = panel.research?.adviser?._id || panel.research?.adviser;
+      const researchAdviserIdStr = researchAdviserId?.toString() || researchAdviserId;
+      const isAdviser = researchAdviserIdStr === userId;
+      
+      return myMember !== undefined || isAdviser;
     });
 
     // Calculate review status for each panel
     const panelsWithReviewStatus = myPanels.map(panel => {
       const myReview = panel.reviews.find(r => {
-        const panelistId = r.panelist?._id || r.panelist;
-        return (panelistId?.toString() || panelistId) === userId;
+        // For internal reviews, check by panelist ID
+        if (!r.isExternal && r.panelist) {
+          const panelistId = r.panelist?._id || r.panelist;
+          return (panelistId?.toString() || panelistId) === userId;
+        }
+        // For external reviews, they won't match the logged-in user
+        return false;
       });
 
       return {
@@ -1374,11 +2169,28 @@ export const getMyPanels = async (req, res) => {
 // Submit panel review
 export const submitPanelReview = async (req, res) => {
   try {
-    const { panelId, comments, recommendation } = req.body;
+    const { panelId } = req.params; // Get panelId from URL parameter
+    const { comments, recommendation } = req.body; // Get comments and recommendation from body
     const userId = req.user.id.toString();
 
-    if (!comments || !recommendation) {
-      return res.status(400).json({ message: "Comments and recommendation are required" });
+    if (!comments || !comments.trim()) {
+      return res.status(400).json({ message: "Comments are required" });
+    }
+
+    if (!recommendation) {
+      return res.status(400).json({ message: "Recommendation is required" });
+    }
+
+    // Validate recommendation enum values
+    const validRecommendations = ["approve", "reject", "revision", "pending"];
+    if (!validRecommendations.includes(recommendation)) {
+      return res.status(400).json({ 
+        message: `Invalid recommendation. Must be one of: ${validRecommendations.join(", ")}` 
+      });
+    }
+
+    if (!panelId) {
+      return res.status(400).json({ message: "Panel ID is required" });
     }
 
     const panel = await Panel.findById(panelId);
@@ -1399,23 +2211,26 @@ export const submitPanelReview = async (req, res) => {
 
     // Find existing review or create new one
     const existingReviewIndex = panel.reviews.findIndex(r => {
+      if (r.isExternal) return false; // External reviews won't match internal panelist
       const panelistId = r.panelist?._id || r.panelist;
       return (panelistId?.toString() || panelistId) === userId;
     });
 
     const reviewData = {
       panelist: req.user.id,
-      comments: comments.trim(),
+      comments: comments?.trim() || '',
       recommendation: recommendation,
       status: 'submitted',
       submittedAt: new Date(),
       dueDate: panel.reviewDeadline || null,
+      isExternal: false, // Internal review
     };
 
     if (existingReviewIndex >= 0) {
       // Update existing review
+      const existingReview = panel.reviews[existingReviewIndex];
       panel.reviews[existingReviewIndex] = {
-        ...panel.reviews[existingReviewIndex].toObject(),
+        ...existingReview.toObject ? existingReview.toObject() : existingReview,
         ...reviewData,
       };
     } else {
@@ -1435,28 +2250,114 @@ export const submitPanelReview = async (req, res) => {
       panel.status = 'in_progress';
     }
 
-    await panel.save();
-
-    const populated = await Panel.findById(panel._id)
-      .populate("research", "title students")
-      .populate("members.faculty", "name email")
-      .populate("reviews.panelist", "name email");
-
-    // Log activity
-    await Activity.create({
-      user: req.user.id,
-      action: "update",
-      entityType: "panel",
-      entityId: panel._id,
-      entityName: panel.name,
-      description: `Submitted panel review for ${panel.name}`,
-      metadata: {
-        panelId: panel._id,
-        recommendation,
-        commentsLength: comments.length,
-        panelProgress: panel.progress,
+    // Fix members array to ensure data integrity before saving
+    // This handles cases where members might have missing required fields
+    let membersModified = false;
+    for (let i = 0; i < panel.members.length; i++) {
+      const member = panel.members[i];
+      
+      // If member is marked as external but missing name/email, or vice versa
+      if (member.isExternal === true) {
+        // External member must have name and email
+        if (!member.name || !member.email) {
+          console.warn(`Fixing external member at index ${i}: missing name or email`);
+          // If they have faculty, convert to internal member
+          if (member.faculty) {
+            member.isExternal = false;
+            membersModified = true;
+          } else {
+            // Can't fix - this is a data integrity issue
+            console.error(`Invalid external member at index ${i}: missing both name/email and faculty`);
+          }
+        }
+      } else {
+        // Internal member must have faculty
+        if (!member.faculty) {
+          console.warn(`Fixing internal member at index ${i}: missing faculty`);
+          // If they have name and email, convert to external member
+          if (member.name && member.email) {
+            member.isExternal = true;
+            membersModified = true;
+          } else {
+            // Can't fix - this is a data integrity issue
+            console.error(`Invalid internal member at index ${i}: missing both faculty and name/email`);
+            // Mark as external with placeholder data to prevent validation error
+            // This is a workaround for corrupted data
+            member.isExternal = true;
+            member.name = member.name || 'Unknown Panelist';
+            member.email = member.email || 'unknown@buksu.edu.ph';
+            membersModified = true;
+          }
+        }
       }
-    });
+    }
+
+    // Mark members array as modified if we made changes
+    if (membersModified) {
+      panel.markModified('members');
+    }
+
+    // Save the panel
+    try {
+      await panel.save();
+    } catch (saveError) {
+      // If validation still fails, provide detailed error information
+      if (saveError.name === 'ValidationError') {
+        console.error('Panel validation error details:', {
+          message: saveError.message,
+          errors: saveError.errors,
+          members: panel.members.map((m, idx) => ({
+            index: idx,
+            isExternal: m.isExternal,
+            hasFaculty: !!m.faculty,
+            facultyId: m.faculty?.toString() || m.faculty,
+            hasName: !!m.name,
+            hasEmail: !!m.email,
+            name: m.name,
+            email: m.email
+          }))
+        });
+        return res.status(400).json({ 
+          message: "Panel data validation failed. The panel has invalid member data. Please contact administrator.",
+          error: saveError.message 
+        });
+      }
+      throw saveError; // Re-throw if it's not a validation error
+    }
+
+    // Populate panel data (handle case where research might be deleted)
+    let populated;
+    try {
+      populated = await Panel.findById(panel._id)
+        .populate("research", "title students")
+        .populate("members.faculty", "name email")
+        .populate("reviews.panelist", "name email");
+    } catch (populateError) {
+      console.error('Error populating panel data:', populateError);
+      // If populate fails, use the saved panel without population
+      populated = panel;
+    }
+
+    // Log activity (wrap in try-catch to prevent activity logging from breaking the request)
+    try {
+      await Activity.create({
+        user: req.user.id,
+        action: "update",
+        entityType: "panel",
+        entityId: panel._id,
+        entityName: panel.name || "Panel",
+        description: `Submitted panel review for ${panel.name || "panel"}`,
+        metadata: {
+          panelId: panel._id,
+          recommendation,
+          commentsLength: comments?.length || 0,
+          panelProgress: panel.progress || 0,
+        }
+      });
+    } catch (activityError) {
+      // Log the error but don't fail the request
+      console.error('Error logging activity for panel review:', activityError);
+    }
 
     res.json({
       message: "Panel review submitted successfully",

@@ -1,5 +1,6 @@
 import Panel from "../models/Panel.js";
 import Activity from "../models/Activity.js";
+import Export from "../models/Export.js";
 import nodemailer from "nodemailer";
 import Schedule from "../models/Schedule.js";
 import Research from "../models/Research.js";
@@ -7,7 +8,11 @@ import User from "../models/User.js";
 import Document from "../models/Document.js";
 import crypto from "crypto";
 import fs from "fs";
+import os from "os";
 import path from "path";
+import { fileURLToPath } from "url";
+import PDFDocument from "pdfkit";
+import ExcelJS from "exceljs";
 import { createConsultationEvent, deleteCalendarEvent } from "../utils/googleCalendar.js";
 import { uploadFileToDrive } from "../utils/googleDrive.js";
 
@@ -69,7 +74,7 @@ export const assignPanelMembers = async (req, res) => {
 
     // Check if panel already exists
     let panel = await Panel.findOne({ research: researchId });
-
+    
     if (panel) {
       panel.members = members;
       panel.assignedBy = req.user.id;
@@ -997,10 +1002,10 @@ export const updateSchedule = async (req, res) => {
       .populate({
         path: "research",
         select: "title students adviser",
-        populate: {
-          path: "students",
-          select: "name email"
-        }
+        populate: [
+          { path: "students", select: "name email" },
+          { path: "adviser", select: "name email" }
+        ]
       })
       .populate("participants.user", "name email");
     
@@ -1072,6 +1077,13 @@ export const updateSchedule = async (req, res) => {
             if (student?.email && !participantEmails.includes(student.email)) {
               participantEmails.push(student.email);
             }
+          }
+        }
+
+        // Add adviser email if it's a panel defense schedule
+        if (schedule.panel && schedule.research?.adviser?.email) {
+          if (!participantEmails.includes(schedule.research.adviser.email)) {
+            participantEmails.push(schedule.research.adviser.email);
           }
         }
 
@@ -1209,6 +1221,130 @@ export const deleteSchedule = async (req, res) => {
         schedule.panel.status = 'confirmed'; // Revert to confirmed if it was scheduled
       }
       await schedule.panel.save();
+    }
+
+    // Send email notifications to all participants before deletion
+    try {
+      // Populate schedule with all necessary data for email
+      const scheduleForEmail = await Schedule.findById(id)
+        .populate("panel", "name type members research")
+        .populate({
+          path: "research",
+          select: "title students adviser",
+          populate: [
+            { path: "students", select: "name email" },
+            { path: "adviser", select: "name email" }
+          ]
+        })
+        .populate("participants.user", "name email");
+
+      if (scheduleForEmail) {
+        const transporter = nodemailer.createTransport({
+          host: process.env.SMTP_HOST,
+          port: process.env.SMTP_PORT,
+          secure: false,
+          auth: {
+            user: process.env.SMTP_USER,
+            pass: process.env.SMTP_PASS,
+          },
+        });
+
+        const scheduleDateStr = scheduleForEmail.datetime.toLocaleString('en-US', {
+          weekday: 'long',
+          year: 'numeric',
+          month: 'long',
+          day: 'numeric',
+          hour: 'numeric',
+          minute: '2-digit',
+        });
+
+        // Collect all participant emails (internal panelists, students, adviser, and external panelists)
+        const participantEmails = [];
+
+        // Internal panelists (from participants array)
+        if (scheduleForEmail.participants) {
+          scheduleForEmail.participants.forEach(p => {
+            if (p.user?.email) {
+              participantEmails.push(p.user.email);
+            }
+          });
+        }
+
+        // Students
+        if (scheduleForEmail.research?.students) {
+          const students = Array.isArray(scheduleForEmail.research.students) 
+            ? scheduleForEmail.research.students 
+            : [scheduleForEmail.research.students];
+          students.forEach(student => {
+            if (student?.email && !participantEmails.includes(student.email)) {
+              participantEmails.push(student.email);
+            }
+          });
+        }
+
+        // Adviser
+        if (scheduleForEmail.research?.adviser?.email) {
+          if (!participantEmails.includes(scheduleForEmail.research.adviser.email)) {
+            participantEmails.push(scheduleForEmail.research.adviser.email);
+          }
+        }
+
+        // External panelists
+        if (scheduleForEmail.panel?.members) {
+          scheduleForEmail.panel.members
+            .filter(m => m.isExternal && m.isSelected && m.email)
+            .forEach(m => {
+              if (!participantEmails.includes(m.email)) {
+                participantEmails.push(m.email);
+              }
+            });
+        }
+
+        const uniqueEmails = [...new Set(participantEmails)];
+
+        if (uniqueEmails.length > 0) {
+          const researchTitle = scheduleForEmail.research?.title || "Research";
+          const panelName = scheduleForEmail.panel?.name || scheduleForEmail.title;
+
+          await transporter.sendMail({
+            from: process.env.SMTP_FROM,
+            to: uniqueEmails.join(","),
+            subject: `Schedule Cancelled: ${panelName}`,
+            html: `
+              <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+                <div style="background-color: #dc2626; color: white; padding: 20px; border-radius: 5px 5px 0 0;">
+                  <h2 style="margin: 0;">Schedule Cancelled</h2>
+                </div>
+                <div style="background-color: #f9f9f9; padding: 20px; border: 1px solid #ddd; border-top: none;">
+                  <p>Dear Participant,</p>
+                  <p>The following panel defense schedule has been <strong>cancelled</strong>:</p>
+                  
+                  <div style="background-color: white; padding: 15px; margin: 20px 0; border-left: 4px solid #dc2626;">
+                    <p style="margin: 5px 0;"><strong>Panel Name:</strong> ${panelName}</p>
+                    <p style="margin: 5px 0;"><strong>Research:</strong> ${researchTitle}</p>
+                    <p style="margin: 5px 0;"><strong>Original Date & Time:</strong> ${scheduleDateStr}</p>
+                    <p style="margin: 5px 0;"><strong>Location:</strong> ${scheduleForEmail.location}</p>
+                  </div>
+
+                  <p style="color: #dc2626; font-weight: bold;">⚠️ This schedule has been cancelled and removed from the system.</p>
+                  
+                  <p>Please remove this event from your calendar. A new schedule will be provided if the panel defense is rescheduled.</p>
+                  
+                  <p>If you have any questions, please contact the Program Head.</p>
+                </div>
+                <div style="background-color: #f0f0f0; padding: 15px; border-radius: 0 0 5px 5px; border: 1px solid #ddd; border-top: none;">
+                  <p style="color: #999; font-size: 12px; margin: 0;">This is an automated notification. Please do not reply to this email.</p>
+                </div>
+              </div>
+            `,
+          });
+
+          console.log(`[Delete Schedule] Email notifications sent to ${uniqueEmails.length} participants`);
+        }
+      }
+    } catch (emailErr) {
+      console.error("[Delete Schedule] Email notification error:", emailErr);
+      // Don't fail the deletion if email fails
     }
     
     // Log activity before deletion
@@ -1757,6 +1893,58 @@ export const createResearchTitle = async (req, res) => {
 
     res.status(201).json({ message: "Research title created successfully", research: populatedResearch });
   } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Update research title and students
+export const updateResearchTitle = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { title, studentIds } = req.body;
+
+    if (!title || !title.trim()) {
+      return res.status(400).json({ message: "Research title is required" });
+    }
+
+    const update = {
+      title: title.trim(),
+    };
+
+    if (Array.isArray(studentIds)) {
+      update.students = studentIds;
+    }
+
+    const research = await Research.findByIdAndUpdate(
+      id,
+      update,
+      { new: true }
+    )
+      .populate("students", "name email")
+      .populate("adviser", "name email");
+
+    if (!research) {
+      return res.status(404).json({ message: "Research not found" });
+    }
+
+    await Activity.create({
+      user: req.user.id,
+      action: "update",
+      entityType: "research",
+      entityId: research._id,
+      entityName: research.title,
+      description: `Updated research title and students: ${research.title}`,
+      metadata: {
+        researchId: research._id,
+        title: research.title,
+        studentCount: research.students?.length || 0,
+        studentIds: research.students?.map(s => s._id) || [],
+      }
+    });
+
+    res.json({ message: "Research updated successfully", research });
+  } catch (error) {
+    console.error("Error updating research title:", error);
     res.status(500).json({ message: error.message });
   }
 };
@@ -3350,9 +3538,770 @@ export const getPanelRecordDetails = async (req, res) => {
   }
 };
 
-// Export panel records to CSV
-export const exportPanelRecords = async (req, res) => {
+// Generate digital signature for panel export
+const generatePanelDigitalSignature = (data) => {
+  const signatureData = JSON.stringify({
+    recordCount: data.recordCount || 0,
+    timestamp: new Date().toISOString(),
+    generatedBy: data.generatedBy || "Program Head"
+  });
+  
+  const hash = crypto.createHash('sha256').update(signatureData).digest('hex');
+  const shortHash = hash.substring(0, 16);
+  const signature = `BGS - ${shortHash}`;
+  console.log('[Digital Signature] Generated:', signature);
+  return signature;
+};
+
+// Format date value
+const formatDateValue = (value, withTime = false) => {
+  if (!value) return "N/A";
   try {
+    const options = withTime
+      ? { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }
+      : { year: "numeric", month: "short", day: "numeric" };
+    return new Date(value).toLocaleString("en-US", options);
+  } catch {
+    return value;
+  }
+};
+
+// Add page numbers and signature to PDF
+const addPageNumbers = (doc, digitalSignature) => {
+  const range = doc.bufferedPageRange();
+  for (let i = 0; i < range.count; i += 1) {
+    doc.switchToPage(range.start + i);
+    const pageNumber = i + 1;
+    const totalPages = range.count;
+    const pageNumberText = `Page ${pageNumber} of ${totalPages}`;
+    
+    const pageNumberY = doc.page.height - doc.page.margins.bottom - 20;
+    doc.fontSize(9)
+      .fillColor("#6B7280")
+      .text(pageNumberText, doc.page.margins.left, pageNumberY, {
+        align: "center",
+        width: doc.page.width - (doc.page.margins.left + doc.page.margins.right)
+      });
+    
+    if (digitalSignature) {
+      const signatureX = doc.page.margins.left;
+      const signatureY = doc.page.height - 15;
+      doc.x = signatureX;
+      doc.y = signatureY;
+      doc.font('Helvetica')
+        .fontSize(8)
+        .fillColor("#000000")
+        .text(digitalSignature);
+    }
+  }
+};
+
+// Helper function to escape HTML
+const escapeHtml = (text) => {
+  if (text == null) return "N/A";
+  return String(text)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+};
+
+// Generate HTML template for panel records PDF
+const generatePanelRecordsPdfHtmlTemplate = (panelData, { generatedBy, filtersSummary }) => {
+  const digitalSignature = generatePanelDigitalSignature({
+    recordCount: panelData.length,
+    generatedBy
+  });
+
+  // Find and convert logo to base64
+  let logoBase64 = "";
+  const __filename = fileURLToPath(import.meta.url);
+  const __dirname = path.dirname(__filename);
+  const projectRoot = path.resolve(__dirname, '..', '..');
+  const logoPaths = [
+    path.join(projectRoot, 'frontend', 'public', 'logo.jpg'),
+    path.join(projectRoot, 'frontend', 'public', 'logo.png'),
+    path.join(projectRoot, 'public', 'logo.jpg'),
+    path.join(projectRoot, 'public', 'logo.png'),
+    path.join(projectRoot, 'backend', 'public', 'logo.jpg'),
+    path.join(projectRoot, 'backend', 'public', 'logo.png'),
+    path.join(process.cwd(), 'frontend', 'public', 'logo.jpg'),
+    path.join(process.cwd(), 'frontend', 'public', 'logo.png')
+  ];
+
+  for (const logoPath of logoPaths) {
+    if (fs.existsSync(logoPath)) {
+      try {
+        const logoBuffer = fs.readFileSync(logoPath);
+        const logoExt = path.extname(logoPath).toLowerCase();
+        const mimeType = logoExt === '.png' ? 'image/png' : 'image/jpeg';
+        logoBase64 = `data:${mimeType};base64,${logoBuffer.toString('base64')}`;
+        console.log('Logo found and converted to base64:', logoPath);
+        break;
+      } catch (logoError) {
+        console.log('Error reading logo:', logoError.message);
+      }
+    }
+  }
+
+  // Generate table rows HTML
+  const tableRows = panelData.map((panel, index) => {
+    return `
+      <tr>
+        <td>${index + 1}</td>
+        <td>${escapeHtml(panel.panelName || "N/A")}</td>
+        <td>${escapeHtml(panel.researchTitle || "N/A")}</td>
+        <td>${escapeHtml(panel.panelType || "N/A")}</td>
+        <td>${escapeHtml(panel.dateConducted || "N/A")}</td>
+        <td>${escapeHtml(panel.totalPanelists || 0)}</td>
+        <td>${escapeHtml(panel.totalReviews || 0)}</td>
+        <td>${escapeHtml(panel.approvalRate || "0")}%</td>
+        <td>${escapeHtml(panel.averageScore || "0")}</td>
+        <td>${escapeHtml(panel.approve || 0)}</td>
+        <td>${escapeHtml(panel.revision || 0)}</td>
+        <td>${escapeHtml(panel.reject || 0)}</td>
+        <td class="panelists-cell">${escapeHtml(panel.panelists || "N/A")}</td>
+      </tr>
+    `;
+  }).join("");
+
+  const html = `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Panel Records Report</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    @page {
+      size: A4 landscape;
+      margin: 1cm;
+    }
+
+    body {
+      font-family: 'Helvetica', 'Arial', sans-serif;
+      font-size: 10px;
+      color: #111827;
+      line-height: 1.4;
+      background: #ffffff;
+    }
+
+    .header {
+      text-align: center;
+      margin-bottom: 20px;
+    }
+
+    .logo-container {
+      margin-bottom: 10px;
+    }
+
+    .logo-container img {
+      width: 90px;
+      height: 90px;
+      object-fit: contain;
+    }
+
+    .university-name {
+      font-size: 22px;
+      font-weight: bold;
+      color: #7C1D23;
+      margin-bottom: 5px;
+    }
+
+    .university-address {
+      font-size: 12px;
+      color: #374151;
+      margin-bottom: 3px;
+    }
+
+    .university-contact {
+      font-size: 10px;
+      color: #1E40AF;
+      margin-bottom: 8px;
+    }
+
+    .college-name {
+      font-size: 13px;
+      color: #374151;
+      margin-bottom: 10px;
+    }
+
+    .header-line {
+      border-top: 2px solid #7C1D23;
+      margin: 15px 0;
+    }
+
+    .report-title {
+      font-size: 16px;
+      font-weight: bold;
+      color: #111827;
+      text-align: center;
+      margin: 15px 0;
+    }
+
+    .filters-box {
+      background-color: #F9FAFB;
+      border: 1px solid #E5E7EB;
+      padding: 12px;
+      margin-bottom: 20px;
+      border-radius: 4px;
+    }
+
+    .filters-box p {
+      margin: 4px 0;
+      font-size: 10px;
+      color: #374151;
+    }
+
+    .report {
+      width: 100%;
+      table-layout: fixed;
+      border-collapse: collapse;
+      margin-bottom: 20px;
+      font-size: 9px;
+    }
+
+    .report colgroup col {
+      width: 0;
+    }
+
+    .report col.c1 { width: 3%; }
+    .report col.c2 { width: 11%; }
+    .report col.c3 { width: 13%; }
+    .report col.c4 { width: 10%; }
+    .report col.c5 { width: 10%; }
+    .report col.c6 { width: 6%; }
+    .report col.c7 { width: 6%; }
+    .report col.c8 { width: 7%; }
+    .report col.c9 { width: 6%; }
+    .report col.c10 { width: 6%; }
+    .report col.c11 { width: 6%; }
+    .report col.c12 { width: 6%; }
+    .report col.c13 { width: 14%; }
+
+    .report thead {
+      display: table-header-group;
+      background-color: #7C1D23;
+      color: #ffffff;
+    }
+
+    .report thead th {
+      padding: 8px 5px;
+      text-align: left;
+      font-weight: bold;
+      font-size: 8px;
+      border: 1px solid #5a1519;
+      white-space: normal;
+      word-wrap: break-word;
+      overflow: visible;
+      text-overflow: clip;
+      line-height: 1.3;
+    }
+
+    .report tbody tr {
+      page-break-inside: avoid;
+      border-bottom: 1px solid #E5E7EB;
+    }
+
+    .report tbody tr:nth-child(even) {
+      background-color: #F9FAFB;
+    }
+
+    .report tbody td {
+      padding: 6px 4px;
+      border: 1px solid #E5E7EB;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      vertical-align: top;
+    }
+
+    .report tbody td.panelists-cell {
+      white-space: normal;
+      word-wrap: break-word;
+      overflow: visible;
+      text-overflow: clip;
+    }
+
+    .report tbody tr:hover {
+      background-color: #F3F4F6;
+    }
+
+    .footer {
+      margin-top: 30px;
+      padding-top: 15px;
+      border-top: 1px solid #E5E7EB;
+      text-align: center;
+      font-size: 8px;
+      color: #6B7280;
+    }
+
+    .footer p {
+      margin: 4px 0;
+    }
+
+    .footer .signature {
+      margin-top: 10px;
+      font-size: 8px;
+      color: #000000;
+      text-align: left;
+    }
+
+    @media print {
+      .report thead {
+        display: table-header-group;
+      }
+      .report tbody tr {
+        page-break-inside: avoid;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    ${logoBase64 ? `<div class="logo-container"><img src="${logoBase64}" alt="BUKSU Logo" /></div>` : ""}
+    <div class="university-name">BUKIDNON STATE UNIVERSITY</div>
+    <div class="university-address">Malaybalay City, Bukidnon 8700</div>
+    <div class="university-contact">Tel (088) 813-5661 to 5663; TeleFax (088) 813-2717, www.buksu.edu.ph</div>
+    <div class="college-name">College of Public Administration and Governance</div>
+    <div class="header-line"></div>
+  </div>
+
+  <div class="report-title">PANEL RECORDS REPORT</div>
+
+  <div class="filters-box">
+    <p><strong>Generated by:</strong> ${escapeHtml(generatedBy || "Program Head")}</p>
+    <p><strong>Date Generated:</strong> ${escapeHtml(formatDateValue(new Date(), true))}</p>
+    <p><strong>Total Records:</strong> ${panelData.length}</p>
+    ${filtersSummary ? `<p><strong>Applied Filters:</strong> ${escapeHtml(filtersSummary)}</p>` : ""}
+  </div>
+
+  <table class="report">
+    <colgroup>
+      <col class="c1">
+      <col class="c2">
+      <col class="c3">
+      <col class="c4">
+      <col class="c5">
+      <col class="c6">
+      <col class="c7">
+      <col class="c8">
+      <col class="c9">
+      <col class="c10">
+      <col class="c11">
+      <col class="c12">
+      <col class="c13">
+    </colgroup>
+    <thead>
+      <tr>
+        <th>#</th>
+        <th>Panel Name</th>
+        <th>Research Title</th>
+        <th>Panel Type</th>
+        <th>Date Conducted</th>
+        <th># Panelists</th>
+        <th># Reviews</th>
+        <th>Approval %</th>
+        <th>Avg Score</th>
+        <th>Approve</th>
+        <th>Revision</th>
+        <th>Reject</th>
+        <th>Panelists Names</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${tableRows}
+    </tbody>
+  </table>
+
+  <div class="footer">
+    <p>This report is automatically generated by the Masteral Archive & Monitoring System.</p>
+    <p>Bukidnon State University - College of Public Administration and Governance</p>
+    <div class="signature">${escapeHtml(digitalSignature)}</div>
+  </div>
+</body>
+</html>
+  `;
+
+  return html;
+};
+
+// Generate PDF buffer for panel records using HTML template
+const generatePanelRecordsPdfBuffer = async (panelData, { generatedBy, filtersSummary }) => {
+  // Generate HTML template
+  const html = generatePanelRecordsPdfHtmlTemplate(panelData, { generatedBy, filtersSummary });
+
+  // Try to use Puppeteer if available
+  try {
+    const puppeteer = await import("puppeteer").catch(() => null);
+    if (puppeteer) {
+      const browser = await puppeteer.default.launch({
+        headless: true,
+        args: ["--no-sandbox", "--disable-setuid-sandbox"]
+      });
+      const page = await browser.newPage();
+      await page.setContent(html, { waitUntil: "networkidle0" });
+      const pdfBuffer = await page.pdf({
+        format: "A4",
+        landscape: true,
+        margin: {
+          top: "1cm",
+          right: "1cm",
+          bottom: "1cm",
+          left: "1cm"
+        },
+        printBackground: true
+      });
+      await browser.close();
+      return pdfBuffer;
+    }
+  } catch (puppeteerError) {
+    console.log("Puppeteer not available, trying html-pdf:", puppeteerError.message);
+  }
+
+  // Fallback to html-pdf
+  try {
+    const pdf = await import("html-pdf").catch(() => null);
+    if (pdf) {
+      return new Promise((resolve, reject) => {
+        pdf.create(html, {
+          format: "A4",
+          orientation: "landscape",
+          border: {
+            top: "1cm",
+            right: "1cm",
+            bottom: "1cm",
+            left: "1cm"
+          }
+        }).toBuffer((err, buffer) => {
+          if (err) reject(err);
+          else resolve(buffer);
+        });
+      });
+    }
+  } catch (htmlPdfError) {
+    console.log("html-pdf not available, falling back to PDFKit:", htmlPdfError.message);
+  }
+
+  // Final fallback to PDFKit (without CSS styling)
+  return new Promise((resolve, reject) => {
+    const doc = new PDFDocument({ size: "A4", margin: 50, bufferPages: true });
+    const chunks = [];
+
+    doc.on("data", (chunk) => chunks.push(chunk));
+    doc.on("end", () => resolve(Buffer.concat(chunks)));
+    doc.on("error", reject);
+
+    // Try to add logo
+    const __filename = fileURLToPath(import.meta.url);
+    const __dirname = path.dirname(__filename);
+    const projectRoot = path.resolve(__dirname, '..', '..');
+    const logoPaths = [
+      path.join(projectRoot, 'frontend', 'public', 'logo.jpg'),
+      path.join(projectRoot, 'frontend', 'public', 'logo.png'),
+      path.join(projectRoot, 'public', 'logo.jpg'),
+      path.join(projectRoot, 'public', 'logo.png'),
+      path.join(projectRoot, 'backend', 'public', 'logo.jpg'),
+      path.join(projectRoot, 'backend', 'public', 'logo.png'),
+      path.join(process.cwd(), 'frontend', 'public', 'logo.jpg'),
+      path.join(process.cwd(), 'frontend', 'public', 'logo.png')
+    ];
+    
+    let logoAdded = false;
+    const logoSize = 90;
+    const logoY = 40;
+    
+    for (const logoPath of logoPaths) {
+      if (fs.existsSync(logoPath)) {
+        try {
+          const logoX = (doc.page.width - logoSize) / 2;
+          doc.image(logoPath, logoX, logoY, { width: logoSize, height: logoSize });
+          doc.y = logoY + logoSize + 15;
+          logoAdded = true;
+          console.log('Logo added to PDF:', logoPath);
+          break;
+        } catch (logoError) {
+          console.log('Error loading logo in PDF:', logoError.message);
+        }
+      }
+    }
+    
+    if (!logoAdded) {
+      doc.y = 50;
+    }
+
+    // University Header
+    doc.font('Helvetica-Bold');
+    doc.fontSize(22);
+    doc.fillColor("#7C1D23");
+    doc.text("BUKIDNON STATE UNIVERSITY", { align: "center" });
+    doc.moveDown(0.2);
+    
+    doc.font('Helvetica');
+    doc.fontSize(12);
+    doc.fillColor("#374151");
+    doc.text("Malaybalay City, Bukidnon 8700", { align: "center" });
+    doc.moveDown(0.2);
+    
+    doc.fontSize(10);
+    doc.fillColor("#1E40AF");
+    doc.text("Tel (088) 813-5661 to 5663; TeleFax (088) 813-2717, www.buksu.edu.ph", { align: "center" });
+    doc.moveDown(0.3);
+    
+    doc.font('Helvetica');
+    doc.fontSize(13);
+    doc.fillColor("#374151");
+    doc.text("College of Public Administration and Governance", { align: "center" });
+    doc.moveDown(0.5);
+    
+    doc.moveTo(doc.page.margins.left, doc.y)
+       .lineTo(doc.page.width - doc.page.margins.right, doc.y)
+       .strokeColor("#7C1D23")
+       .lineWidth(2)
+       .stroke();
+    
+    doc.moveDown(0.8);
+    
+    doc.font('Helvetica-Bold');
+    doc.fontSize(16);
+    doc.fillColor("#111827");
+    doc.text("PANEL RECORDS REPORT", { align: "center" });
+    doc.moveDown(0.5);
+    
+    // Report Details Box
+    const boxY = doc.y;
+    doc.rect(doc.page.margins.left, boxY, doc.page.width - (doc.page.margins.left + doc.page.margins.right), 50)
+       .fillColor("#F9FAFB")
+       .fill()
+       .strokeColor("#E5E7EB")
+       .lineWidth(1)
+       .stroke();
+    
+    doc.y = boxY + 10;
+    doc.fontSize(10).fillColor("#374151");
+    doc.text(`Generated by: ${generatedBy || "Program Head"}`, doc.page.margins.left + 10);
+    doc.moveDown(0.3);
+    doc.text(`Date Generated: ${formatDateValue(new Date(), true)}`, doc.page.margins.left + 10);
+    doc.moveDown(0.3);
+    doc.text(`Total Records: ${panelData.length}`, doc.page.margins.left + 10);
+    
+    if (filtersSummary) {
+      doc.moveDown(0.3);
+      doc.text(`Applied Filters: ${filtersSummary}`, doc.page.margins.left + 10);
+    }
+    
+    doc.y = boxY + 60;
+    doc.moveDown(0.5);
+
+    // Panel Records Section - Table format
+    panelData.forEach((panel, index) => {
+      if (doc.y >= doc.page.height - doc.page.margins.bottom - 120) {
+        doc.addPage();
+        doc.font('Helvetica-Bold');
+        doc.fontSize(12);
+        doc.fillColor("#7C1D23");
+        doc.text("BUKIDNON STATE UNIVERSITY - Panel Records Report", { align: "center" });
+        doc.moveDown(0.3);
+        doc.moveTo(doc.page.margins.left, doc.y)
+           .lineTo(doc.page.width - doc.page.margins.right, doc.y)
+           .strokeColor("#7C1D23")
+           .lineWidth(1)
+           .stroke();
+        doc.moveDown(0.5);
+      }
+
+      // Panel Title with background
+      const titleY = doc.y;
+      doc.rect(doc.page.margins.left, titleY, doc.page.width - (doc.page.margins.left + doc.page.margins.right), 25)
+         .fillColor("#7C1D23")
+         .fill();
+      
+      doc.fontSize(12).fillColor("#FFFFFF").text(`${index + 1}. ${panel.panelName || "Untitled Panel"}`, {
+        x: doc.page.margins.left + 10,
+        y: titleY + 7,
+        width: doc.page.width - (doc.page.margins.left + doc.page.margins.right + 20)
+      });
+      
+      doc.y = titleY + 30;
+      doc.moveDown(0.2);
+
+      // Panel Details Box
+      const detailsY = doc.y;
+      const detailsHeight = 120;
+      
+      doc.rect(doc.page.margins.left, detailsY, doc.page.width - (doc.page.margins.left + doc.page.margins.right), detailsHeight)
+         .fillColor("#F9FAFB")
+         .fill()
+         .strokeColor("#E5E7EB")
+         .lineWidth(0.5)
+         .stroke();
+
+      doc.y = detailsY + 8;
+      doc.fontSize(9).fillColor("#6B7280");
+      
+      doc.text(`Research Title:`, { continued: true });
+      doc.fontSize(9).fillColor("#111827").text(` ${panel.researchTitle || "N/A"}`);
+      doc.moveDown(0.4);
+      
+      doc.fontSize(9).fillColor("#6B7280").text(`Panel Type:`, { continued: true });
+      doc.fontSize(9).fillColor("#111827").text(` ${panel.panelType || "N/A"}`);
+      doc.moveDown(0.4);
+      
+      doc.fontSize(9).fillColor("#6B7280").text(`Date Conducted:`, { continued: true });
+      doc.fontSize(9).fillColor("#111827").text(` ${panel.dateConducted || "N/A"}`);
+      doc.moveDown(0.4);
+      
+      doc.fontSize(9).fillColor("#6B7280").text(`Total Panelists:`, { continued: true });
+      doc.fontSize(9).fillColor("#111827").text(` ${panel.totalPanelists || 0}`);
+      doc.moveDown(0.4);
+      
+      doc.fontSize(9).fillColor("#6B7280").text(`Total Reviews:`, { continued: true });
+      doc.fontSize(9).fillColor("#111827").text(` ${panel.totalReviews || 0}`);
+      doc.moveDown(0.4);
+      
+      doc.fontSize(9).fillColor("#6B7280").text(`Approval Rate:`, { continued: true });
+      doc.fontSize(9).fillColor("#111827").text(` ${panel.approvalRate || "0%"}%`);
+      doc.moveDown(0.4);
+      
+      doc.fontSize(9).fillColor("#6B7280").text(`Average Score:`, { continued: true });
+      doc.fontSize(9).fillColor("#111827").text(` ${panel.averageScore || "0"}`);
+      doc.moveDown(0.4);
+      
+      doc.fontSize(9).fillColor("#6B7280").text(`Recommendations - Approve: ${panel.approve || 0}, Revision: ${panel.revision || 0}, Reject: ${panel.reject || 0}`);
+      doc.moveDown(0.4);
+      
+      doc.fontSize(9).fillColor("#6B7280").text(`Panelists:`, { continued: true });
+      doc.fontSize(9).fillColor("#111827").text(` ${panel.panelists || "N/A"}`);
+
+      doc.y = detailsY + detailsHeight;
+      doc.moveDown(0.5);
+    });
+
+    doc.moveDown(1);
+    
+    if (doc.y > doc.page.height - doc.page.margins.bottom - 80) {
+      doc.addPage();
+    }
+    
+    doc.moveTo(doc.page.margins.left, doc.y)
+       .lineTo(doc.page.width - doc.page.margins.right, doc.y)
+       .strokeColor("#E5E7EB")
+       .lineWidth(1)
+       .stroke();
+    
+    doc.moveDown(0.3);
+    doc.fontSize(8).fillColor("#6B7280").text(
+      "This report is automatically generated by the Masteral Archive & Monitoring System.",
+      { align: "center" }
+    );
+    doc.moveDown(0.2);
+    doc.fontSize(8).fillColor("#9CA3AF").text(
+      "Bukidnon State University - College of Public Administration and Governance",
+      { align: "center" }
+    );
+    doc.moveDown(0.3);
+
+    addPageNumbers(doc, digitalSignature);
+    doc.end();
+  });
+};
+
+// Export panel records to PDF
+const generatePanelRecordsExcelBuffer = async (panelData, { generatedBy, filtersSummary }) => {
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = generatedBy || "Program Head";
+  workbook.created = new Date();
+
+  const worksheet = workbook.addWorksheet("Panel Records", {
+    properties: { defaultRowHeight: 20 },
+    pageSetup: { 
+      fitToPage: true, 
+      orientation: "landscape",
+      margins: { left: 0.7, right: 0.7, top: 0.75, bottom: 0.75, header: 0.3, footer: 0.3 }
+    }
+  });
+
+  // Define columns
+  worksheet.columns = [
+    { header: "#", key: "index", width: 5 },
+    { header: "Panel Name", key: "panelName", width: 20 },
+    { header: "Research Title", key: "researchTitle", width: 30 },
+    { header: "Panel Type", key: "panelType", width: 15 },
+    { header: "Date Conducted", key: "dateConducted", width: 18 },
+    { header: "# Panelists", key: "totalPanelists", width: 12 },
+    { header: "# Reviews", key: "totalReviews", width: 12 },
+    { header: "Approval Rate", key: "approvalRate", width: 15 },
+    { header: "Average Score", key: "averageScore", width: 15 },
+    { header: "Approve", key: "approve", width: 10 },
+    { header: "Revision", key: "revision", width: 10 },
+    { header: "Reject", key: "reject", width: 10 },
+    { header: "Panelists", key: "panelists", width: 50 }
+  ];
+
+  // Style header row
+  const headerRow = worksheet.getRow(1);
+  headerRow.font = { bold: true, color: { argb: "FFFFFFFF" } };
+  headerRow.fill = {
+    type: "pattern",
+    pattern: "solid",
+    fgColor: { argb: "FF7C1D23" }
+  };
+  headerRow.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
+  headerRow.height = 30;
+
+  // Add data rows
+  panelData.forEach((panel, index) => {
+    const row = worksheet.addRow({
+      index: index + 1,
+      panelName: panel.panelName || "N/A",
+      researchTitle: panel.researchTitle || "N/A",
+      panelType: panel.panelType || "N/A",
+      dateConducted: panel.dateConducted || "N/A",
+      totalPanelists: panel.totalPanelists || 0,
+      totalReviews: panel.totalReviews || 0,
+      approvalRate: `${panel.approvalRate || 0}%`,
+      averageScore: panel.averageScore || 0,
+      approve: panel.approve || 0,
+      revision: panel.revision || 0,
+      reject: panel.reject || 0,
+      panelists: panel.panelists || "N/A"
+    });
+
+    // Alternate row colors
+    if (index % 2 === 0) {
+      row.fill = {
+        type: "pattern",
+        pattern: "solid",
+        fgColor: { argb: "FFF9FAFB" }
+      };
+    }
+
+    row.alignment = { vertical: "middle", horizontal: "left", wrapText: true };
+    row.height = 20;
+  });
+
+  // Auto-fit columns
+  worksheet.columns.forEach(column => {
+    if (column.width) {
+      column.width = Math.min(column.width, 60);
+    }
+  });
+
+  return await workbook.xlsx.writeBuffer();
+};
+
+export const exportPanelRecords = async (req, res) => {
+  let tempDirPath = null;
+  try {
+    console.log('[Export] Starting panel records export');
+    const { filters = {}, format = "pdf" } = req.body || {};
     const { 
       status, 
       panelType, 
@@ -3360,9 +4309,9 @@ export const exportPanelRecords = async (req, res) => {
       endDate,
       researchId,
       minRecommendationRate 
-    } = req.query;
+    } = filters;
     
-    // Build query (same as getPanelRecords)
+    // Build query
     const query = {
       status: { $in: ['completed', 'archived'] }
     };
@@ -3374,7 +4323,11 @@ export const exportPanelRecords = async (req, res) => {
     if (startDate || endDate) {
       query.createdAt = {};
       if (startDate) query.createdAt.$gte = new Date(startDate);
-      if (endDate) query.createdAt.$lte = new Date(endDate);
+      if (endDate) {
+        const end = new Date(endDate);
+        end.setHours(23, 59, 59, 999);
+        query.createdAt.$lte = end;
+      }
     }
     
     if (researchId) {
@@ -3386,26 +4339,77 @@ export const exportPanelRecords = async (req, res) => {
       .populate("members.faculty", "name email")
       .populate("reviews.panelist", "name email")
       .sort({ createdAt: -1 });
+    
+    console.log(`[EXPORT] Found ${panels.length} panels to export`);
 
-    // Generate CSV data
-    const csvRows = [];
-    csvRows.push([
-      'Panel Name',
-      'Research Title',
-      'Panel Type',
-      'Date Conducted',
-      'Total Panelists',
-      'Total Reviews',
-      'Approval Rate (%)',
-      'Average Score',
-      'Approve',
-      'Revision',
-      'Reject',
-      'Panelists'
-    ].join(','));
+    // Fetch all schedules for these panels to get datetime and duration
+    const panelIds = panels.map(p => p._id);
+    const schedules = await Schedule.find({
+      panel: { $in: panelIds },
+      status: { $nin: ['cancelled', 'completed'] }
+    }).select('panel datetime duration').lean();
 
+    // Create a map of panel ID to schedule for quick lookup
+    const scheduleMap = {};
+    schedules.forEach(schedule => {
+      // Handle both ObjectId and string panel references
+      let panelId = null;
+      if (schedule.panel) {
+        if (typeof schedule.panel === 'object' && schedule.panel._id) {
+          panelId = schedule.panel._id.toString();
+        } else if (typeof schedule.panel === 'object') {
+          panelId = schedule.panel.toString();
+        } else {
+          panelId = schedule.panel.toString();
+        }
+      }
+      if (panelId) {
+        scheduleMap[panelId] = schedule;
+      }
+    });
+    
+    console.log(`[EXPORT] Found ${schedules.length} schedules for ${panelIds.length} panels`);
+    if (schedules.length > 0) {
+      console.log(`[EXPORT] Sample schedule:`, {
+        panel: schedules[0].panel,
+        panelType: typeof schedules[0].panel,
+        datetime: schedules[0].datetime,
+        duration: schedules[0].duration
+      });
+    }
+
+    // Process panel data
+    const panelData = [];
     panels.forEach(panel => {
-      const activeMembers = panel.members.filter(m => m.isSelected);
+      // Include all members except those with declined status
+      // This ensures active faculty members and external panelists are included
+      // External panelists should be included regardless of status (except declined)
+      const activeMembers = panel.members.filter(m => {
+        // Always exclude declined members
+        if (m.status === 'declined') return false;
+        
+        // Include external panelists if they have a name (they're selected/active)
+        if (m.isExternal && m.name) return true;
+        
+        // Include internal faculty members (not declined)
+        if (!m.isExternal) return true;
+        
+        return false;
+      });
+      
+      // Debug logging to help identify issues
+      if (activeMembers.length === 0 && panel.members.length > 0) {
+        console.log(`[EXPORT] Panel ${panel.name} has ${panel.members.length} members but none are active:`, 
+          panel.members.map(m => ({ 
+            role: m.role, 
+            status: m.status, 
+            isSelected: m.isSelected,
+            isExternal: m.isExternal,
+            hasFaculty: !!m.faculty,
+            facultyName: m.faculty?.name || m.name || 'N/A'
+          }))
+        );
+      }
       const submittedReviews = panel.reviews.filter(r => r.status === 'submitted');
       
       const recommendations = {
@@ -3434,50 +4438,843 @@ export const exportPanelRecords = async (req, res) => {
         return;
       }
 
-      const panelistNames = activeMembers.map(m => 
-        m.isExternal ? m.name : (m.faculty?.name || 'Unknown')
-      ).join('; ');
+      // Find secretary member - ALWAYS include secretary if they exist and are not declined
+      const secretaryMember = panel.members.find(m => 
+        (m.role === 'secretary' || m.role?.toLowerCase() === 'secretary') && m.status !== 'declined'
+      );
+      
+      // Ensure secretary is included in activeMembers if they exist and not already there
+      if (secretaryMember) {
+        const secretaryInActive = activeMembers.some(m => {
+          if (m.role !== 'secretary' && m.role?.toLowerCase() !== 'secretary') return false;
+          if (m.isExternal) {
+            return m.name === secretaryMember.name;
+          } else {
+            // Compare by faculty ID or name
+            const mFacultyId = m.faculty?._id?.toString() || m.faculty?.toString();
+            const secFacultyId = secretaryMember.faculty?._id?.toString() || secretaryMember.faculty?.toString();
+            return mFacultyId === secFacultyId;
+          }
+        });
+        
+        if (!secretaryInActive) {
+          activeMembers.push(secretaryMember);
+          console.log(`[EXPORT] Added secretary to activeMembers for panel "${panel.name}"`);
+        }
+      }
+      
+      // Build panelist names from active members
+      // Include ALL active members: internal faculty, external panelists, secretary, members, etc.
+      let panelistNames = activeMembers
+        .map(m => {
+          // Get name - check both isExternal and faculty population
+          let name = 'Unknown';
+          if (m.isExternal) {
+            // External panelist - use their name directly
+            name = m.name || 'Unknown External';
+          } else {
+            // Internal faculty - check if faculty is populated
+            if (m.faculty && typeof m.faculty === 'object' && m.faculty.name) {
+              name = m.faculty.name;
+            } else if (m.faculty && typeof m.faculty === 'string') {
+              // Faculty might be just an ID, try to get name from populated data
+              name = 'Unknown Faculty';
+            } else {
+              name = 'Unknown';
+            }
+          }
+          
+          // Skip if name is still Unknown (data issue)
+          if (name === 'Unknown' || name === 'Unknown External' || name === 'Unknown Faculty') {
+            return null;
+          }
+          
+          // Add role label for clarity in export
+          // Include role labels for secretary, member, and external examiner
+          if (m.role === 'secretary') {
+            return `${name} (Secretary)`;
+          } else if (m.role === 'member') {
+            return `${name} (Member)`;
+          } else if (m.role === 'external_examiner') {
+            return `${name} (External Examiner)`;
+          } else if (m.role === 'chair') {
+            return `${name} (Chair)`;
+          } else if (m.isExternal) {
+            // External panelist in any role - label as External
+            return `${name} (External)`;
+          }
+          return name;
+        })
+        .filter(name => name && name.trim()); // Remove any empty names and nulls
+      
+      // Explicitly add secretary if they exist and are not already in the list
+      if (secretaryMember) {
+        let secretaryName = null;
+        
+        if (secretaryMember.isExternal) {
+          secretaryName = secretaryMember.name;
+        } else {
+          // For internal faculty, check if faculty is populated
+          if (secretaryMember.faculty && typeof secretaryMember.faculty === 'object' && secretaryMember.faculty.name) {
+            secretaryName = secretaryMember.faculty.name;
+          } else if (secretaryMember.faculty && typeof secretaryMember.faculty === 'string') {
+            // Faculty is just an ID - this shouldn't happen if populate worked, but handle it
+            console.log(`[EXPORT] Warning: Secretary faculty not populated for panel "${panel.name}", faculty ID: ${secretaryMember.faculty}`);
+          }
+        }
+        
+        if (secretaryName && secretaryName !== 'Unknown' && secretaryName.trim()) {
+          const secretaryLabel = `${secretaryName} (Secretary)`;
+          
+          // Check if secretary is already in the list (by name)
+          const secretaryAlreadyIncluded = panelistNames.some(name => 
+            name.includes(secretaryName) && name.includes('(Secretary)')
+          );
+          
+          if (!secretaryAlreadyIncluded) {
+            panelistNames.push(secretaryLabel);
+            console.log(`[EXPORT] Added secretary "${secretaryName}" to panel "${panel.name}" panelists list`);
+          } else {
+            console.log(`[EXPORT] Secretary "${secretaryName}" already in panelists list for panel "${panel.name}"`);
+          }
+        } else {
+          console.log(`[EXPORT] Warning: Secretary found for panel "${panel.name}" but name is missing or invalid:`, {
+            isExternal: secretaryMember.isExternal,
+            hasName: !!secretaryMember.name,
+            name: secretaryMember.name,
+            hasFaculty: !!secretaryMember.faculty,
+            facultyType: typeof secretaryMember.faculty,
+            facultyName: secretaryMember.faculty?.name,
+            facultyId: secretaryMember.faculty?._id || secretaryMember.faculty
+          });
+        }
+      } else {
+        console.log(`[EXPORT] No secretary found for panel "${panel.name}". Total members: ${panel.members.length}`, 
+          panel.members.map(m => ({ role: m.role, status: m.status, isExternal: m.isExternal }))
+        );
+      }
+      
+      // Join all panelist names, or use fallback if empty
+      panelistNames = panelistNames.length > 0 
+        ? panelistNames.join(', ') 
+        : 'N/A';
+      
+      // Additional debug logging for secretary and panelists
+      if (secretaryMember) {
+        console.log(`[EXPORT] Panel "${panel.name}" - Secretary found:`, {
+          isExternal: secretaryMember.isExternal,
+          name: secretaryMember.isExternal ? secretaryMember.name : secretaryMember.faculty?.name,
+          status: secretaryMember.status,
+          inActiveMembers: activeMembers.some(m => m.role === 'secretary'),
+          inPanelistNames: panelistNames.includes('(Secretary)'),
+          finalPanelistNames: panelistNames
+        });
+      }
+      
+      // Additional debug logging if still N/A
+      if (panelistNames === 'N/A' && panel.members.length > 0) {
+        console.log(`[EXPORT] Panel "${panel.name}" panelists showing as N/A. Active members:`, activeMembers.length);
+        console.log(`[EXPORT] All members:`, panel.members.map(m => ({
+          role: m.role,
+          status: m.status,
+          isSelected: m.isSelected,
+          isExternal: m.isExternal,
+          facultyId: m.faculty?._id || m.faculty,
+          facultyName: m.faculty?.name || m.name || 'N/A',
+          hasFacultyPopulated: !!m.faculty && typeof m.faculty === 'object'
+        })));
+      }
 
-      const dateConducted = panel.meetingDate || panel.createdAt;
+      // Get schedule for this panel to get datetime and duration
+      const panelId = panel._id.toString();
+      const schedule = scheduleMap[panelId];
+      
+      let dateConducted = panel.meetingDate || panel.createdAt;
+      let dateConductedFormatted = formatDateValue(dateConducted);
+      
+      // If schedule exists, format with time range
+      if (schedule && schedule.datetime) {
+        try {
+          const startDate = new Date(schedule.datetime);
+          if (!isNaN(startDate.getTime())) {
+            const duration = schedule.duration || 120; // Default 120 minutes if not specified
+            const endDate = new Date(startDate.getTime() + duration * 60000);
+            
+            // Format: "Dec 12, 2025, 10:30 AM - 12:30 PM"
+            const datePart = startDate.toLocaleDateString('en-US', {
+              month: 'short',
+              day: 'numeric',
+              year: 'numeric'
+            });
+            
+            const startTimeStr = startDate.toLocaleTimeString('en-US', {
+              hour: 'numeric',
+              minute: '2-digit',
+              hour12: true
+            });
+            
+            const endTimeStr = endDate.toLocaleTimeString('en-US', {
+              hour: 'numeric',
+              minute: '2-digit',
+              hour12: true
+            });
+            
+            dateConductedFormatted = `${datePart}, ${startTimeStr} - ${endTimeStr}`;
+            console.log(`[EXPORT] Panel "${panel.name}" - Formatted date with time range: ${dateConductedFormatted}`);
+          }
+        } catch (error) {
+          console.error(`[EXPORT] Error formatting date for panel "${panel.name}":`, error);
+        }
+      } else {
+        console.log(`[EXPORT] Panel "${panel.name}" - No schedule found. Panel ID: ${panelId}, Available schedule keys:`, Object.keys(scheduleMap));
+      }
 
-      csvRows.push([
-        `"${panel.name}"`,
-        `"${panel.research?.title || 'N/A'}"`,
-        panel.type?.replace(/_/g, ' ') || 'N/A',
-        new Date(dateConducted).toLocaleDateString(),
-        activeMembers.length,
-        submittedReviews.length,
-        approvalRate,
-        averageScore,
-        recommendations.approve,
-        recommendations.revision,
-        recommendations.reject,
-        `"${panelistNames}"`
-      ].join(','));
+      panelData.push({
+        panelName: panel.name || 'N/A',
+        researchTitle: panel.research?.title || 'N/A',
+        panelType: panel.type?.replace(/_/g, ' ') || 'N/A',
+        dateConducted: dateConductedFormatted,
+        totalPanelists: activeMembers.length,
+        totalReviews: submittedReviews.length,
+        approvalRate: approvalRate,
+        averageScore: averageScore,
+        approve: recommendations.approve,
+        revision: recommendations.revision,
+        reject: recommendations.reject,
+        panelists: panelistNames
+      });
     });
 
-    const csvContent = csvRows.join('\n');
-    const filename = `panel-records-${new Date().toISOString().split('T')[0]}.csv`;
+    const user = await User.findById(req.user.id);
+    if (!user || !user.driveAccessToken) {
+      return res.status(400).json({
+        message: "Please connect your Google Drive account in Settings before exporting panel records."
+      });
+    }
 
-    // Log activity
+    const generatedBy = user.name || user.email || "Program Head";
+    const filtersSummary = Object.entries(filters || {})
+      .filter(([, value]) => value && value !== "all" && value !== undefined && value !== null)
+      .map(([key, value]) => `${key}: ${value}`)
+      .join(", ");
+
+    if (!panelData || panelData.length === 0) {
+      return res.status(400).json({ 
+        message: "No panel records found matching the selected filters." 
+      });
+    }
+
+    let fileBuffer;
+    let mimeType;
+    let extension;
+
+    try {
+      if (format === "excel" || format === "xlsx") {
+        fileBuffer = await generatePanelRecordsExcelBuffer(panelData, {
+          generatedBy,
+          filtersSummary: filtersSummary || ""
+        });
+        mimeType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+        extension = "xlsx";
+      } else {
+        fileBuffer = await generatePanelRecordsPdfBuffer(panelData, {
+          generatedBy,
+          filtersSummary: filtersSummary || ""
+        });
+        mimeType = "application/pdf";
+        extension = "pdf";
+      }
+    } catch (bufferError) {
+      console.error("Error generating file buffer:", bufferError);
+      throw new Error(`Failed to generate ${format === "excel" || format === "xlsx" ? "Excel" : "PDF"} file: ${bufferError.message}`);
+    }
+
+    tempDirPath = await fs.promises.mkdtemp(path.join(os.tmpdir(), "panel-export-"));
+    const fileName = `panel-records-${new Date().toISOString().replace(/[:.]/g, "-")}.${extension}`;
+    const tempFilePath = path.join(tempDirPath, fileName);
+    await fs.promises.writeFile(tempFilePath, fileBuffer);
+
+    const driveTokens = buildDriveTokens(user);
+    if (!driveTokens?.access_token) {
+      throw new Error("Unable to read Google Drive credentials. Please reconnect your Drive account.");
+    }
+
+    const reportsFolderId =
+      process.env.GOOGLE_DRIVE_REPORTS_FOLDER_ID ||
+      process.env.GOOGLE_DRIVE_PROGRAM_HEAD_REPORTS_FOLDER_ID ||
+      getPanelDriveFolderId();
+
+    if (!reportsFolderId) {
+      throw new Error("Reports folder ID is not configured. Please set GOOGLE_DRIVE_REPORTS_FOLDER_ID.");
+    }
+
+    let driveFile;
+    try {
+      const { file, tokens: updatedTokens } = await uploadFileToDrive(
+        tempFilePath,
+        fileName,
+        mimeType,
+        driveTokens,
+        { parentFolderId: reportsFolderId }
+      );
+      driveFile = file;
+      await applyUpdatedDriveTokens(user, updatedTokens);
+    } catch (driveError) {
+      console.error("Failed to upload export to Google Drive:", driveError);
+      throw new Error("Failed to upload export to Google Drive. Please reconnect your Drive account and try again.");
+    }
+
+    // Save export record to MongoDB
+    let exportRecord = null;
+    try {
+      exportRecord = new Export({
+        exportedBy: req.user.id,
+        format: format === "excel" || format === "xlsx" ? "excel" : "pdf",
+        recordCount: panelData.length,
+        selectedFields: [],
+        filters: {
+          status: filters.status || undefined,
+          panelType: filters.panelType || undefined,
+          startDate: filters.startDate ? new Date(filters.startDate) : undefined,
+          endDate: filters.endDate ? new Date(filters.endDate) : undefined,
+          researchId: filters.researchId || undefined,
+          minRecommendationRate: filters.minRecommendationRate || undefined,
+        },
+        driveFileId: driveFile?.id || undefined,
+        driveFileLink: driveFile?.webViewLink || undefined,
+        driveFileName: driveFile?.name || undefined,
+        driveFolderId: reportsFolderId || undefined,
+        fileName: fileName,
+        fileSize: fileBuffer?.length || 0,
+        mimeType: mimeType || undefined,
+        status: "completed",
+      });
+
+      await exportRecord.save();
+    } catch (saveError) {
+      console.error("Error saving export record:", saveError);
+    }
+
     await Activity.create({
       user: req.user.id,
-      action: "download",
+      action: "export",
       entityType: "panel",
       entityName: "Panel Records Export",
-      description: `Exported panel records to CSV`,
+      description: `Exported ${panelData.length} panel record(s) as PDF`,
       metadata: {
-        filters: { status, panelType, startDate, endDate, researchId, minRecommendationRate },
-        recordCount: panels.length,
-        filename
+        format: format === "excel" || format === "xlsx" ? "excel" : "pdf",
+        recordCount: panelData.length,
+        filters: filtersSummary || null,
+        driveFileId: driveFile?.id,
+        exportId: exportRecord?._id || null
       }
     }).catch(err => console.error('Error logging activity:', err));
 
-    res.setHeader('Content-Type', 'text/csv');
-    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-    res.send(csvContent);
+    // Clean up temp file
+    try {
+      await fs.promises.unlink(tempFilePath);
+      await fs.promises.rmdir(tempDirPath);
+    } catch (cleanupError) {
+      console.error('Error cleaning up temp files:', cleanupError);
+    }
+
+    res.json({
+      message: `Panel records exported as PDF and saved to your Google Drive Reports folder.`,
+      format: "pdf",
+      recordCount: panelData.length,
+      driveFile,
+      filters: filtersSummary || null,
+      exportId: exportRecord?._id || null
+    });
   } catch (error) {
-    console.error("Export panel records error:", error);
+    console.error("Error exporting panel records:", error);
+    console.error("Error stack:", error.stack);
+    
+    if (tempDirPath) {
+      try {
+        await fs.promises.rmdir(tempDirPath, { recursive: true });
+      } catch (cleanupError) {
+        console.error('Error cleaning up temp directory:', cleanupError);
+      }
+    }
+
+    // Save failed export record
+    try {
+      const failedExport = new Export({
+        exportedBy: req.user.id,
+        format: format === "excel" || format === "xlsx" ? "excel" : "pdf",
+        recordCount: 0,
+        selectedFields: [],
+        filters: req.body?.filters || {},
+        status: "failed",
+        errorMessage: error.message,
+        fileName: `failed-export-${new Date().toISOString().replace(/[:.]/g, "-")}`,
+      });
+      await failedExport.save();
+    } catch (saveError) {
+      console.error("Error saving failed export record:", saveError);
+    }
+
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Export defense schedule to Excel
+export const exportDefenseSchedule = async (req, res) => {
+  let tempDirPath = null;
+  try {
+    console.log('[Export] Starting defense schedule export');
+    const { filters = {} } = req.body || {};
+    const { startDate, endDate, type } = filters;
+
+    // Build query for finalized defense schedules
+    const query = {
+      type: { $in: ["proposal_defense", "final_defense"] },
+      status: { $in: ["finalized", "confirmed", "scheduled"] }
+    };
+
+    if (startDate || endDate) {
+      query.datetime = {};
+      if (startDate) query.datetime.$gte = new Date(startDate);
+      if (endDate) {
+        const end = new Date(endDate);
+        end.setHours(23, 59, 59, 999);
+        query.datetime.$lte = end;
+      }
+    }
+
+    if (type && type !== 'all') {
+      query.type = type;
+    }
+
+    const schedules = await Schedule.find(query)
+      .populate("research", "title students")
+      .populate({
+        path: "research",
+        populate: {
+          path: "students",
+          select: "name email"
+        }
+      })
+      .populate({
+        path: "research",
+        populate: {
+          path: "adviser",
+          select: "name email"
+        }
+      })
+      .populate({
+        path: "panel",
+        populate: {
+          path: "members.faculty",
+          select: "name email"
+        }
+      })
+      .sort({ datetime: 1 }); // Sort by date/time
+
+    if (!schedules || schedules.length === 0) {
+      return res.status(400).json({ 
+        message: "No defense schedules found matching the selected filters." 
+      });
+    }
+
+    const user = await User.findById(req.user.id);
+    if (!user || !user.driveAccessToken) {
+      return res.status(400).json({
+        message: "Please connect your Google Drive account in Settings before exporting defense schedules."
+      });
+    }
+
+    const generatedBy = user.name || user.email || "Program Head";
+
+    // Generate Excel buffer
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = generatedBy || "Program Head";
+    workbook.created = new Date();
+
+    const worksheet = workbook.addWorksheet("Defense Schedule", {
+      properties: { defaultRowHeight: 20 },
+      pageSetup: { 
+        fitToPage: true, 
+        orientation: "landscape",
+        margins: { left: 0.7, right: 0.7, top: 0.75, bottom: 0.75, header: 0.3, footer: 0.3 }
+      }
+    });
+
+    // Set column widths (without headers to avoid duplicate)
+    worksheet.columns = [
+      { key: "no", width: 8 },
+      { key: "students", width: 40 },
+      { key: "project", width: 50 },
+      { key: "adviser", width: 25 },
+      { key: "schedule", width: 20 },
+      { key: "chair", width: 20 },
+      { key: "member1", width: 20 },
+      { key: "member2", width: 20 },
+      { key: "secretary", width: 20 },
+      { key: "externalExaminer", width: 25 }
+    ];
+
+    // Add logo
+    const __filename = fileURLToPath(import.meta.url);
+    const __dirname = path.dirname(__filename);
+    const projectRoot = path.resolve(__dirname, '..', '..');
+    const logoPaths = [
+      path.join(projectRoot, 'frontend', 'public', 'logo.jpg'),
+      path.join(projectRoot, 'frontend', 'public', 'logo.png'),
+      path.join(projectRoot, 'public', 'logo.jpg'),
+      path.join(projectRoot, 'public', 'logo.png'),
+      path.join(projectRoot, 'backend', 'public', 'logo.jpg'),
+      path.join(projectRoot, 'backend', 'public', 'logo.png'),
+      path.join(process.cwd(), 'frontend', 'public', 'logo.jpg'),
+      path.join(process.cwd(), 'frontend', 'public', 'logo.png')
+    ];
+    
+    let logoRowOffset = 0;
+    let logoAdded = false;
+    const logoSize = 90;
+    
+    for (const logoPath of logoPaths) {
+      if (fs.existsSync(logoPath)) {
+        try {
+          const ext = path.extname(logoPath).substring(1).toLowerCase();
+          if (!['jpg', 'jpeg', 'png', 'gif'].includes(ext)) {
+            continue;
+          }
+          
+          const imageId = workbook.addImage({
+            filename: logoPath,
+            extension: ext
+          });
+          
+          // Merge all 10 columns in the first row to create a centered container
+          worksheet.mergeCells(1, 1, 1, 10);
+          const logoCell = worksheet.getCell(1, 1);
+          logoCell.alignment = { horizontal: 'center', vertical: 'middle' };
+          
+          // Center the logo: With 9 columns (0-8), center is at column 4
+          // Logo spans approximately 2 columns visually, so start at column 3.5 to center it
+          // ExcelJS supports fractional column positions for precise centering
+          const centerCol = 3.5;
+          
+          worksheet.addImage(imageId, {
+            tl: { col: centerCol, row: 0 },
+            ext: { width: logoSize, height: logoSize }
+          });
+          
+          worksheet.getRow(1).height = logoSize + 15;
+          logoRowOffset = 1;
+          logoAdded = true;
+          console.log(`Logo added to Excel:`, logoPath);
+          break;
+        } catch (logoError) {
+          console.log('Error loading logo in Excel:', logoError.message);
+        }
+      }
+    }
+
+    // University Header
+    const headerStartRow = 1 + logoRowOffset;
+    worksheet.mergeCells(headerStartRow, 1, headerStartRow, 10);
+    const headerCell = worksheet.getCell(headerStartRow, 1);
+    headerCell.value = "BUKIDNON STATE UNIVERSITY";
+    headerCell.font = { name: 'Arial', size: 20, bold: true, color: { argb: "FF7C1D23" } };
+    headerCell.alignment = { vertical: "middle", horizontal: "center" };
+    headerCell.fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FFF9FAFB' }
+    };
+    worksheet.getRow(headerStartRow).height = 25;
+
+    const locationRow = headerStartRow + 1;
+    worksheet.mergeCells(locationRow, 1, locationRow, 10);
+    const locationCell = worksheet.getCell(locationRow, 1);
+    locationCell.value = "Malaybalay City, Bukidnon 8700";
+    locationCell.font = { name: 'Arial', size: 11, color: { argb: "FF374151" } };
+    locationCell.alignment = { vertical: "middle", horizontal: "center" };
+    locationCell.fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FFF9FAFB' }
+    };
+    worksheet.getRow(locationRow).height = 18;
+
+    const contactRow = locationRow + 1;
+    worksheet.mergeCells(contactRow, 1, contactRow, 10);
+    const contactCell = worksheet.getCell(contactRow, 1);
+    contactCell.value = "Tel (088) 813-5661 to 5663; TeleFax (088) 813-2717, www.buksu.edu.ph";
+    contactCell.font = { name: 'Arial', size: 10, color: { argb: "FF1E40AF" }, underline: true };
+    contactCell.alignment = { vertical: "middle", horizontal: "center" };
+    contactCell.fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FFF9FAFB' }
+    };
+    worksheet.getRow(contactRow).height = 18;
+
+    const collegeRow = contactRow + 1;
+    worksheet.mergeCells(collegeRow, 1, collegeRow, 10);
+    const collegeCell = worksheet.getCell(collegeRow, 1);
+    collegeCell.value = "College of Public Administration and Governance";
+    collegeCell.font = { name: 'Arial', size: 13, color: { argb: "FF374151" } };
+    collegeCell.alignment = { vertical: "middle", horizontal: "center" };
+    collegeCell.fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FFF9FAFB' }
+    };
+    worksheet.getRow(collegeRow).height = 22;
+
+    const dividerRow = collegeRow + 1;
+    worksheet.mergeCells(dividerRow, 1, dividerRow, 10);
+    const dividerCell = worksheet.getCell(dividerRow, 1);
+    dividerCell.fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FF7C1D23' }
+    };
+    worksheet.getRow(dividerRow).height = 3;
+
+    const reportTitleRow = dividerRow + 1;
+    worksheet.mergeCells(reportTitleRow, 1, reportTitleRow, 10);
+    const reportTitleCell = worksheet.getCell(reportTitleRow, 1);
+    reportTitleCell.value = "DEFENSE SCHEDULE";
+    reportTitleCell.font = { name: 'Arial', size: 16, bold: true, color: { argb: "FF111827" } };
+    reportTitleCell.alignment = { vertical: "middle", horizontal: "center" };
+    worksheet.getRow(reportTitleRow).height = 25;
+
+    const dataStartRow = reportTitleRow + 2;
+    const headerRow = dataStartRow;
+
+    // Add header row
+    worksheet.getRow(headerRow).values = [
+      "No.",
+      "Name of Student",
+      "Approved Research Project",
+      "Adviser",
+      "Schedule",
+      "Panel Chair",
+      "Panel Member",
+      "Panel Member",
+      "Secretary",
+      "External Examiner"
+    ];
+
+    // Style header row
+    worksheet.getRow(headerRow).eachCell((cell) => {
+      cell.font = { name: 'Arial', size: 12, bold: true, color: { argb: "FFFFFFFF" } };
+      cell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FF7C1D23' }
+      };
+      cell.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
+      cell.border = {
+        top: { style: 'medium', color: { argb: 'FF5a1519' } },
+        left: { style: 'medium', color: { argb: 'FF5a1519' } },
+        bottom: { style: 'medium', color: { argb: 'FF5a1519' } },
+        right: { style: 'medium', color: { argb: 'FF5a1519' } }
+      };
+    });
+    worksheet.getRow(headerRow).height = 30;
+
+    // Add data rows
+    schedules.forEach((schedule, index) => {
+      const row = dataStartRow + 1 + index;
+      const students = schedule.research?.students || [];
+      const studentNames = students.map(s => s.name || s).join(", ") || "N/A";
+      const projectTitle = schedule.research?.title || "N/A";
+      const adviser = schedule.research?.adviser?.name || "N/A";
+      const scheduleDate = schedule.datetime ? new Date(schedule.datetime).toLocaleString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit'
+      }) : "N/A";
+      
+      const panelMembers = schedule.panel?.members?.filter(m => m.isSelected) || [];
+      
+      // Extract panel members by role
+      const chair = panelMembers.find(m => m.role === 'chair');
+      const secretary = panelMembers.find(m => m.role === 'secretary');
+      const externalExaminer = panelMembers.find(m => m.role === 'external_examiner');
+      // Members are those with role 'member' or 'panel_member' (excluding chair, secretary, external_examiner)
+      const members = panelMembers.filter(m => 
+        (m.role === 'member' || m.role === 'panel_member') && 
+        m.role !== 'chair' && 
+        m.role !== 'secretary' && 
+        m.role !== 'external_examiner'
+      );
+      
+      // Get names
+      const chairName = chair ? (chair.isExternal ? chair.name : (chair.faculty?.name || "N/A")) : "N/A";
+      const secretaryName = secretary ? (secretary.isExternal ? secretary.name : (secretary.faculty?.name || "N/A")) : "N/A";
+      const externalExaminerName = externalExaminer ? (externalExaminer.isExternal ? externalExaminer.name : (externalExaminer.faculty?.name || "N/A")) : "N/A";
+      
+      // Get member names (only regular members, NOT external examiner - it has its own column)
+      let member1 = "N/A";
+      let member2 = "N/A";
+      
+      if (members.length > 0) {
+        const m1 = members[0];
+        member1 = m1.isExternal ? m1.name : (m1.faculty?.name || "N/A");
+      }
+      if (members.length > 1) {
+        const m2 = members[1];
+        member2 = m2.isExternal ? m2.name : (m2.faculty?.name || "N/A");
+      }
+      
+      console.log(`[EXPORT DEFENSE] Schedule ${index + 1} - Panel members:`, {
+        chair: chairName,
+        secretary: secretaryName,
+        externalExaminer: externalExaminerName,
+        regularMembers: members.length,
+        member1,
+        member2
+      });
+
+      worksheet.getRow(row).values = [
+        index + 1,
+        studentNames,
+        projectTitle,
+        adviser,
+        scheduleDate,
+        chairName,
+        member1,
+        member2,
+        secretaryName,
+        externalExaminerName
+      ];
+
+      // Style data row
+      worksheet.getRow(row).eachCell((cell) => {
+        cell.font = { name: 'Arial', size: 11 };
+        cell.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
+        cell.border = {
+          top: { style: 'thin', color: { argb: 'FFE5E7EB' } },
+          left: { style: 'thin', color: { argb: 'FFE5E7EB' } },
+          bottom: { style: 'thin', color: { argb: 'FFE5E7EB' } },
+          right: { style: 'thin', color: { argb: 'FFE5E7EB' } }
+        };
+        if (row % 2 === 0) {
+          cell.fill = {
+            type: 'pattern',
+            pattern: 'solid',
+            fgColor: { argb: 'FFF9FAFB' }
+          };
+        }
+      });
+      worksheet.getRow(row).height = 25;
+    });
+
+    // Generate Excel buffer
+    const excelBuffer = await workbook.xlsx.writeBuffer();
+
+    tempDirPath = await fs.promises.mkdtemp(path.join(os.tmpdir(), "defense-schedule-export-"));
+    const fileName = `defense-schedule-${new Date().toISOString().replace(/[:.]/g, "-")}.xlsx`;
+    const tempFilePath = path.join(tempDirPath, fileName);
+    await fs.promises.writeFile(tempFilePath, excelBuffer);
+
+    const driveTokens = buildDriveTokens(user);
+    if (!driveTokens?.access_token) {
+      throw new Error("Unable to read Google Drive credentials. Please reconnect your Drive account.");
+    }
+
+    const reportsFolderId =
+      process.env.GOOGLE_DRIVE_REPORTS_FOLDER_ID ||
+      process.env.GOOGLE_DRIVE_PROGRAM_HEAD_REPORTS_FOLDER_ID ||
+      getPanelDriveFolderId();
+
+    if (!reportsFolderId) {
+      throw new Error("Reports folder ID is not configured. Please set GOOGLE_DRIVE_REPORTS_FOLDER_ID.");
+    }
+
+    let driveFile;
+    try {
+      const { file, tokens: updatedTokens } = await uploadFileToDrive(
+        tempFilePath,
+        fileName,
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        driveTokens,
+        { parentFolderId: reportsFolderId }
+      );
+      driveFile = file;
+      await applyUpdatedDriveTokens(user, updatedTokens);
+    } catch (driveError) {
+      console.error("Failed to upload export to Google Drive:", driveError);
+      throw new Error("Failed to upload export to Google Drive. Please reconnect your Drive account and try again.");
+    }
+
+    // Save export record
+    let exportRecord = null;
+    try {
+      exportRecord = new Export({
+        exportedBy: req.user.id,
+        format: "xlsx",
+        recordCount: schedules.length,
+        selectedFields: [],
+        filters: {
+          startDate: filters.startDate ? new Date(filters.startDate) : undefined,
+          endDate: filters.endDate ? new Date(filters.endDate) : undefined,
+          type: filters.type || undefined,
+        },
+        driveFileId: driveFile?.id || undefined,
+        driveFileLink: driveFile?.webViewLink || undefined,
+        driveFileName: driveFile?.name || undefined,
+        driveFolderId: reportsFolderId || undefined,
+        fileName: fileName,
+        fileSize: excelBuffer?.length || 0,
+        mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        status: "completed",
+      });
+      await exportRecord.save();
+    } catch (saveError) {
+      console.error("Error saving export record:", saveError);
+    }
+
+    await Activity.create({
+      user: req.user.id,
+      action: "export",
+      entityType: "schedule",
+      entityName: "Defense Schedule Export",
+      description: `Exported ${schedules.length} defense schedule(s) as XLSX`,
+      metadata: {
+        format: "xlsx",
+        recordCount: schedules.length,
+        driveFileId: driveFile?.id,
+        exportId: exportRecord?._id || null
+      }
+    }).catch(err => console.error('Error logging activity:', err));
+
+    // Clean up temp file
+    try {
+      await fs.promises.unlink(tempFilePath);
+      await fs.promises.rmdir(tempDirPath);
+    } catch (cleanupError) {
+      console.error('Error cleaning up temp files:', cleanupError);
+    }
+
+    res.json({
+      message: `Defense schedule exported as XLSX and saved to your Google Drive Reports folder.`,
+      format: "xlsx",
+      recordCount: schedules.length,
+      driveFile,
+      exportId: exportRecord?._id || null
+    });
+  } catch (error) {
+    console.error("Error exporting defense schedule:", error);
+    console.error("Error stack:", error.stack);
+    
+    if (tempDirPath) {
+      try {
+        await fs.promises.rmdir(tempDirPath, { recursive: true });
+      } catch (cleanupError) {
+        console.error('Error cleaning up temp directory:', cleanupError);
+      }
+    }
+
     res.status(500).json({ message: error.message });
   }
 };
@@ -3800,6 +5597,13 @@ export const createPanelSchedule = async (req, res) => {
     const { panelId } = req.params; // Get panelId from URL params
     const { datetime, duration, location, description } = req.body;
 
+    console.log('[CREATE PANEL SCHEDULE] Request received:', {
+      panelId,
+      hasDatetime: !!datetime,
+      hasLocation: !!location,
+      hasDuration: !!duration
+    });
+
     if (!panelId || !datetime || !location) {
       return res.status(400).json({ message: "Panel ID, date/time, and location are required" });
     }
@@ -3815,6 +5619,15 @@ export const createPanelSchedule = async (req, res) => {
       })
       .populate("members.faculty", "name email")
       .populate("assignedBy", "name email");
+    
+    console.log('[CREATE PANEL SCHEDULE] Panel loaded:', {
+      panelId: panel?._id,
+      panelName: panel?.name,
+      hasResearch: !!panel?.research,
+      membersCount: panel?.members?.length,
+      activeMembersCount: panel?.members?.filter(m => m.isSelected)?.length,
+      externalMembersCount: panel?.members?.filter(m => m.isSelected && m.isExternal)?.length
+    });
 
     if (!panel) {
       return res.status(404).json({ message: "Panel not found" });
@@ -3867,41 +5680,84 @@ export const createPanelSchedule = async (req, res) => {
       return res.status(400).json({ message: "Schedule date cannot be in the past" });
     }
 
-    // Check for conflicts with panel members (but don't block creation - allow override)
-    // Conflicts are checked on frontend, backend just logs them if they exist
-    const conflictCheck = await checkScheduleConflictsHelper({
-      datetime: scheduleDate,
-      duration: duration || 120,
-      location: location,
-      participants: panel.members.filter(m => m.isSelected).map(m => ({
-        userId: m.isExternal ? null : (m.faculty?._id || m.faculty),
-        email: m.isExternal ? m.email : (m.faculty?.email || null),
-      })),
-    });
-
-    // Log conflicts but don't block (frontend allows override)
-    if (conflictCheck.hasConflicts) {
-      console.warn("Schedule conflicts detected but proceeding:", conflictCheck.conflicts);
-    }
-
-    // Determine schedule type based on panel type
-    let scheduleType = "proposal_defense";
+    // Determine schedule type based on panel type (before conflict check)
+    let scheduleType = "proposal_defense"; // Default
     if (panel.type === "final_defense") {
       scheduleType = "final_defense";
+    } else if (panel.type === "proposal_defense") {
+      scheduleType = "proposal_defense";
+    }
+
+    // Check for conflicts with panel members (but don't block creation - allow override)
+    // Conflicts are checked on frontend, backend just logs them if they exist
+    // Only check conflicts with schedules of the same type (exclude consultation schedules)
+    try {
+      const participantData = panel.members.filter(m => m.isSelected).map(m => {
+        if (m.isExternal) {
+          return {
+            userId: null,
+            email: m.email || null,
+          };
+        } else {
+          // For internal members, safely get faculty ID and email
+          const facultyId = m.faculty?._id || m.faculty;
+          const facultyEmail = m.faculty?.email || null;
+          return {
+            userId: facultyId ? (facultyId._id || facultyId) : null,
+            email: facultyEmail,
+          };
+        }
+      }).filter(p => p.userId || p.email); // Only include participants with at least an ID or email
+      
+      const conflictCheck = await checkScheduleConflictsHelper({
+        datetime: scheduleDate,
+        duration: duration || 120,
+        location: location,
+        participants: participantData,
+        type: scheduleType, // Pass type to exclude consultation schedules
+      });
+
+      // Log conflicts but don't block (frontend allows override)
+      if (conflictCheck.hasConflicts) {
+        console.warn("Schedule conflicts detected but proceeding:", conflictCheck.conflicts);
+      }
+    } catch (conflictError) {
+      console.error('[CREATE PANEL SCHEDULE] Error checking conflicts (non-blocking):', conflictError);
+      // Don't block schedule creation if conflict check fails
     }
 
     // Create participants array
     const participants = [];
     
-    // Add panel members
+    // Add panel members (only internal faculty - external panelists don't have User IDs)
     const activeMembers = panel.members.filter(m => m.isSelected);
+    console.log('[CREATE PANEL SCHEDULE] Processing active members:', {
+      total: activeMembers.length,
+      internal: activeMembers.filter(m => !m.isExternal).length,
+      external: activeMembers.filter(m => m.isExternal).length
+    });
+    
     for (const member of activeMembers) {
-      if (!member.isExternal && member.faculty) {
-        participants.push({
-          user: member.faculty._id || member.faculty,
-          role: member.role === "chair" ? "chair" : "panel_member",
-          status: "confirmed",
-        });
+      if (!member.isExternal) {
+        // Internal faculty member
+        const facultyId = member.faculty?._id || member.faculty;
+        if (facultyId) {
+          participants.push({
+            user: facultyId._id || facultyId,
+            role: member.role === "chair" ? "chair" : member.role === "secretary" ? "secretary" : "panel_member",
+            status: "confirmed",
+          });
+          console.log(`[CREATE PANEL SCHEDULE] Added internal panelist: ${member.faculty?.name || 'Unknown'} (${member.role})`);
+        } else {
+          console.warn(`[CREATE PANEL SCHEDULE] Skipping member with no faculty ID:`, {
+            role: member.role,
+            isExternal: member.isExternal,
+            hasFaculty: !!member.faculty
+          });
+        }
+      } else {
+        // External panelist - don't add to participants array (they don't have User IDs)
+        console.log(`[CREATE PANEL SCHEDULE] Skipping external panelist in participants array: ${member.name} (${member.email})`);
       }
     }
 
@@ -3927,8 +5783,16 @@ export const createPanelSchedule = async (req, res) => {
     }
 
     // Create schedule
+    console.log('[CREATE PANEL SCHEDULE] Creating schedule with participants:', {
+      participantsCount: participants.length,
+      participants: participants.map(p => ({
+        userId: p.user?.toString() || p.user,
+        role: p.role
+      }))
+    });
+    
     const schedule = new Schedule({
-      research: panel.research._id || panel.research,
+      research: panel.research?._id || panel.research || null,
       panel: panelId,
       type: scheduleType,
       title: `${panel.name} - ${panel.type.replace(/_/g, ' ')}`,
@@ -3943,13 +5807,66 @@ export const createPanelSchedule = async (req, res) => {
       finalizedAt: new Date(),
     });
 
-    await schedule.save();
+    try {
+      await schedule.save();
+      console.log('[CREATE PANEL SCHEDULE] Schedule saved successfully:', schedule._id);
+    } catch (saveError) {
+      console.error('[CREATE PANEL SCHEDULE] Error saving schedule:', saveError);
+      console.error('[CREATE PANEL SCHEDULE] Schedule data:', {
+        research: schedule.research,
+        panel: schedule.panel,
+        participantsCount: schedule.participants?.length,
+        participants: schedule.participants
+      });
+      throw new Error(`Failed to save schedule: ${saveError.message}`);
+    }
 
     // Update panel meeting details
     panel.meetingDate = scheduleDate;
     panel.meetingLocation = location.trim();
     panel.status = "scheduled";
     await panel.save();
+
+    // Collect all participant emails (internal panelists, students, adviser, and external panelists)
+    // This needs to be done BEFORE email sending and Google Calendar sync so it's accessible to both
+    const participantEmails = [];
+
+    // Internal panelists
+    for (const member of activeMembers) {
+      if (!member.isExternal && member.faculty?.email) {
+        participantEmails.push(member.faculty.email);
+        console.log(`[CREATE PANEL SCHEDULE] Added panelist email: ${member.faculty.email} (${member.faculty.name})`);
+      }
+    }
+
+    // External panelists
+    for (const member of activeMembers) {
+      if (member.isExternal && member.email) {
+        participantEmails.push(member.email);
+        console.log(`[CREATE PANEL SCHEDULE] Added external panelist email: ${member.email} (${member.name})`);
+      }
+    }
+
+    // Students
+    if (panel.research?.students) {
+      const students = Array.isArray(panel.research.students) ? panel.research.students : [panel.research.students];
+      for (const student of students) {
+        if (student.email) {
+          participantEmails.push(student.email);
+          console.log(`[CREATE PANEL SCHEDULE] Added student email: ${student.email} (${student.name})`);
+        }
+      }
+    }
+
+    // Adviser
+    if (panel.research?.adviser?.email) {
+      participantEmails.push(panel.research.adviser.email);
+      console.log(`[CREATE PANEL SCHEDULE] Added adviser email: ${panel.research.adviser.email} (${panel.research.adviser.name})`);
+    }
+
+    // Remove duplicates
+    const uniqueEmails = [...new Set(participantEmails)];
+    console.log(`[CREATE PANEL SCHEDULE] Total unique participant emails collected: ${uniqueEmails.length}`, uniqueEmails);
 
     // Send email notifications
     try {
@@ -3976,41 +5893,6 @@ export const createPanelSchedule = async (req, res) => {
         hour: 'numeric',
         minute: '2-digit',
       });
-
-      // Collect all participant emails (internal panelists, students, adviser, and external panelists)
-      const participantEmails = [];
-
-      // Internal panelists
-      for (const member of activeMembers) {
-        if (!member.isExternal && member.faculty?.email) {
-          participantEmails.push(member.faculty.email);
-        }
-      }
-
-      // External panelists
-      for (const member of activeMembers) {
-        if (member.isExternal && member.email) {
-          participantEmails.push(member.email);
-        }
-      }
-
-      // Students
-      if (panel.research?.students) {
-        const students = Array.isArray(panel.research.students) ? panel.research.students : [panel.research.students];
-        for (const student of students) {
-          if (student.email) {
-            participantEmails.push(student.email);
-          }
-        }
-      }
-
-      // Adviser
-      if (panel.research?.adviser?.email) {
-        participantEmails.push(panel.research.adviser.email);
-      }
-
-      // Remove duplicates
-      const uniqueEmails = [...new Set(participantEmails)];
 
       if (uniqueEmails.length > 0) {
         const researchTitle = panel.research?.title || "Research";
@@ -4081,6 +5963,15 @@ export const createPanelSchedule = async (req, res) => {
         const scheduleTypeLabel = scheduleType === "proposal_defense" ? "Proposal Defense" : "Final Defense";
 
         // Create Google Calendar event (token refresh will happen automatically if needed)
+        // All participants (students, panel members, adviser) will be added as attendees
+        // Google Calendar will automatically send invitations to all attendees
+        // The event will appear in their calendars once they accept the invitation
+        console.log('[CREATE PANEL SCHEDULE] Creating Google Calendar event with attendees:', {
+          attendeeCount: uniqueEmails.length,
+          attendees: uniqueEmails,
+          note: 'All attendees will receive Google Calendar invitations automatically'
+        });
+
         calendarEvent = await createConsultationEvent(
           {
             title: schedule.title,
@@ -4090,17 +5981,19 @@ export const createPanelSchedule = async (req, res) => {
             location: schedule.location,
             type: schedule.type,
             researchTitle: researchTitle,
-            attendeeEmails: uniqueEmails,
+            attendeeEmails: uniqueEmails, // All participants will be added as attendees
           },
           user.googleAccessToken,
           user.googleRefreshToken,
           user._id.toString()
         );
 
-        console.log('[CREATE PANEL SCHEDULE] Google Calendar event created successfully:', {
+        console.log('[CREATE PANEL SCHEDULE] ✅ Google Calendar event created successfully:', {
           eventId: calendarEvent.eventId,
           eventLink: calendarEvent.eventLink,
-          meetLink: calendarEvent.meetLink
+          meetLink: calendarEvent.meetLink,
+          attendeeCount: uniqueEmails.length,
+          note: 'All participants have been added as attendees and will receive calendar invitations'
         });
 
         // Update schedule with Google Calendar event details
@@ -4171,7 +6064,7 @@ export const createPanelSchedule = async (req, res) => {
 // Check schedule conflicts
 export const checkScheduleConflicts = async (req, res) => {
   try {
-    const { datetime, duration, location, participants } = req.body;
+    const { datetime, duration, location, participants, type } = req.body;
 
     if (!datetime) {
       return res.status(400).json({ message: "Date and time are required" });
@@ -4188,19 +6081,34 @@ export const checkScheduleConflicts = async (req, res) => {
 
     const conflicts = [];
 
+    // Build base query - only check schedules of the same type
+    // Consultation schedules don't conflict with defense schedules and vice versa
+    const baseQuery = {
+      status: { $in: ["scheduled", "confirmed", "finalized"] }, // Only check active schedules
+      _id: { $ne: req.body.scheduleId } // Exclude current schedule if updating
+    };
+
+    // If type is specified, only check conflicts with schedules of the same type
+    if (type) {
+      baseQuery.type = type;
+      console.log(`[Check Conflicts] Filtering by schedule type: ${type} (consultation schedules will be excluded)`);
+    }
+
     // Check location conflicts (if location provided)
     if (location) {
       const locationConflicts = await Schedule.find({
+        ...baseQuery,
         location: { $regex: new RegExp(location, 'i') },
         datetime: {
           $gte: new Date(startTime.getTime() - 30 * 60000), // 30 min buffer
           $lte: new Date(endTime.getTime() + 30 * 60000),
         },
-        status: { $nin: ["cancelled", "completed"] },
-        _id: { $ne: req.body.scheduleId } // Exclude current schedule if updating
       }).populate("participants.user", "name email");
 
       if (locationConflicts.length > 0) {
+        console.log(`[Check Conflicts] Found ${locationConflicts.length} location conflict(s):`, 
+          locationConflicts.map(s => ({ id: s._id, title: s.title, status: s.status, datetime: s.datetime }))
+        );
         conflicts.push({
           type: "location",
           message: `Location "${location}" is already booked during this time`,
@@ -4219,33 +6127,87 @@ export const checkScheduleConflicts = async (req, res) => {
         .map(p => p.userId || (typeof p === 'object' ? p._id : p))
         .filter(Boolean);
 
+      console.log(`[Check Conflicts] Checking conflicts for participants:`, participantIds);
+      console.log(`[Check Conflicts] Schedule time range:`, {
+        start: new Date(startTime.getTime() - 30 * 60000),
+        end: new Date(endTime.getTime() + 30 * 60000),
+        requestedStart: startTime,
+        requestedEnd: endTime
+      });
+
       if (participantIds.length > 0) {
-        const participantConflicts = await Schedule.find({
+        // First, let's check ALL schedules for these participants (for debugging)
+        const allSchedulesForParticipants = await Schedule.find({
+          "participants.user": { $in: participantIds }
+        })
+          .select("_id title status datetime participants")
+          .populate("participants.user", "name email");
+        
+        console.log(`[Check Conflicts] ALL schedules for these participants (any status):`, 
+          allSchedulesForParticipants.map(s => ({ 
+            id: s._id.toString(), 
+            title: s.title, 
+            status: s.status, 
+            datetime: s.datetime,
+            participantCount: s.participants.length
+          }))
+        );
+
+        // Now check only active schedules of the same type
+        const participantConflictsQuery = {
           "participants.user": { $in: participantIds },
           datetime: {
             $gte: new Date(startTime.getTime() - 30 * 60000),
             $lte: new Date(endTime.getTime() + 30 * 60000),
           },
-          status: { $nin: ["cancelled", "completed"] },
-          _id: { $ne: req.body.scheduleId }
-        })
+          ...baseQuery
+        };
+
+        const participantConflicts = await Schedule.find(participantConflictsQuery)
           .populate("participants.user", "name email")
           .populate("research", "title");
 
+        console.log(`[Check Conflicts] Active schedules matching time range:`, 
+          participantConflicts.map(s => ({ 
+            id: s._id.toString(), 
+            title: s.title, 
+            status: s.status, 
+            datetime: s.datetime,
+            participants: s.participants.map(p => ({
+              userId: p.user?._id?.toString() || 'N/A',
+              name: p.user?.name || 'Unknown',
+              email: p.user?.email || ''
+            }))
+          }))
+        );
+
         if (participantConflicts.length > 0) {
+          console.log(`[Check Conflicts] Found ${participantConflicts.length} participant conflict(s):`, 
+            participantConflicts.map(s => ({ 
+              id: s._id.toString(), 
+              title: s.title, 
+              status: s.status, 
+              datetime: s.datetime,
+              participants: s.participants.map(p => p.user?.name || 'Unknown')
+            }))
+          );
           conflicts.push({
             type: "participant",
             message: "One or more participants have conflicting schedules",
             conflicts: participantConflicts.map(s => ({
+              id: s._id.toString(),
               title: s.title,
               datetime: s.datetime,
               duration: s.duration,
+              status: s.status,
               participants: s.participants.map(p => ({
                 name: p.user?.name || 'Unknown',
                 email: p.user?.email || '',
               })),
             })),
           });
+        } else {
+          console.log(`[Check Conflicts] No active schedule conflicts found for participants`);
         }
       }
     }
@@ -4262,7 +6224,7 @@ export const checkScheduleConflicts = async (req, res) => {
 
 // Helper function for conflict checking (used internally)
 const checkScheduleConflictsHelper = async (scheduleData) => {
-  const { datetime, duration, location, participants } = scheduleData;
+  const { datetime, duration, location, participants, type } = scheduleData;
 
   const scheduleDate = new Date(datetime);
   const scheduleDuration = duration || 60;
@@ -4271,15 +6233,25 @@ const checkScheduleConflictsHelper = async (scheduleData) => {
 
   const conflicts = [];
 
+  // Build base query - only check schedules of the same type
+  const baseQuery = {
+    status: { $in: ["scheduled", "confirmed", "finalized"] }, // Only check active schedules
+  };
+
+  // If type is specified, only check conflicts with schedules of the same type
+  if (type) {
+    baseQuery.type = type;
+  }
+
   // Check location conflicts
   if (location) {
     const locationConflicts = await Schedule.find({
+      ...baseQuery,
       location: { $regex: new RegExp(location, 'i') },
       datetime: {
         $gte: new Date(startTime.getTime() - 30 * 60000),
         $lte: new Date(endTime.getTime() + 30 * 60000),
       },
-      status: { $nin: ["cancelled", "completed"] },
     });
 
     if (locationConflicts.length > 0) {
@@ -4302,12 +6274,12 @@ const checkScheduleConflictsHelper = async (scheduleData) => {
 
     if (participantIds.length > 0) {
       const participantConflicts = await Schedule.find({
+        ...baseQuery,
         "participants.user": { $in: participantIds },
         datetime: {
           $gte: new Date(startTime.getTime() - 30 * 60000),
           $lte: new Date(endTime.getTime() + 30 * 60000),
         },
-        status: { $nin: ["cancelled", "completed"] },
       });
 
       if (participantConflicts.length > 0) {

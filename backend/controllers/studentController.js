@@ -10,6 +10,7 @@ import User from "../models/User.js";
 import mongoose from "mongoose";
 import fs from "fs";
 import path from "path";
+import jwt from "jsonwebtoken";
 import { uploadFileToDrive } from "../utils/googleDrive.js";
 
 // Helper function to send email notification
@@ -39,6 +40,11 @@ const sendNotificationEmail = async (to, subject, message, html) => {
   }
 };
 
+// JWT Token Generator
+const generateToken = (id) => {
+  return jwt.sign({ id }, process.env.JWT_SECRET, { expiresIn: '30d' });
+};
+
 const getChapterDriveFolderId = (chapterType) => {
   if (!chapterType) return process.env.GOOGLE_DRIVE_CHAPTERS_FOLDER_ID || null;
   const envKey = `GOOGLE_DRIVE_${chapterType.toUpperCase()}_FOLDER_ID`;
@@ -47,6 +53,41 @@ const getChapterDriveFolderId = (chapterType) => {
     process.env.GOOGLE_DRIVE_CHAPTERS_FOLDER_ID ||
     null
   );
+};
+
+// ========== Login ==========
+export const login = async (req, res) => {
+  try {
+    const { email, password } = req.body;
+
+    if (!email || !password) {
+      return res.status(400).json({ message: "Email and password are required" });
+    }
+
+    // Find user by email (instead of username)
+    const user = await User.findOne({ email });
+    
+    if (!user) {
+      return res.status(401).json({ message: "Invalid email or password" });
+    }
+
+    const isMatch = await user.matchPassword(password);
+    if (!isMatch) {
+      return res.status(401).json({ message: "Invalid email or password" });
+    }
+
+    // Return user data using name instead of username
+    res.json({
+      _id: user._id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      studentId: user.studentId,
+      token: generateToken(user._id)
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
 };
 
 const getComplianceDriveFolderId = (formType) => {
@@ -84,6 +125,29 @@ const applyUpdatedDriveTokens = async (user, credentials) => {
     await User.findByIdAndUpdate(user._id, updates, { new: false });
     Object.assign(user, updates);
   }
+};
+
+const isInvalidGrantError = (error) => {
+  if (!error) return false;
+  const errorCode = error.code || error.status || error?.response?.status;
+  const bodyError = error?.response?.data?.error;
+  const description = error?.response?.data?.error_description || error.message;
+  return (
+    bodyError === "invalid_grant" ||
+    (description && description.toLowerCase().includes("token has been expired or revoked")) ||
+    (errorCode === 400 && error?.message?.toLowerCase().includes("invalid_grant"))
+  );
+};
+
+const clearDriveTokens = async (userId) => {
+  if (!userId) return;
+  await User.findByIdAndUpdate(userId, {
+    $unset: {
+      driveAccessToken: "",
+      driveRefreshToken: "",
+      driveTokenExpiry: "",
+    },
+  });
 };
 
 // Upload compliance form
@@ -141,6 +205,12 @@ export const uploadComplianceForm = async (req, res) => {
       await applyUpdatedDriveTokens(studentUser, updatedTokens);
     } catch (driveError) {
       console.error("Error uploading compliance form to Google Drive:", driveError);
+      if (isInvalidGrantError(driveError)) {
+        await clearDriveTokens(req.user.id);
+        return res.status(401).json({
+          message: "Your Google Drive connection has expired or was revoked. Please reconnect your Drive account and try again.",
+        });
+      }
       return res.status(500).json({
         message: "Failed to upload the compliance form to Google Drive. Please reconnect your Drive account and try again.",
       });
@@ -421,6 +491,12 @@ export const uploadComplianceFormFromDrive = async (req, res) => {
       await applyUpdatedDriveTokens(studentUser, updatedTokens);
     } catch (driveError) {
       console.error("Error saving compliance form to Google Drive folder:", driveError);
+      if (isInvalidGrantError(driveError)) {
+        await clearDriveTokens(req.user.id);
+        return res.status(401).json({
+          message: "Your Google Drive connection has expired or was revoked. Please reconnect your Drive account and try again.",
+        });
+      }
       return res.status(500).json({
         message:
           "Failed to store the compliance form in Google Drive. Please reconnect your Drive account and try again.",
@@ -739,9 +815,23 @@ export const viewComplianceForm = async (req, res) => {
       userAgent: req.get('user-agent'),
     });
 
+    // Determine MIME type - default to application/pdf if missing or for PDF files
+    let mimeType = complianceForm.mimeType || 'application/pdf';
+    if (!mimeType || mimeType === 'application/octet-stream') {
+      // Try to infer from filename
+      const ext = path.extname(complianceForm.filename).toLowerCase();
+      if (ext === '.pdf') {
+        mimeType = 'application/pdf';
+      } else if (ext === '.doc' || ext === '.docx') {
+        mimeType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+      } else if (ext === '.xls' || ext === '.xlsx') {
+        mimeType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+      }
+    }
+
     // Send file for inline viewing
-    res.setHeader('Content-Type', complianceForm.mimeType);
-    res.setHeader('Content-Disposition', `inline; filename="${complianceForm.filename}"`);
+    res.setHeader('Content-Type', mimeType);
+    res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(complianceForm.filename)}"`);
     const fileStream = fs.createReadStream(filePath);
     fileStream.pipe(res);
   } catch (error) {
@@ -759,7 +849,7 @@ export const uploadChapter = async (req, res) => {
       return res.status(400).json({ message: "No file uploaded" });
     }
 
-    const { researchId, chapterType, chapterTitle } = req.body;
+    const { researchId, chapterType, chapterTitle, partName } = req.body;
     
     if (!researchId) {
       return res.status(400).json({ message: "Research ID is required" });
@@ -808,11 +898,31 @@ export const uploadChapter = async (req, res) => {
       });
     }
 
+    // Calculate version number based on existing submissions for this chapter + partName combination
+    // Normalize partName: null/empty string means full chapter, otherwise use trimmed partName
+    const normalizedPartName = partName && partName.trim() ? partName.trim() : null;
+    
+    // Find existing submissions for this chapter + partName combination
+    const existingSubmissions = research.forms.filter(form => {
+      const formPartName = form.partName || null;
+      return form.type === chapterType && 
+             ((formPartName === null && normalizedPartName === null) || 
+              (formPartName && normalizedPartName && formPartName.toLowerCase() === normalizedPartName.toLowerCase()));
+    });
+
+    // Calculate next version number
+    const maxVersion = existingSubmissions.length > 0
+      ? Math.max(...existingSubmissions.map(f => f.version || 1))
+      : 0;
+    const nextVersion = maxVersion + 1;
+
     // Add file to research
     research.forms.push({
       filename: req.file.originalname,
       filepath: req.file.path,
       type: chapterType, // "chapter1", "chapter2", "chapter3"
+      partName: normalizedPartName, // null for full chapter, string for specific part
+      version: nextVersion,
       status: "pending",
       uploadedBy: req.user.id,
       uploadedAt: new Date(),
@@ -844,11 +954,13 @@ export const uploadChapter = async (req, res) => {
       entityType: "research",
       entityId: research._id,
       entityName: research.title,
-      description: `Uploaded chapter: ${chapterType}${chapterTitle ? ` - ${chapterTitle}` : ''}`,
+      description: `Uploaded chapter: ${chapterType}${normalizedPartName ? ` - ${normalizedPartName}` : ''}${chapterTitle ? ` (${chapterTitle})` : ''} - Version ${nextVersion}`,
       metadata: {
         researchId: research._id,
         chapterType: chapterType,
         chapterTitle: chapterTitle || null,
+        partName: normalizedPartName,
+        version: nextVersion,
         filename: req.file.originalname,
         fileSize: req.file.size,
         source: "local+google-drive",
@@ -863,15 +975,16 @@ export const uploadChapter = async (req, res) => {
     if (research.adviser && research.adviser.email) {
       const studentName = req.user.name || "Student";
       const chapterLabel = chapterType === "chapter1" ? "Chapter 1" : chapterType === "chapter2" ? "Chapter 2" : "Chapter 3";
+      const partLabel = normalizedPartName ? ` - ${normalizedPartName} (v${nextVersion})` : '';
       await sendNotificationEmail(
         research.adviser.email,
-        `New Chapter Uploaded: ${chapterLabel}`,
-        `${studentName} has uploaded a new ${chapterLabel}${chapterTitle ? `: ${chapterTitle}` : ''} for research: ${research.title}. Please review it.`,
+        `New Chapter Uploaded: ${chapterLabel}${partLabel}`,
+        `${studentName} has uploaded a new ${chapterLabel}${partLabel}${chapterTitle ? `: ${chapterTitle}` : ''} for research: ${research.title}. Please review it.`,
         `
           <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
             <h2 style="color: #7C1D23;">New Chapter Uploaded</h2>
             <p>Hello ${research.adviser.name},</p>
-            <p><strong>${studentName}</strong> has uploaded a new <strong>${chapterLabel}</strong>${chapterTitle ? `: ${chapterTitle}` : ''} for research: <strong>${research.title}</strong>.</p>
+            <p><strong>${studentName}</strong> has uploaded a new <strong>${chapterLabel}${partLabel}</strong>${chapterTitle ? `: ${chapterTitle}` : ''} for research: <strong>${research.title}</strong>.</p>
             <p>Please review the chapter in the system.</p>
             <hr style="margin: 30px 0; border: none; border-top: 1px solid #ddd;" />
             <p style="color: #999; font-size: 12px;">This is an automated notification from the Masteral Archive and Monitoring System.</p>
@@ -882,6 +995,253 @@ export const uploadChapter = async (req, res) => {
 
     res.json({ message: "Chapter uploaded successfully" });
   } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// View chapter submission file
+export const viewChapterSubmission = async (req, res) => {
+  try {
+    const { submissionId } = req.params;
+
+    const research = await Research.findOne({
+      "forms._id": submissionId,
+      students: req.user.id,
+    });
+
+    if (!research) {
+      return res.status(404).json({ message: "Submission not found or you do not have access to it." });
+    }
+
+    const submission = research.forms.id(submissionId);
+    if (!submission) {
+      return res.status(404).json({ message: "Submission not found." });
+    }
+
+    // Determine MIME type
+    let mimeType = submission.driveMimeType || 'application/pdf';
+    if (!mimeType || mimeType === 'application/octet-stream') {
+      const ext = path.extname(submission.filename).toLowerCase();
+      const mimeTypes = {
+        '.pdf': 'application/pdf',
+        '.doc': 'application/msword',
+        '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      };
+      mimeType = mimeTypes[ext] || 'application/pdf';
+    }
+
+    // If file is in Google Drive, download and serve it
+    if (submission.driveFileId && (submission.storageLocation === "google-drive" || submission.storageLocation === "local+google-drive")) {
+      try {
+        // Get user's Google Drive tokens
+        const user = await User.findById(req.user.id).select('driveAccessToken driveRefreshToken driveTokenExpiry');
+        
+        if (!user || !user.driveAccessToken) {
+          return res.status(400).json({ message: "Google Drive access token not found. Please reconnect your Drive account." });
+        }
+
+        const { downloadFileFromDrive } = await import("../utils/googleDrive.js");
+        const result = await downloadFileFromDrive(submission.driveFileId, user.driveAccessToken);
+        
+        // Convert stream to buffer
+        const chunks = [];
+        for await (const chunk of result.stream) {
+          chunks.push(chunk);
+        }
+        const buffer = Buffer.concat(chunks);
+        
+        // Determine MIME type from metadata
+        const fileMimeType = result.metadata.mimeType || mimeType;
+        
+        // Set appropriate headers for viewing (inline)
+        res.setHeader('Content-Type', fileMimeType);
+        res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(submission.filename || result.metadata.name || 'document')}"`);
+        res.send(buffer);
+        return;
+      } catch (error) {
+        console.error("Error downloading from Google Drive for viewing:", error);
+        // Fall back to local file if available
+        if (submission.filepath) {
+          const localPath = path.isAbsolute(submission.filepath) 
+            ? submission.filepath 
+            : path.join(process.cwd(), submission.filepath);
+          if (fs.existsSync(localPath)) {
+            // Continue to local file serving below
+          } else {
+            return res.status(500).json({ message: `Failed to retrieve file from Google Drive: ${error.message}` });
+          }
+        } else {
+          return res.status(500).json({ message: `Failed to retrieve file from Google Drive: ${error.message}` });
+        }
+      }
+    }
+
+    // Serve local file
+    let filePath;
+    if (path.isAbsolute(submission.filepath)) {
+      filePath = submission.filepath;
+    } else {
+      filePath = path.join(process.cwd(), submission.filepath);
+    }
+
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ message: "File not found on server" });
+    }
+
+    // Log activity
+    await Activity.create({
+      user: req.user.id,
+      action: "view",
+      entityType: "research",
+      entityId: research._id,
+      entityName: research.title,
+      description: `Viewed chapter submission: ${submission.filename}`,
+      metadata: {
+        researchId: research._id,
+        submissionId,
+        chapterType: submission.type,
+        filename: submission.filename,
+      },
+      ipAddress: req.ip,
+      userAgent: req.get('user-agent'),
+    });
+
+    // Send file for inline viewing
+    res.setHeader('Content-Type', mimeType);
+    res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(submission.filename)}"`);
+    const fileStream = fs.createReadStream(filePath);
+    fileStream.pipe(res);
+  } catch (error) {
+    console.error("Error viewing chapter submission:", error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Download chapter submission file
+export const downloadChapterSubmission = async (req, res) => {
+  try {
+    const { submissionId } = req.params;
+
+    const research = await Research.findOne({
+      "forms._id": submissionId,
+      students: req.user.id,
+    });
+
+    if (!research) {
+      return res.status(404).json({ message: "Submission not found or you do not have access to it." });
+    }
+
+    const submission = research.forms.id(submissionId);
+    if (!submission) {
+      return res.status(404).json({ message: "Submission not found." });
+    }
+
+    // If file is in Google Drive, redirect to Drive link
+    if (submission.driveFileLink && (submission.storageLocation === "google-drive" || submission.storageLocation === "local+google-drive")) {
+      return res.redirect(submission.driveFileLink);
+    }
+
+    // Otherwise, serve local file
+    let filePath;
+    if (path.isAbsolute(submission.filepath)) {
+      filePath = submission.filepath;
+    } else {
+      filePath = path.join(process.cwd(), submission.filepath);
+    }
+
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ message: "File not found on server" });
+    }
+
+    // Log activity
+    await Activity.create({
+      user: req.user.id,
+      action: "download",
+      entityType: "research",
+      entityId: research._id,
+      entityName: research.title,
+      description: `Downloaded chapter submission: ${submission.filename}`,
+      metadata: {
+        researchId: research._id,
+        submissionId,
+        chapterType: submission.type,
+        filename: submission.filename,
+      },
+      ipAddress: req.ip,
+      userAgent: req.get('user-agent'),
+    });
+
+    // Send file for download
+    res.download(filePath, submission.filename);
+  } catch (error) {
+    console.error("Error downloading chapter submission:", error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+export const deleteChapterSubmission = async (req, res) => {
+  try {
+    const { submissionId } = req.params;
+    if (!submissionId) {
+      return res.status(400).json({ message: "Submission ID is required" });
+    }
+
+    const research = await Research.findOne({
+      "forms._id": submissionId,
+      students: req.user._id,
+    });
+
+    if (!research) {
+      return res.status(404).json({ message: "Submission not found or you do not have access to it." });
+    }
+
+    const submission = research.forms.id(submissionId);
+    if (!submission) {
+      return res.status(404).json({ message: "Submission not found." });
+    }
+
+    if (submission.uploadedBy?.toString() !== req.user.id.toString()) {
+      return res.status(403).json({ message: "You can only delete submissions that you uploaded." });
+    }
+
+    if (submission.status === "approved") {
+      return res.status(400).json({ message: "Approved submissions cannot be deleted." });
+    }
+
+    const filePath = submission.filepath;
+
+    research.forms.pull(submissionId);
+    await research.save();
+
+    if (filePath && fs.existsSync(filePath)) {
+      fs.unlink(filePath, (err) => {
+        if (err) {
+          console.warn("Unable to delete local file for submission:", err.message);
+        }
+      });
+    }
+
+    await Activity.create({
+      user: req.user.id,
+      action: "delete",
+      entityType: "research",
+      entityId: research._id,
+      entityName: research.title,
+      description: `Deleted ${submission.type || "chapter"} submission (version ${submission.version || "n/a"})`,
+      metadata: {
+        researchId: research._id,
+        submissionId,
+        chapterType: submission.type,
+        filename: submission.filename,
+        status: submission.status,
+      },
+      ipAddress: req.ip,
+      userAgent: req.get("user-agent"),
+    });
+
+    res.json({ message: "Submission deleted successfully." });
+  } catch (error) {
+    console.error("Error deleting chapter submission:", error);
     res.status(500).json({ message: error.message });
   }
 };
@@ -898,7 +1258,7 @@ export const uploadChapterFromDrive = async (req, res) => {
       userId: req.user.id
     });
 
-    const { driveFileId, accessToken, researchId, chapterType, chapterTitle } = req.body;
+    const { driveFileId, accessToken, researchId, chapterType, chapterTitle, partName } = req.body;
 
     if (!driveFileId || !accessToken) {
       console.error("Missing required fields:", { driveFileId: !!driveFileId, accessToken: !!accessToken });
@@ -1036,6 +1396,24 @@ export const uploadChapterFromDrive = async (req, res) => {
       });
     }
 
+    // Calculate version number based on existing submissions for this chapter + partName combination
+    // Normalize partName: null/empty string means full chapter, otherwise use trimmed partName
+    const normalizedPartName = partName && partName.trim() ? partName.trim() : null;
+    
+    // Find existing submissions for this chapter + partName combination
+    const existingSubmissions = research.forms.filter(form => {
+      const formPartName = form.partName || null;
+      return form.type === chapterType && 
+             ((formPartName === null && normalizedPartName === null) || 
+              (formPartName && normalizedPartName && formPartName.toLowerCase() === normalizedPartName.toLowerCase()));
+    });
+
+    // Calculate next version number
+    const maxVersion = existingSubmissions.length > 0
+      ? Math.max(...existingSubmissions.map(f => f.version || 1))
+      : 0;
+    const nextVersion = maxVersion + 1;
+
     // Prepare new form object
     // Ensure uploadedBy is a proper ObjectId (Mongoose will handle conversion, but be explicit)
     const uploadedById = typeof req.user.id === 'string' 
@@ -1046,6 +1424,8 @@ export const uploadChapterFromDrive = async (req, res) => {
       filename: metadata.name,
       filepath: filepath,
       type: chapterType, // "chapter1", "chapter2", "chapter3"
+      partName: normalizedPartName, // null for full chapter, string for specific part
+      version: nextVersion,
       status: "pending",
       uploadedBy: uploadedById,
       uploadedAt: new Date(),
@@ -1159,11 +1539,13 @@ export const uploadChapterFromDrive = async (req, res) => {
         entityType: "research",
         entityId: research._id,
         entityName: research.title,
-        description: `Uploaded chapter from Google Drive: ${chapterType}${chapterTitle ? ` - ${chapterTitle}` : ''}`,
+        description: `Uploaded chapter from Google Drive: ${chapterType}${normalizedPartName ? ` - ${normalizedPartName}` : ''}${chapterTitle ? ` (${chapterTitle})` : ''} - Version ${nextVersion}`,
         metadata: {
           researchId: research._id,
           chapterType: chapterType,
           chapterTitle: chapterTitle || null,
+          partName: normalizedPartName,
+          version: nextVersion,
           filename: metadata.name,
           fileSize: stats.size,
           source: "google_drive",
@@ -1186,15 +1568,16 @@ export const uploadChapterFromDrive = async (req, res) => {
       if (research.adviser && research.adviser.email) {
         const studentName = req.user.name || "Student";
         const chapterLabel = chapterType === "chapter1" ? "Chapter 1" : chapterType === "chapter2" ? "Chapter 2" : "Chapter 3";
+        const partLabel = normalizedPartName ? ` - ${normalizedPartName} (v${nextVersion})` : '';
         await sendNotificationEmail(
           research.adviser.email,
-          `New Chapter Uploaded: ${chapterLabel}`,
-          `${studentName} has uploaded a new ${chapterLabel}${chapterTitle ? `: ${chapterTitle}` : ''} from Google Drive for research: ${research.title}. Please review it.`,
+          `New Chapter Uploaded: ${chapterLabel}${partLabel}`,
+          `${studentName} has uploaded a new ${chapterLabel}${partLabel}${chapterTitle ? `: ${chapterTitle}` : ''} from Google Drive for research: ${research.title}. Please review it.`,
           `
             <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
               <h2 style="color: #7C1D23;">New Chapter Uploaded</h2>
               <p>Hello ${research.adviser.name},</p>
-              <p><strong>${studentName}</strong> has uploaded a new <strong>${chapterLabel}</strong>${chapterTitle ? `: ${chapterTitle}` : ''} from Google Drive for research: <strong>${research.title}</strong>.</p>
+              <p><strong>${studentName}</strong> has uploaded a new <strong>${chapterLabel}${partLabel}</strong>${chapterTitle ? `: ${chapterTitle}` : ''} from Google Drive for research: <strong>${research.title}</strong>.</p>
               <p>Source: Google Drive</p>
               <p>Please review the chapter in the system.</p>
               <hr style="margin: 30px 0; border: none; border-top: 1px solid #ddd;" />
@@ -1213,15 +1596,16 @@ export const uploadChapterFromDrive = async (req, res) => {
       const student = await User.findById(req.user.id);
       if (student && student.email) {
         const chapterLabel = chapterType === "chapter1" ? "Chapter 1" : chapterType === "chapter2" ? "Chapter 2" : "Chapter 3";
+        const partLabel = normalizedPartName ? ` - ${normalizedPartName} (v${nextVersion})` : '';
         await sendNotificationEmail(
           student.email,
           `Chapter Uploaded Successfully`,
-          `Your ${chapterLabel}${chapterTitle ? `: ${chapterTitle}` : ''} has been uploaded successfully from Google Drive and is pending review.`,
+          `Your ${chapterLabel}${partLabel}${chapterTitle ? `: ${chapterTitle}` : ''} has been uploaded successfully from Google Drive and is pending review.`,
           `
             <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
               <h2 style="color: #7C1D23;">Chapter Uploaded</h2>
               <p>Hello ${student.name},</p>
-              <p>Your <strong>${chapterLabel}</strong>${chapterTitle ? `: ${chapterTitle}` : ''} has been uploaded successfully from Google Drive and is pending review.</p>
+              <p>Your <strong>${chapterLabel}${partLabel}</strong>${chapterTitle ? `: ${chapterTitle}` : ''} has been uploaded successfully from Google Drive and is pending review.</p>
               <p>Your adviser will review it and provide feedback.</p>
               <hr style="margin: 30px 0; border: none; border-top: 1px solid #ddd;" />
               <p style="color: #999; font-size: 12px;">This is an automated notification from the Masteral Archive and Monitoring System.</p>
@@ -1257,9 +1641,19 @@ export const uploadChapterFromDrive = async (req, res) => {
   }
 };
 
-// Get chapter submissions
+// Get chapter submissions with optional filtering and search
 export const getChapterSubmissions = async (req, res) => {
   try {
+    // Extract query parameters for filtering
+    const { 
+      chapter, 
+      partName, 
+      status, 
+      startDate, 
+      endDate, 
+      search 
+    } = req.query;
+
     // Find research for the student
     const research = await Research.findOne({ students: req.user.id })
       .populate("adviser", "name email")
@@ -1285,17 +1679,104 @@ export const getChapterSubmissions = async (req, res) => {
       uploadedByUsers.map(user => [user._id.toString(), user])
     );
 
+    // Helper function to filter submissions based on query parameters
+    const filterSubmission = (form) => {
+      // Filter by chapter
+      if (chapter && form.type !== chapter) {
+        return false;
+      }
+
+      // Filter by part name (case-insensitive partial match)
+      if (partName) {
+        const formPartName = form.partName || null;
+        if (!formPartName || !formPartName.toLowerCase().includes(partName.toLowerCase())) {
+          return false;
+        }
+      }
+
+      // Filter by status
+      if (status && form.status !== status) {
+        return false;
+      }
+
+      // Filter by date range
+      if (startDate || endDate) {
+        const uploadDate = new Date(form.uploadedAt);
+        if (startDate && uploadDate < new Date(startDate)) {
+          return false;
+        }
+        if (endDate && uploadDate > new Date(endDate)) {
+          return false;
+        }
+      }
+
+      // Search across filename, partName, and chapterTitle (case-insensitive)
+      if (search) {
+        const searchLower = search.toLowerCase();
+        const matchesFilename = form.filename && form.filename.toLowerCase().includes(searchLower);
+        const matchesPartName = form.partName && form.partName.toLowerCase().includes(searchLower);
+        const matchesChapterTitle = form.chapterTitle && form.chapterTitle.toLowerCase().includes(searchLower);
+        
+        if (!matchesFilename && !matchesPartName && !matchesChapterTitle) {
+          return false;
+        }
+      }
+
+      return true;
+    };
+
     // Group forms by chapter type (chapter1, chapter2, chapter3)
     const chapterTypes = ["chapter1", "chapter2", "chapter3"];
     const chapters = chapterTypes.map((chapterType) => {
-      // Filter forms for this chapter type and sort by upload date (newest first)
-      const chapterForms = research.forms
-        .filter((form) => form.type === chapterType)
-        .sort((a, b) => new Date(b.uploadedAt) - new Date(a.uploadedAt));
+      // Filter forms for this chapter type
+      let chapterForms = research.forms
+        .filter((form) => form.type === chapterType);
 
-      // Map forms to submissions with version numbers (newest is version 1, older ones have higher versions)
-      const submissions = chapterForms.map((form, index) => {
-        const version = chapterForms.length - index; // Latest submission is version 1
+      console.log(`[getChapterSubmissions] ${chapterType} - Found ${chapterForms.length} forms before filtering`);
+
+      // Apply additional filters
+      chapterForms = chapterForms.filter(filterSubmission);
+
+      console.log(`[getChapterSubmissions] ${chapterType} - Found ${chapterForms.length} forms after filtering`);
+
+      // For older submissions without version, calculate version based on upload order
+      // Group by partName and assign versions BEFORE sorting
+      const versionMap = new Map();
+      chapterForms.forEach((form) => {
+        const partKey = form.partName || null;
+        if (!versionMap.has(partKey)) {
+          versionMap.set(partKey, []);
+        }
+        versionMap.get(partKey).push(form);
+      });
+      
+      // Sort each group by upload date (oldest first) and assign versions if missing
+      versionMap.forEach((forms, partKey) => {
+        forms.sort((a, b) => new Date(a.uploadedAt) - new Date(b.uploadedAt)); // Oldest first
+        forms.forEach((form, index) => {
+          // If version is not set or is default 1, calculate it based on order
+          // Oldest = version 1, newest = highest version
+          if (!form.version || (form.version === 1 && forms.length > 1 && index > 0)) {
+            form.version = index + 1;
+          }
+        });
+      });
+
+      // Now sort by upload date (newest first) - show all versions
+      chapterForms.sort((a, b) => new Date(b.uploadedAt) - new Date(a.uploadedAt));
+      
+      console.log(`[getChapterSubmissions] ${chapterType} - Returning ${chapterForms.length} submissions:`, 
+        chapterForms.map(f => ({
+          id: f._id.toString(),
+          version: f.version || 1,
+          partName: f.partName || null,
+          filename: f.filename,
+          uploadedAt: f.uploadedAt
+        }))
+      );
+
+      // Map forms to submissions with part names and versions
+      const submissions = chapterForms.map((form) => {
         const uploadedBy = form.uploadedBy 
           ? uploadedByMap.get(form.uploadedBy.toString())
           : null;
@@ -1303,10 +1784,12 @@ export const getChapterSubmissions = async (req, res) => {
         return {
           id: form._id.toString(),
           _id: form._id,
-          version: version,
+          version: form.version || 1, // Use stored version number or calculated
+          partName: form.partName || null, // null means full chapter
           filename: form.filename,
           filepath: form.filepath,
           status: form.status || "pending",
+          feedback: form.feedback || null,
           uploadedAt: form.uploadedAt,
           uploadedBy: uploadedBy ? {
             _id: uploadedBy._id,
@@ -1318,6 +1801,11 @@ export const getChapterSubmissions = async (req, res) => {
             filename: form.filename,
             filepath: form.filepath,
           },
+          driveFileId: form.driveFileId || null,
+          driveFileLink: form.driveFileLink || null,
+          driveFileName: form.driveFileName || null,
+          driveMimeType: form.driveMimeType || null,
+          storageLocation: form.storageLocation || "local",
         };
       });
 
@@ -1602,7 +2090,7 @@ export const exportScheduleICS = async (req, res) => {
     const icsContent = [
       'BEGIN:VCALENDAR',
       'VERSION:2.0',
-      'PRODID:-//Masteral Archive System//Defense Schedule//EN',
+      'PRODID:-//Defense Schedule System//EN',
       'CALSCALE:GREGORIAN',
       'METHOD:PUBLISH',
       'BEGIN:VEVENT',
@@ -1956,6 +2444,797 @@ export const viewDocument = async (req, res) => {
     const fileStream = fs.createReadStream(filePath);
     fileStream.pipe(res);
   } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Get available consultation slots from adviser
+export const getAvailableSlots = async (req, res) => {
+  console.log('========================================');
+  console.log('[GET AVAILABLE SLOTS] FUNCTION CALLED');
+  console.log('[GET AVAILABLE SLOTS] Timestamp:', new Date().toISOString());
+  console.log('[GET AVAILABLE SLOTS] User:', {
+    id: req.user?._id?.toString(),
+    name: req.user?.name,
+    role: req.user?.role,
+    email: req.user?.email
+  });
+  console.log('========================================');
+  
+  try {
+    // Role check is already handled by middleware, but double-check for safety
+    if (req.user.role !== "graduate student") {
+      console.log('[GET AVAILABLE SLOTS] Role check failed - not a graduate student');
+      return res.status(403).json({ message: "Only graduate students can view available slots." });
+    }
+    
+    console.log('[GET AVAILABLE SLOTS] Role check passed - proceeding...');
+
+    // Find student's research to get their adviser
+    let research = await Research.findOne({ students: req.user._id });
+    
+    console.log('[GET AVAILABLE SLOTS] Raw research document:', {
+      found: !!research,
+      researchId: research?._id?.toString(),
+      researchTitle: research?.title,
+      adviserField: research?.adviser,
+      adviserFieldType: typeof research?.adviser,
+      adviserIsObjectId: research?.adviser ? research.adviser.constructor?.name : 'null'
+    });
+
+    if (!research) {
+      console.log('========================================');
+      console.log('[GET AVAILABLE SLOTS] No research found');
+      console.log('[GET AVAILABLE SLOTS] Student ID:', req.user._id.toString());
+      console.log('========================================');
+      return res.json({ message: "You don't have a research assigned yet.", slots: [] });
+    }
+
+    // Populate adviser if it exists
+    if (research.adviser) {
+      await research.populate("adviser", "name email");
+      console.log('[GET AVAILABLE SLOTS] After populate:', {
+        hasAdviser: !!research.adviser,
+        adviserId: research.adviser?._id?.toString(),
+        adviserName: research.adviser?.name,
+        adviserEmail: research.adviser?.email
+      });
+    }
+
+    if (!research.adviser) {
+      console.log('========================================');
+      console.log('[GET AVAILABLE SLOTS] Research found but no adviser assigned');
+      console.log('[GET AVAILABLE SLOTS] Research ID:', research._id.toString());
+      console.log('[GET AVAILABLE SLOTS] Research Title:', research.title);
+      console.log('[GET AVAILABLE SLOTS] Adviser field value:', research.adviser);
+      console.log('[GET AVAILABLE SLOTS] Please ask Program Head to assign an adviser');
+      console.log('========================================');
+      return res.json({ message: "You don't have an assigned adviser yet. Please contact the Program Head.", slots: [] });
+    }
+    
+    console.log('[GET AVAILABLE SLOTS] Research and adviser found', {
+      researchId: research._id.toString(),
+      researchTitle: research.title,
+      adviserId: research.adviser._id.toString(),
+      adviserName: research.adviser.name,
+      adviserEmail: research.adviser.email
+    });
+
+    // Find available consultation slots (no student assigned yet or status is 'scheduled')
+    // Query slots where the adviser is either:
+    // 1. In the participants array with role "adviser", OR
+    // 2. The creator of the slot (createdBy)
+    const adviserId = research.adviser._id;
+    
+    const now = new Date();
+    console.log('[GET AVAILABLE SLOTS] Query parameters', {
+      adviserId: adviserId.toString(),
+      adviserIdType: typeof adviserId,
+      now: now.toISOString(),
+      nowTimestamp: now.getTime()
+    });
+    
+    // First, try to find slots where adviser is in participants
+    const slotsByParticipant = await Schedule.find({
+      type: "consultation",
+      datetime: { $gte: now },
+      status: "scheduled",
+      "participants.user": adviserId,
+      "participants.role": "adviser"
+    })
+      .populate("participants.user", "name email")
+      .populate("createdBy", "name email")
+      .sort({ datetime: 1 });
+    
+    console.log('[GET AVAILABLE SLOTS] Slots by participant', {
+      count: slotsByParticipant.length,
+      slots: slotsByParticipant.map(s => ({
+        id: s._id.toString(),
+        title: s.title,
+        datetime: s.datetime,
+        status: s.status,
+        createdBy: s.createdBy?._id?.toString(),
+        participants: s.participants.map(p => ({
+          userId: p.user?._id?.toString(),
+          role: p.role
+        }))
+      }))
+    });
+    
+    // Also find slots where adviser is the creator
+    const slotsByCreator = await Schedule.find({
+      type: "consultation",
+      datetime: { $gte: now },
+      status: "scheduled",
+      createdBy: adviserId
+    })
+      .populate("participants.user", "name email")
+      .populate("createdBy", "name email")
+      .sort({ datetime: 1 });
+    
+    console.log('[GET AVAILABLE SLOTS] Slots by creator', {
+      count: slotsByCreator.length,
+      slots: slotsByCreator.map(s => ({
+        id: s._id.toString(),
+        title: s.title,
+        datetime: s.datetime,
+        status: s.status,
+        createdBy: s.createdBy?._id?.toString(),
+        participants: s.participants.map(p => ({
+          userId: p.user?._id?.toString(),
+          role: p.role
+        }))
+      }))
+    });
+    
+    // Combine both results, removing duplicates
+    const slotIds = new Set();
+    const allAdviserSlots = [];
+    
+    for (const slot of slotsByParticipant) {
+      if (!slotIds.has(slot._id.toString())) {
+        slotIds.add(slot._id.toString());
+        allAdviserSlots.push(slot);
+      }
+    }
+    
+    for (const slot of slotsByCreator) {
+      if (!slotIds.has(slot._id.toString())) {
+        slotIds.add(slot._id.toString());
+        allAdviserSlots.push(slot);
+      }
+    }
+
+    // Filter to only include slots that don't have a student participant yet
+    const availableSlots = allAdviserSlots.filter(slot => {
+      const hasStudent = slot.participants.some(p => 
+        p.role === "student" && (p.status === "invited" || p.status === "confirmed")
+      );
+      return !hasStudent;
+    });
+
+    // Debug logging to help diagnose issues
+    console.log('[GET AVAILABLE SLOTS]', {
+      studentId: req.user._id.toString(),
+      studentName: req.user.name,
+      adviserId: adviserId.toString(),
+      adviserName: research.adviser.name,
+      adviserEmail: research.adviser.email,
+      slotsByParticipant: slotsByParticipant.length,
+      slotsByCreator: slotsByCreator.length,
+      totalSlotsFound: allAdviserSlots.length,
+      availableSlotsCount: availableSlots.length,
+      slotDetails: allAdviserSlots.map(s => ({
+        id: s._id.toString(),
+        title: s.title,
+        datetime: s.datetime,
+        status: s.status,
+        createdBy: s.createdBy?._id?.toString(),
+        createdByName: s.createdBy?.name,
+        participants: s.participants.map(p => ({
+          userId: p.user?._id?.toString(),
+          userName: p.user?.name,
+          role: p.role,
+          status: p.status
+        })),
+        hasStudent: s.participants.some(p => p.role === "student")
+      }))
+    });
+    
+    // Additional debug: Check all consultation slots for this adviser (without filters)
+    const allConsultationSlotsByCreator = await Schedule.find({
+      type: "consultation",
+      createdBy: adviserId
+    })
+      .populate("participants.user", "name email")
+      .populate("createdBy", "name email")
+      .sort({ datetime: 1 });
+    
+    const allConsultationSlotsByParticipant = await Schedule.find({
+      type: "consultation",
+      "participants.user": adviserId
+    })
+      .populate("participants.user", "name email")
+      .populate("createdBy", "name email")
+      .sort({ datetime: 1 });
+    
+    console.log('[GET AVAILABLE SLOTS - ALL CONSULTATIONS BY CREATOR]', {
+      adviserId: adviserId.toString(),
+      totalSlots: allConsultationSlotsByCreator.length,
+      slots: allConsultationSlotsByCreator.map(s => ({
+        id: s._id.toString(),
+        title: s.title,
+        datetime: s.datetime,
+        datetimeISO: s.datetime.toISOString(),
+        status: s.status,
+        isFuture: new Date(s.datetime) >= now,
+        createdBy: s.createdBy?._id?.toString(),
+        createdByMatch: s.createdBy?._id?.toString() === adviserId.toString(),
+        participants: s.participants.map(p => ({
+          userId: p.user?._id?.toString(),
+          role: p.role,
+          userMatch: p.user?._id?.toString() === adviserId.toString()
+        }))
+      }))
+    });
+    
+    console.log('[GET AVAILABLE SLOTS - ALL CONSULTATIONS BY PARTICIPANT]', {
+      adviserId: adviserId.toString(),
+      totalSlots: allConsultationSlotsByParticipant.length,
+      slots: allConsultationSlotsByParticipant.map(s => ({
+        id: s._id.toString(),
+        title: s.title,
+        datetime: s.datetime,
+        status: s.status,
+        isFuture: new Date(s.datetime) >= now,
+        participants: s.participants.map(p => ({
+          userId: p.user?._id?.toString(),
+          role: p.role,
+          userMatch: p.user?._id?.toString() === adviserId.toString()
+        }))
+      }))
+    });
+
+    console.log('[GET AVAILABLE SLOTS] ====== RETURNING RESPONSE ======');
+    console.log('[GET AVAILABLE SLOTS] Final result:', {
+      adviserName: research.adviser.name,
+      adviserEmail: research.adviser.email,
+      slotsCount: availableSlots.length,
+      slots: availableSlots.map(s => ({
+        id: s._id.toString(),
+        title: s.title,
+        datetime: s.datetime
+      }))
+    });
+    
+    res.json({ adviser: research.adviser, slots: availableSlots });
+  } catch (error) {
+    console.error('[GET AVAILABLE SLOTS] ====== ERROR ======');
+    console.error("Error fetching available slots:", error);
+    console.error("Error stack:", error.stack);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Request consultation
+export const requestConsultation = async (req, res) => {
+  try {
+    // Role check is already handled by middleware, but double-check for safety
+    if (req.user.role !== "graduate student") {
+      return res.status(403).json({ message: "Only graduate students can request consultations." });
+    }
+
+    const { scheduleId, message } = req.body;
+
+    const schedule = await Schedule.findById(scheduleId)
+      .populate("participants.user", "name email");
+
+    if (!schedule) {
+      return res.status(404).json({ message: "Schedule not found" });
+    }
+
+    // Check if slot is still available
+    const hasStudent = schedule.participants.some(p => p.role === "student");
+    if (hasStudent) {
+      return res.status(400).json({ message: "This slot has already been requested by another student." });
+    }
+
+    // Check if schedule is in the past
+    if (new Date(schedule.datetime) < new Date()) {
+      return res.status(400).json({ message: "Cannot request past consultation slots." });
+    }
+
+    // Add student as participant
+    schedule.participants.push({
+      user: req.user._id,
+      role: "student",
+      status: "invited"
+    });
+
+    await schedule.save();
+
+    // Get the updated schedule with populated fields for notification
+    const updatedSchedule = await Schedule.findById(scheduleId)
+      .populate("participants.user", "name email")
+      .populate("createdBy", "name email")
+      .populate("research", "title");
+
+    // Find the adviser from the schedule (either from participants or createdBy)
+    const adviser = updatedSchedule.participants?.find(p => p.role === "adviser")?.user || updatedSchedule.createdBy;
+    
+    // Send email notification to adviser
+    if (adviser && adviser.email) {
+      const studentName = req.user.name || "Student";
+      const studentEmail = req.user.email || "";
+      const formattedDate = new Date(updatedSchedule.datetime).toLocaleString('en-US', {
+        weekday: 'long',
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+      });
+
+      await sendNotificationEmail(
+        adviser.email,
+        `New Consultation Request from ${studentName}`,
+        `${studentName} has requested a consultation for ${formattedDate}. Please review and approve or decline the request in your dashboard.`,
+        `
+          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+            <h2 style="color: #7C1D23;">New Consultation Request</h2>
+            <p>Hello ${adviser.name},</p>
+            <p><strong>${studentName}</strong> (${studentEmail}) has requested a consultation with you.</p>
+            <div style="background-color: #f9f9f9; padding: 15px; margin: 20px 0; border-left: 4px solid #7C1D23; border-radius: 4px;">
+              <p style="margin: 8px 0;"><strong style="color: #333;">Consultation Title:</strong> ${updatedSchedule.title}</p>
+              <p style="margin: 8px 0;"><strong style="color: #333;">Date & Time:</strong> ${formattedDate}</p>
+              <p style="margin: 8px 0;"><strong style="color: #333;">Duration:</strong> ${updatedSchedule.duration || 60} minutes</p>
+              <p style="margin: 8px 0;"><strong style="color: #333;">Location:</strong> ${updatedSchedule.location}</p>
+              ${updatedSchedule.description ? `<p style="margin: 8px 0;"><strong style="color: #333;">Description:</strong> ${updatedSchedule.description}</p>` : ''}
+              ${message ? `<p style="margin: 8px 0;"><strong style="color: #333;">Student Message:</strong> ${message}</p>` : ''}
+            </div>
+            <p>Please log in to your dashboard to approve or decline this consultation request.</p>
+            <hr style="margin: 30px 0; border: none; border-top: 1px solid #ddd;" />
+            <p style="color: #999; font-size: 12px;">This is an automated notification from the Masteral Archive and Monitoring System.</p>
+          </div>
+        `
+      );
+    }
+
+    // Log activity
+    try {
+      await Activity.create({
+        user: req.user._id,
+        action: "request",
+        entityType: "schedule",
+        entityId: updatedSchedule._id,
+        entityName: updatedSchedule.title,
+        description: `Requested consultation: ${updatedSchedule.title}`,
+        metadata: {
+          scheduleId: updatedSchedule._id,
+          scheduleType: "consultation",
+          datetime: updatedSchedule.datetime,
+          adviserId: adviser?._id?.toString(),
+          adviserName: adviser?.name
+        },
+        ipAddress: req.ip,
+        userAgent: req.get('user-agent')
+      });
+    } catch (activityError) {
+      console.error("Error logging activity for consultation request:", activityError);
+      // Don't fail the request if activity logging fails
+    }
+
+    res.json({ 
+      message: "Consultation request submitted successfully. Your adviser will review it soon.", 
+      schedule: updatedSchedule 
+    });
+  } catch (error) {
+    console.error("Error requesting consultation:", error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Create custom consultation request (Student creates their own consultation request)
+export const createCustomConsultationRequest = async (req, res) => {
+  console.log('========================================');
+  console.log('[CREATE CUSTOM CONSULTATION REQUEST] Function called');
+  console.log('[CREATE CUSTOM CONSULTATION REQUEST] Timestamp:', new Date().toISOString());
+  console.log('[CREATE CUSTOM CONSULTATION REQUEST] User:', {
+    id: req.user?._id?.toString(),
+    name: req.user?.name,
+    role: req.user?.role,
+    email: req.user?.email
+  });
+  console.log('[CREATE CUSTOM CONSULTATION REQUEST] Request body:', req.body);
+  console.log('========================================');
+  
+  try {
+    // Role check is already handled by middleware, but double-check for safety
+    if (req.user.role !== "graduate student") {
+      console.log('[CREATE CUSTOM CONSULTATION REQUEST] Role check failed - not a graduate student');
+      return res.status(403).json({ message: "Only graduate students can create consultation requests." });
+    }
+    
+    console.log('[CREATE CUSTOM CONSULTATION REQUEST] Role check passed - proceeding...');
+
+    const { title, description, datetime, duration, location, message, consultationType } = req.body;
+
+    // Validate required fields
+    if (!title || !title.trim()) {
+      return res.status(400).json({ message: "Title is required" });
+    }
+    
+    if (!location || !location.trim()) {
+      return res.status(400).json({ message: "Location is required" });
+    }
+    
+    if (!datetime) {
+      return res.status(400).json({ message: "Date and time are required" });
+    }
+
+    // Find student's research to get their adviser
+    const research = await Research.findOne({ students: req.user._id })
+      .populate("adviser", "name email");
+
+    if (!research || !research.adviser) {
+      return res.status(400).json({ 
+        message: "You don't have an assigned adviser yet. Please contact the Program Head to assign an adviser." 
+      });
+    }
+
+    // Parse datetime
+    let startTime;
+    if (typeof datetime === 'string') {
+      if (datetime.includes('Z') || datetime.match(/[+-]\d{2}:\d{2}$/)) {
+        startTime = new Date(datetime);
+      } else if (datetime.includes('T') && !datetime.includes('Z') && !datetime.includes('+')) {
+        const [datePart, timePart] = datetime.split('T');
+        const [year, month, day] = datePart.split('-').map(Number);
+        const [hour, minute] = timePart.split(':').map(Number);
+        const manilaTimeString = `${year}-${month.toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}T${hour.toString().padStart(2, '0')}:${(minute || 0).toString().padStart(2, '0')}:00+08:00`;
+        startTime = new Date(manilaTimeString);
+        if (isNaN(startTime.getTime())) {
+          const manilaDate = new Date(Date.UTC(year, month - 1, day, hour, minute || 0, 0, 0));
+          const manilaOffsetMs = 8 * 60 * 60 * 1000;
+          startTime = new Date(manilaDate.getTime() - manilaOffsetMs);
+        }
+      } else {
+        startTime = new Date(datetime);
+      }
+    } else {
+      startTime = new Date(datetime);
+    }
+
+    // Validate that datetime is a valid date
+    if (isNaN(startTime.getTime())) {
+      return res.status(400).json({ 
+        message: "Invalid date format. Please select a valid date and time." 
+      });
+    }
+
+    // Check if datetime is in the past
+    if (new Date(startTime) < new Date()) {
+      return res.status(400).json({ message: "Cannot create consultation requests for past dates." });
+    }
+
+    // Create the consultation request schedule
+    const schedule = new Schedule({
+      research: research._id,
+      type: "consultation",
+      title: title.trim(),
+      description: description || (message ? `Student message: ${message}` : "Custom consultation request from student"),
+      datetime: startTime,
+      duration: duration || 60,
+      location: consultationType === "online" ? "Online" : location.trim(),
+      consultationType: consultationType || "face-to-face",
+      participants: [
+        {
+          user: research.adviser._id,
+          role: "adviser",
+          status: "invited" // Adviser needs to approve
+        },
+        {
+          user: req.user._id,
+          role: "student",
+          status: "invited" // Student is requesting
+        }
+      ],
+      createdBy: req.user._id,
+      status: "scheduled" // Will change to "confirmed" when adviser approves
+    });
+
+    // If consultation type is "online", try to create Google Meet link if adviser has calendar connected
+    if (schedule.consultationType === "online") {
+      try {
+        const adviser = await User.findById(research.adviser._id);
+        if (adviser?.calendarConnected && adviser?.googleAccessToken && adviser?.googleRefreshToken) {
+          const { createConsultationEvent } = await import("../utils/googleCalendar.js");
+          
+          const attendeeEmails = [req.user.email, research.adviser.email].filter(Boolean);
+          
+          const calendarEvent = await createConsultationEvent(
+            {
+              title: schedule.title,
+              description: schedule.description,
+              datetime: schedule.datetime,
+              duration: schedule.duration,
+              location: "Online",
+              type: schedule.type,
+              researchTitle: research.title,
+              attendeeEmails,
+            },
+            adviser.googleAccessToken,
+            adviser.googleRefreshToken,
+            adviser._id.toString()
+          );
+
+          if (calendarEvent.meetLink) {
+            schedule.googleMeetLink = calendarEvent.meetLink;
+            schedule.googleCalendarEventId = calendarEvent.eventId;
+            schedule.googleCalendarLink = calendarEvent.eventLink;
+            schedule.calendarSynced = true;
+            console.log('[CREATE CUSTOM REQUEST] Google Meet link created:', calendarEvent.meetLink);
+          }
+        }
+      } catch (error) {
+        console.error('[CREATE CUSTOM REQUEST] Error creating Google Meet link:', error);
+        // Continue without Meet link - adviser can add it later
+      }
+    }
+
+    await schedule.save();
+
+    // Send email notification to adviser
+    const studentName = req.user.name || "Student";
+    const studentEmail = req.user.email || "";
+    const formattedDate = new Date(schedule.datetime).toLocaleString('en-US', {
+      weekday: 'long',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+
+    await sendNotificationEmail(
+      research.adviser.email,
+      `New Custom Consultation Request from ${studentName}`,
+      `${studentName} has created a custom consultation request for ${formattedDate}. Please review and approve or decline the request in your dashboard.`,
+      `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <h2 style="color: #7C1D23;">New Custom Consultation Request</h2>
+          <p>Hello ${research.adviser.name},</p>
+          <p><strong>${studentName}</strong> (${studentEmail}) has created a custom consultation request with their preferred date and time.</p>
+          <div style="background-color: #f9f9f9; padding: 15px; margin: 20px 0; border-left: 4px solid #7C1D23; border-radius: 4px;">
+            <p style="margin: 8px 0;"><strong style="color: #333;">Consultation Title:</strong> ${schedule.title}</p>
+            <p style="margin: 8px 0;"><strong style="color: #333;">Requested Date & Time:</strong> ${formattedDate}</p>
+            <p style="margin: 8px 0;"><strong style="color: #333;">Duration:</strong> ${schedule.duration || 60} minutes</p>
+            <p style="margin: 8px 0;"><strong style="color: #333;">Location:</strong> ${schedule.location}</p>
+            ${schedule.description ? `<p style="margin: 8px 0;"><strong style="color: #333;">Description:</strong> ${schedule.description}</p>` : ''}
+            ${message ? `<p style="margin: 8px 0;"><strong style="color: #333;">Student Message:</strong> ${message}</p>` : ''}
+          </div>
+          <p><strong>Note:</strong> This is a custom request created by the student. Please review the requested time and approve or decline it in your dashboard.</p>
+          <p>Please log in to your dashboard to approve or decline this consultation request.</p>
+          <hr style="margin: 30px 0; border: none; border-top: 1px solid #ddd;" />
+          <p style="color: #999; font-size: 12px;">This is an automated notification from the Masteral Archive and Monitoring System.</p>
+        </div>
+      `
+    );
+
+    // Log activity
+    try {
+      await Activity.create({
+        user: req.user._id,
+        action: "create",
+        entityType: "schedule",
+        entityId: schedule._id,
+        entityName: schedule.title,
+        description: `Created custom consultation request: ${schedule.title}`,
+        metadata: {
+          scheduleId: schedule._id,
+          scheduleType: "consultation",
+          datetime: schedule.datetime,
+          adviserId: research.adviser._id.toString(),
+          adviserName: research.adviser.name,
+          isCustomRequest: true
+        },
+        ipAddress: req.ip,
+        userAgent: req.get('user-agent')
+      });
+    } catch (activityError) {
+      console.error("Error logging activity for custom consultation request:", activityError);
+    }
+
+    const updatedSchedule = await Schedule.findById(schedule._id)
+      .populate("participants.user", "name email")
+      .populate("createdBy", "name email")
+      .populate("research", "title");
+
+    res.status(201).json({ 
+      message: "Custom consultation request created successfully. Your adviser will review it soon.", 
+      schedule: updatedSchedule 
+    });
+  } catch (error) {
+    console.error("Error creating custom consultation request:", error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Get completed thesis for student
+export const getCompletedThesis = async (req, res) => {
+  try {
+    const { semester, academicYear, search } = req.query;
+    
+    // Build query for completed research
+    const query = {
+      students: req.user.id,
+      status: "completed"
+    };
+    
+    // Apply filters (only add if provided)
+    // Note: semester and academicYear may not exist in all Research documents
+    // MongoDB will handle this gracefully - documents without these fields won't match
+    if (semester) {
+      query.semester = semester;
+    }
+    if (academicYear) {
+      query.academicYear = academicYear;
+    }
+    if (search) {
+      query.$or = [
+        { title: { $regex: search, $options: 'i' } },
+        { abstract: { $regex: search, $options: 'i' } }
+      ];
+    }
+    
+    // Fetch completed research
+    const completedResearch = await Research.find(query)
+      .populate("adviser", "name email")
+      .populate("students", "name email")
+      .populate("panel", "name email")
+      .sort({ updatedAt: -1 });
+    
+    // Transform data to match frontend expectations
+    const thesisList = completedResearch.map(research => {
+      // Find the latest approved form to get submission date
+      const approvedForms = research.forms.filter(f => f.status === 'approved');
+      const latestForm = approvedForms.length > 0 
+        ? approvedForms.sort((a, b) => new Date(b.uploadedAt) - new Date(a.uploadedAt))[0]
+        : null;
+      
+      return {
+        _id: research._id,
+        title: research.title,
+        abstract: research.abstract || '',
+        status: research.status,
+        stage: research.stage,
+        progress: research.progress,
+        semester: research.semester || null,
+        academicYear: research.academicYear || null,
+        evaluationStatus: research.evaluationStatus || null,
+        finalGrade: research.finalGrade || null,
+        submissionDate: latestForm?.uploadedAt || research.createdAt,
+        finalizedDate: research.updatedAt,
+        adviser: research.adviser ? {
+          _id: research.adviser._id,
+          name: research.adviser.name,
+          email: research.adviser.email
+        } : null,
+        students: research.students.map(s => ({
+          _id: s._id,
+          name: s.name,
+          email: s.email
+        })),
+        panel: research.panel ? research.panel.map(p => ({
+          _id: p._id,
+          name: p.name,
+          email: p.email
+        })) : [],
+        createdAt: research.createdAt,
+        updatedAt: research.updatedAt
+      };
+    });
+    
+    // Log activity
+    await Activity.create({
+      user: req.user.id,
+      action: "view",
+      entityType: "research",
+      entityName: "Completed Thesis",
+      description: "Viewed completed thesis list",
+      metadata: {
+        count: thesisList.length,
+        filters: { semester, academicYear, search }
+      },
+      ipAddress: req.ip,
+      userAgent: req.get('user-agent'),
+    });
+    
+    res.json(thesisList);
+  } catch (error) {
+    console.error('Error fetching completed thesis:', error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Get panel feedback for a specific completed thesis
+export const getPanelFeedback = async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    // Find the research and verify the student has access
+    const research = await Research.findOne({
+      _id: id,
+      students: req.user.id,
+      status: "completed"
+    })
+      .populate("adviser", "name email")
+      .populate("panel", "name email");
+    
+    if (!research) {
+      return res.status(404).json({ message: "Thesis not found or access denied" });
+    }
+    
+    // Find panel associated with this research
+    const panel = await Panel.findOne({ research: id })
+      .populate("members.faculty", "name email")
+      .populate("reviews.panelist", "name email");
+    
+    // Get feedback from panel reviews
+    const feedback = panel ? (panel.reviews || []).map(review => ({
+      panelist: review.panelist ? {
+        _id: review.panelist._id,
+        name: review.panelist.name,
+        email: review.panelist.email
+      } : null,
+      evaluation: review.evaluation || null,
+      recommendation: review.recommendation || null,
+      comments: review.comments || '',
+      submittedAt: review.submittedAt || null,
+      grade: review.grade || null
+    })) : [];
+    
+    // Log activity
+    await Activity.create({
+      user: req.user.id,
+      action: "view",
+      entityType: "research",
+      entityId: research._id,
+      entityName: research.title,
+      description: "Viewed panel feedback for completed thesis",
+      metadata: {
+        researchId: research._id,
+        panelId: panel?._id || null,
+        feedbackCount: feedback.length
+      },
+      ipAddress: req.ip,
+      userAgent: req.get('user-agent'),
+    });
+    
+    res.json({
+      panel: panel ? {
+        _id: panel._id,
+        name: panel.name,
+        type: panel.type,
+        status: panel.status,
+        members: panel.members.map(m => ({
+          faculty: m.faculty ? {
+            _id: m.faculty._id,
+            name: m.faculty.name,
+            email: m.faculty.email
+          } : null,
+          name: m.name || null,
+          email: m.email || null,
+          role: m.role,
+          isExternal: m.isExternal || false
+        })),
+        meetingDate: panel.meetingDate,
+        meetingLocation: panel.meetingLocation
+      } : null,
+      feedback: feedback
+    });
+  } catch (error) {
+    console.error('Error fetching panel feedback:', error);
     res.status(500).json({ message: error.message });
   }
 };
