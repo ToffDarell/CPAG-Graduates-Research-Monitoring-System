@@ -37,7 +37,8 @@ const permissionSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-permissionSchema.index({ name: 1 });
+// Note: name already has unique: true which creates an index automatically
+// No need to create duplicate index on name
 permissionSchema.index({ module: 1 });
 
 export default mongoose.model("Permission", permissionSchema);

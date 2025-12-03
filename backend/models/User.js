@@ -84,6 +84,20 @@ const userSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    // Google Sheets integration
+    sheetsAccessToken: {
+      type: String,
+    },
+    sheetsRefreshToken: {
+      type: String,
+    },
+    sheetsTokenExpiry: {
+      type: Date,
+    },
+    sheetsConnected: {
+      type: Boolean,
+      default: false,
+    },
     // Password reset fields
     resetPasswordToken: {
       type: String,
@@ -97,6 +111,11 @@ const userSchema = new mongoose.Schema(
     },
     changePasswordCodeExpires: {
       type: Date,
+    },
+    // MVCC version field for optimistic locking
+    version: {
+      type: Number,
+      default: 0,
     }
   },
   { timestamps: true }

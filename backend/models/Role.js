@@ -35,7 +35,8 @@ const roleSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-roleSchema.index({ name: 1 });
+// Note: name already has unique: true which creates an index automatically
+// No need to create duplicate index on name
 roleSchema.index({ isActive: 1 });
 
 export default mongoose.model("Role", roleSchema);
