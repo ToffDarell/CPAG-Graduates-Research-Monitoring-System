@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 import bcrypt from "bcryptjs";
+import { encryptOAuthToken, decryptOAuthToken, isEncrypted } from "../utils/encryption.js";
 
 const userSchema = new mongoose.Schema(
   {
@@ -129,9 +130,63 @@ userSchema.pre("save", async function (next) {
   next();
 });
 
+// ✅ Encrypt OAuth tokens before saving
+userSchema.pre("save", async function (next) {
+  // Encrypt Google Calendar tokens if they are new or modified
+  if (this.isModified("googleAccessToken") && this.googleAccessToken && !isEncrypted(this.googleAccessToken)) {
+    this.googleAccessToken = encryptOAuthToken(this.googleAccessToken);
+  }
+  if (this.isModified("googleRefreshToken") && this.googleRefreshToken && !isEncrypted(this.googleRefreshToken)) {
+    this.googleRefreshToken = encryptOAuthToken(this.googleRefreshToken);
+  }
+  
+  // Encrypt Google Drive tokens
+  if (this.isModified("driveAccessToken") && this.driveAccessToken && !isEncrypted(this.driveAccessToken)) {
+    this.driveAccessToken = encryptOAuthToken(this.driveAccessToken);
+  }
+  if (this.isModified("driveRefreshToken") && this.driveRefreshToken && !isEncrypted(this.driveRefreshToken)) {
+    this.driveRefreshToken = encryptOAuthToken(this.driveRefreshToken);
+  }
+  
+  // Encrypt Google Sheets tokens
+  if (this.isModified("sheetsAccessToken") && this.sheetsAccessToken && !isEncrypted(this.sheetsAccessToken)) {
+    this.sheetsAccessToken = encryptOAuthToken(this.sheetsAccessToken);
+  }
+  if (this.isModified("sheetsRefreshToken") && this.sheetsRefreshToken && !isEncrypted(this.sheetsRefreshToken)) {
+    this.sheetsRefreshToken = encryptOAuthToken(this.sheetsRefreshToken);
+  }
+  
+  next();
+});
+
 // ✅ Compare entered password with hashed one
 userSchema.methods.matchPassword = async function (enteredPassword) {
   return await bcrypt.compare(enteredPassword, this.password);
+};
+
+// ✅ Get decrypted OAuth tokens (for use in controllers)
+userSchema.methods.getDecryptedGoogleAccessToken = function () {
+  return this.googleAccessToken ? decryptOAuthToken(this.googleAccessToken) : null;
+};
+
+userSchema.methods.getDecryptedGoogleRefreshToken = function () {
+  return this.googleRefreshToken ? decryptOAuthToken(this.googleRefreshToken) : null;
+};
+
+userSchema.methods.getDecryptedDriveAccessToken = function () {
+  return this.driveAccessToken ? decryptOAuthToken(this.driveAccessToken) : null;
+};
+
+userSchema.methods.getDecryptedDriveRefreshToken = function () {
+  return this.driveRefreshToken ? decryptOAuthToken(this.driveRefreshToken) : null;
+};
+
+userSchema.methods.getDecryptedSheetsAccessToken = function () {
+  return this.sheetsAccessToken ? decryptOAuthToken(this.sheetsAccessToken) : null;
+};
+
+userSchema.methods.getDecryptedSheetsRefreshToken = function () {
+  return this.sheetsRefreshToken ? decryptOAuthToken(this.sheetsRefreshToken) : null;
 };
 
 const User = mongoose.model("User", userSchema);

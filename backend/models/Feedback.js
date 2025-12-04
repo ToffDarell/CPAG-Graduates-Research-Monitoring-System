@@ -46,6 +46,11 @@ const feedbackSchema = new mongoose.Schema(
     version: {
       type: Number,
       default: 1
+    },
+    createdBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      required: false, // Optional for backward compatibility
     }
   },
   { timestamps: true }
@@ -55,5 +60,6 @@ const feedbackSchema = new mongoose.Schema(
 feedbackSchema.index({ student: 1, createdAt: -1 });
 feedbackSchema.index({ adviser: 1, createdAt: -1 });
 feedbackSchema.index({ research: 1, createdAt: -1 });
+feedbackSchema.index({ createdBy: 1, createdAt: -1 });
 
 export default mongoose.model("Feedback", feedbackSchema);
