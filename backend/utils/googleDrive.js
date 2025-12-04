@@ -39,15 +39,47 @@ export const uploadFileToDrive = async (filePath, fileName, mimeType, tokens, op
   oauth2Client.setCredentials(tokens);
   const drive = google.drive({ version: "v3", auth: oauth2Client });
 
+  // Verify parent folder exists if specified
+  if (parentFolderId) {
+    try {
+      await drive.files.get({
+        fileId: parentFolderId,
+        fields: "id, name, mimeType",
+      });
+      console.log(`Parent folder verified: ${parentFolderId}`);
+    } catch (folderError) {
+      console.error(`Error verifying parent folder ${parentFolderId}:`, folderError.message);
+      throw new Error(`The specified Reports folder (${parentFolderId}) does not exist or is not accessible. Please check GOOGLE_DRIVE_REPORTS_FOLDER_ID.`);
+    }
+  }
+
   const fileMetadata = parentFolderId
     ? { name: fileName, parents: [parentFolderId] }
     : { name: fileName };
   const media = { mimeType: mimeType, body: fs.createReadStream(filePath) };
 
+  console.log("Uploading file to Google Drive:", {
+    fileName,
+    mimeType,
+    parentFolderId: parentFolderId || "root",
+    filePath,
+  });
+
   const response = await drive.files.create({
     resource: fileMetadata,
     media: media,
-    fields: "id, webViewLink, iconLink, thumbnailLink, name, mimeType",
+    fields: "id, webViewLink, iconLink, thumbnailLink, name, mimeType, parents",
+  });
+
+  if (!response.data || !response.data.id) {
+    throw new Error("Upload completed but did not return a valid file ID.");
+  }
+
+  console.log("File uploaded successfully:", {
+    fileId: response.data.id,
+    fileName: response.data.name,
+    webViewLink: response.data.webViewLink,
+    parents: response.data.parents,
   });
 
   return {

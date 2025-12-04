@@ -35,7 +35,7 @@ export const getSheetsAuthUrl = () => {
   });
 };
 
-// Get authenticated Sheets client
+// Get authenticated Sheets client with automatic token refresh
 export const getSheetsClient = async (userId, accessToken, refreshToken) => {
   const oauth2Client = createSheetsOAuthClient();
 
@@ -69,6 +69,51 @@ export const getSheetsClient = async (userId, accessToken, refreshToken) => {
     access_token: accessToken,
     refresh_token: refreshToken,
   });
+
+  // Check if token is expired and refresh if needed
+  try {
+    // Try to refresh if we have a refresh token
+    if (refreshToken) {
+      // Check if token is likely expired (Google tokens expire after 1 hour)
+      // We'll let the OAuth client handle the refresh automatically on the next API call
+      // But we can also proactively refresh if needed
+      const user = await User.findById(userId).select('sheetsTokenExpiry');
+      if (user && user.sheetsTokenExpiry) {
+        const isExpired = user.sheetsTokenExpiry.getTime() < Date.now();
+        if (isExpired) {
+          console.log("[Google Sheets] Token expired, refreshing...");
+          const { credentials } = await oauth2Client.refreshAccessToken();
+          
+          // Update user with new tokens
+          const newExpiryDate = new Date();
+          if (credentials.expiry_date) {
+            newExpiryDate.setTime(credentials.expiry_date);
+          } else {
+            newExpiryDate.setHours(newExpiryDate.getHours() + 1);
+          }
+
+          await User.findByIdAndUpdate(userId, {
+            sheetsAccessToken: credentials.access_token,
+            sheetsTokenExpiry: newExpiryDate,
+            ...(credentials.refresh_token && { sheetsRefreshToken: credentials.refresh_token }),
+          });
+
+          // Update the OAuth client with new credentials
+          oauth2Client.setCredentials({
+            access_token: credentials.access_token,
+            refresh_token: credentials.refresh_token || refreshToken,
+          });
+        }
+      }
+    }
+  } catch (refreshError) {
+    console.error("[Google Sheets] Error refreshing token:", refreshError);
+    // If refresh fails, throw an error that can be caught by the caller
+    if (refreshError.message && refreshError.message.includes('invalid_grant')) {
+      throw new Error('invalid_grant: Please reconnect Google Sheets in Settings.');
+    }
+    throw refreshError;
+  }
 
   return google.sheets({ version: "v4", auth: oauth2Client });
 };
