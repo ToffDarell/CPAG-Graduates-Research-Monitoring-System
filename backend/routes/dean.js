@@ -33,6 +33,7 @@ import {
   toggleFacultyActivation,
   addResearchRemarks,
   getResearchFeedback,
+  deleteResearchRemark,
   getArchivedDocuments,
   getActivityLogs,
   getActivityStats,
@@ -154,6 +155,7 @@ router.post("/send-email", sendEmail);
 // Search research
 router.post("/research/:researchId/remarks", addResearchRemarks);
 router.get("/research/:researchId/feedback", getResearchFeedback);
+router.delete("/research/remarks/:remarkId", deleteResearchRemark);
 
 // Activity logs
 router.get("/activity-logs", getActivityLogs);

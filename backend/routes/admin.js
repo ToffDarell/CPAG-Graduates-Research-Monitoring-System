@@ -15,6 +15,7 @@ import {
   updateUserProfileByAdmin,
   deleteUser,
   getAllActivityLogs,
+  exportActivityLogsPDF,
   inviteDean,
 } from "../controllers/adminController.js";
 
@@ -47,6 +48,9 @@ router.delete("/users/:id", deleteUser);
 router.post("/invite-dean", inviteDean);
 
 // Activity logs
+// More specific route must come first
+router.get("/activity-logs/export/pdf", exportActivityLogsPDF);
+router.post("/activity-logs/export/pdf", exportActivityLogsPDF);
 router.get("/activity-logs", getAllActivityLogs);
 
 export default router;

@@ -9,6 +9,7 @@ import {
   uploadFeedback,
   getAllFeedback,
   getFeedbackByResearch,
+  getDeanRemarks,
   downloadFeedbackFile,
   viewFeedbackFile,
   getFeedbackComments,
@@ -69,6 +70,7 @@ router.put("/thesis/:id/status", updateThesisStatus);
 router.post("/feedback", upload.single("file"), uploadFeedback);
 router.get("/feedback", getAllFeedback);
 router.get("/feedback/research/:researchId", getFeedbackByResearch);
+router.get("/feedback/research/:researchId/dean-remarks", getDeanRemarks);
 router.get("/feedback/download/:feedbackId", downloadFeedbackFile);
 
 // IMPORTANT: /feedback/view/:feedbackId must come BEFORE /feedback/:feedbackId/comments
