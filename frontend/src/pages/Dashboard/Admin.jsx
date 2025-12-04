@@ -23,8 +23,15 @@ import {
   FaHistory,
   FaUserShield,
   FaEnvelope,
+  FaDatabase,
+  FaDownload,
+  FaUpload,
+  FaTrashAlt,
+  FaCloud,
 } from "react-icons/fa";
 import { showSuccess, showError, showConfirm, showWarning } from "../../utils/sweetAlert";
+import Swal from "sweetalert2";
+import Settings from "../Settings";
 
 const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL ||
@@ -69,7 +76,7 @@ const ACTIVITY_ENTITY_TYPES = [
   "progress-dashboard",
 ];
 
-const VALID_ADMIN_TABS = ["dashboard", "roles", "permissions", "users", "activity"];
+const VALID_ADMIN_TABS = ["dashboard", "roles", "permissions", "users", "activity", "backup"];
 
 const Admin = ({ user, setUser }) => {
   const navigate = useNavigate();
@@ -118,6 +125,10 @@ const Admin = ({ user, setUser }) => {
   const [activityLoading, setActivityLoading] = useState(false);
   const [activityPage, setActivityPage] = useState(1);
   const [activityMeta, setActivityMeta] = useState({ total: 0, totalPages: 0 });
+  const [exportingPDF, setExportingPDF] = useState(false);
+  const [showExportModal, setShowExportModal] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [driveStatus, setDriveStatus] = useState({ connected: false, loading: false });
   const [activityFilters, setActivityFilters] = useState({
     search: "",
     role: "all",
@@ -132,6 +143,11 @@ const Admin = ({ user, setUser }) => {
   });
   const [invitingDean, setInvitingDean] = useState(false);
 
+  // Backup management state
+  const [backups, setBackups] = useState([]);
+  const [backupLoading, setBackupLoading] = useState(false);
+  const [creatingBackup, setCreatingBackup] = useState(false);
+
   useEffect(() => {
     localStorage.setItem("adminActiveTab", activeTab);
   }, [activeTab]);
@@ -140,7 +156,40 @@ const Admin = ({ user, setUser }) => {
     fetchRoles();
     fetchPermissions();
     fetchUsers();
+    if (activeTab === "backup") {
+      fetchBackups();
+    }
+    if (activeTab === "activity") {
+      fetchDriveStatus();
+    }
+  }, [activeTab]);
+
+  // Listen for Drive connection updates from Settings
+  useEffect(() => {
+    const handleDriveMessage = (event) => {
+      if (event.origin !== window.location.origin) return;
+      if (event.data?.type === "DRIVE_CONNECT_SUCCESS") {
+        fetchDriveStatus();
+      }
+    };
+    window.addEventListener("message", handleDriveMessage);
+    return () => {
+      window.removeEventListener("message", handleDriveMessage);
+    };
   }, []);
+
+  const fetchDriveStatus = async () => {
+    setDriveStatus((prev) => ({ ...prev, loading: true }));
+    try {
+      const res = await axios.get(buildApiUrl("/api/google-drive/status"), {
+        headers: { Authorization: `Bearer ${getToken()}` }
+      });
+      setDriveStatus({ ...res.data, loading: false });
+    } catch (error) {
+      console.error("Error checking drive status:", error);
+      setDriveStatus({ connected: false, loading: false });
+    }
+  };
 
   useEffect(() => {
     calculateStats();
@@ -602,6 +651,18 @@ const Admin = ({ user, setUser }) => {
     }
   };
 
+  const handleOpenSettings = () => {
+    setShowSettings(true);
+  };
+
+  const handleCloseSettings = () => {
+    setShowSettings(false);
+    // Refresh drive status when settings close
+    if (activeTab === "activity") {
+      fetchDriveStatus();
+    }
+  };
+
   const handleLogout = async () => {
     const result = await showConfirm("Log Out", "Are you sure you want to log out?");
     if (result.isConfirmed) {
@@ -613,6 +674,79 @@ const Admin = ({ user, setUser }) => {
         replace: true,
       });
     }
+  };
+
+  // Backup management functions
+  const fetchBackups = async () => {
+    setBackupLoading(true);
+    try {
+      const res = await axios.get(buildApiUrl("/api/backup/list"), {
+        headers: { Authorization: `Bearer ${getToken()}` },
+      });
+      setBackups(res.data.backups || []);
+    } catch (error) {
+      console.error("Error fetching backups:", error);
+      showError("Error", error.response?.data?.message || "Failed to load backups");
+    } finally {
+      setBackupLoading(false);
+    }
+  };
+
+  const handleCreateBackup = async () => {
+    const result = await showConfirm(
+      "Create Backup",
+      "This will create a full backup of the database and uploads. Continue?",
+      "Create Backup",
+      "Cancel"
+    );
+    if (!result.isConfirmed) return;
+
+    setCreatingBackup(true);
+    try {
+      await axios.post(buildApiUrl("/api/backup/create"), {}, {
+        headers: { Authorization: `Bearer ${getToken()}` },
+      });
+      await showSuccess("Success", "Backup created successfully!");
+      await fetchBackups();
+    } catch (error) {
+      showError("Error", error.response?.data?.message || "Failed to create backup");
+    } finally {
+      setCreatingBackup(false);
+    }
+  };
+
+  const handleCleanBackups = async () => {
+    const result = await showConfirm(
+      "Clean Old Backups",
+      "This will delete old backups beyond the retention limit. Continue?",
+      "Clean",
+      "Cancel"
+    );
+    if (!result.isConfirmed) return;
+
+    try {
+      const res = await axios.post(buildApiUrl("/api/backup/clean"), {}, {
+        headers: { Authorization: `Bearer ${getToken()}` },
+      });
+      await showSuccess("Success", `Cleaned ${res.data.deleted || 0} old backup(s)`);
+      await fetchBackups();
+    } catch (error) {
+      showError("Error", error.response?.data?.message || "Failed to clean backups");
+    }
+  };
+
+  const formatBackupDate = (timestamp) => {
+    if (!timestamp) return "N/A";
+    const date = new Date(timestamp);
+    return date.toLocaleString();
+  };
+
+  const formatFileSize = (bytes) => {
+    if (!bytes) return "N/A";
+    const sizes = ["Bytes", "KB", "MB", "GB"];
+    if (bytes === 0) return "0 Bytes";
+    const i = Math.floor(Math.log(bytes) / Math.log(1024));
+    return Math.round(bytes / Math.pow(1024, i) * 100) / 100 + " " + sizes[i];
   };
 
   const permissionsByModule = permissions.reduce((acc, perm) => {
@@ -670,6 +804,104 @@ const Admin = ({ user, setUser }) => {
       entityType: "all",
     });
     setActivityPage(1);
+  };
+
+  const handleExportActivityLogsPDF = async (saveToDrive = false) => {
+    setExportingPDF(true);
+    setShowExportModal(false);
+    try {
+      if (saveToDrive) {
+        // Save to Google Drive - send filters in request body
+        const response = await axios.post(
+          buildApiUrl("/api/admin/activity-logs/export/pdf"),
+          {
+            search: activityFilters.search.trim() || "",
+            role: activityFilters.role || "all",
+            action: activityFilters.action || "all",
+            entityType: activityFilters.entityType || "all",
+            startDate: activityFilters.startDate || null,
+            endDate: activityFilters.dateRange?.endDate || null,
+            saveToDrive: true,
+          },
+          {
+            headers: { Authorization: `Bearer ${getToken()}` },
+          }
+        );
+
+        // Build success message with link if available
+        if (response.data.driveFile?.webViewLink) {
+          await Swal.fire({
+            title: "Success!",
+            html: `
+              <p>${response.data.message || "Activity logs exported as PDF and saved to your Google Drive Reports folder!"}</p>
+              <p style="margin-top: 15px;">
+                <a href="${response.data.driveFile.webViewLink}" target="_blank" 
+                   style="color: #1A73E8; text-decoration: underline; font-weight: bold;">
+                  Click here to open the file in Google Drive
+                </a>
+              </p>
+            `,
+            icon: "success",
+            confirmButtonColor: "#7C1D23",
+            confirmButtonText: "OK",
+          });
+        } else {
+          await showSuccess(
+            "Success",
+            response.data.message || "Activity logs exported as PDF and saved to your Google Drive Reports folder!"
+          );
+        }
+        
+        // Refresh drive status
+        await fetchDriveStatus();
+      } else {
+        // Download to computer - use GET with query params
+        const params = new URLSearchParams();
+
+        if (activityFilters.search.trim()) {
+          params.append("search", activityFilters.search.trim());
+        }
+        if (activityFilters.role !== "all") {
+          params.append("role", activityFilters.role);
+        }
+        if (activityFilters.action !== "all") {
+          params.append("action", activityFilters.action);
+        }
+        if (activityFilters.entityType !== "all") {
+          params.append("entityType", activityFilters.entityType);
+        }
+
+        const queryString = params.toString();
+        const apiUrl = queryString
+          ? `/api/admin/activity-logs/export/pdf?${queryString}`
+          : `/api/admin/activity-logs/export/pdf`;
+
+        const response = await axios.get(buildApiUrl(apiUrl), {
+          headers: { Authorization: `Bearer ${getToken()}` },
+          responseType: "blob",
+        });
+
+        // Create blob link to download
+        const url = window.URL.createObjectURL(new Blob([response.data]));
+        const link = document.createElement("a");
+        link.href = url;
+        link.setAttribute(
+          "download",
+          `activity-logs-${new Date().toISOString().split("T")[0]}.pdf`
+        );
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        window.URL.revokeObjectURL(url);
+
+        await showSuccess("Success", "Activity logs exported as PDF successfully!");
+      }
+    } catch (error) {
+      console.error("Error exporting activity logs PDF:", error);
+      showError("Error", error.response?.data?.message || "Failed to export activity logs");
+    } finally {
+      setExportingPDF(false);
+    }
   };
 
   useEffect(() => {
@@ -745,6 +977,17 @@ const Admin = ({ user, setUser }) => {
               </div>
               <div className="h-8 w-px bg-gray-300"></div>
               <button
+                onClick={showSettings ? handleCloseSettings : handleOpenSettings}
+                className={`flex items-center space-x-2 px-4 py-2 rounded-lg transition-all duration-200 shadow-md hover:shadow-lg ${
+                  showSettings
+                    ? "bg-gradient-to-r from-[#7C1D23] to-[#5a1519] text-white"
+                    : "bg-gradient-to-r from-gray-500 to-gray-600 text-white hover:from-gray-600 hover:to-gray-700"
+                }`}
+              >
+                <FaCog />
+                <span>{showSettings ? "Close Settings" : "Settings"}</span>
+              </button>
+              <button
                 onClick={handleLogout}
                 className="flex items-center space-x-2 px-4 py-2 bg-gradient-to-r from-red-500 to-red-600 text-white rounded-lg hover:from-red-600 hover:to-red-700 transition-all duration-200 shadow-md hover:shadow-lg"
               >
@@ -757,8 +1000,20 @@ const Admin = ({ user, setUser }) => {
       </div>
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {/* Tabs */}
-        <div className="bg-white rounded-xl shadow-sm border border-gray-200 mb-8">
+        {/* Settings Content */}
+        {showSettings ? (
+          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+            <Settings
+              user={user}
+              setUser={setUser}
+              embedded={true}
+              onClose={handleCloseSettings}
+            />
+          </div>
+        ) : (
+          <>
+            {/* Tabs */}
+            <div className="bg-white rounded-xl shadow-sm border border-gray-200 mb-8">
           <nav className="flex space-x-1 p-2">
             <button
               onClick={() => setActiveTab("dashboard")}
@@ -814,6 +1069,17 @@ const Admin = ({ user, setUser }) => {
             >
               <FaHistory />
               <span>Activity Logs</span>
+            </button>
+            <button
+              onClick={() => setActiveTab("backup")}
+              className={`py-3 px-6 rounded-lg font-medium text-sm flex items-center space-x-3 transition-all duration-200 ${
+                activeTab === "backup"
+                  ? "bg-gradient-to-r from-[#7C1D23] to-[#5a1519] text-white shadow-md"
+                  : "text-gray-600 hover:text-gray-900 hover:bg-gray-100"
+              }`}
+            >
+              <FaDatabase />
+              <span>Backup & Recovery</span>
             </button>
           </nav>
         </div>
@@ -1161,6 +1427,29 @@ const Admin = ({ user, setUser }) => {
         {/* Activity Tab */}
         {activeTab === "activity" && (
           <div>
+            <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center mb-6 gap-4">
+              <div>
+                <h2 className="text-2xl font-bold text-gray-900">Activity Logs</h2>
+                <p className="text-gray-600 mt-1">View and export system activity logs</p>
+              </div>
+              <button
+                onClick={() => setShowExportModal(true)}
+                disabled={exportingPDF}
+                className="px-4 py-2 bg-[#7C1D23] text-white rounded-lg font-medium hover:bg-[#5a1519] disabled:opacity-50 flex items-center space-x-2"
+              >
+                {exportingPDF ? (
+                  <>
+                    <span className="animate-spin h-4 w-4 border-2 border-white border-t-transparent rounded-full" />
+                    <span>Exporting...</span>
+                  </>
+                ) : (
+                  <>
+                    <FaDownload />
+                    <span>Export PDF</span>
+                  </>
+                )}
+              </button>
+            </div>
             <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-6">
               <div className="grid grid-cols-1 xl:grid-cols-4 gap-4">
                 <div className="xl:col-span-2">
@@ -1349,6 +1638,84 @@ const Admin = ({ user, setUser }) => {
                   </div>
                 </>
               )}
+            </div>
+          </div>
+        )}
+
+        {/* Export PDF Modal */}
+        {showExportModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4 py-6" onClick={() => setShowExportModal(false)}>
+            <div className="bg-white rounded-xl shadow-xl max-w-md w-full p-6" onClick={(e) => e.stopPropagation()}>
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="text-xl font-bold text-gray-900">Export Activity Logs PDF</h3>
+                <button
+                  onClick={() => setShowExportModal(false)}
+                  className="text-gray-400 hover:text-gray-600 transition-colors"
+                >
+                  <FaTimes className="text-xl" />
+                </button>
+              </div>
+              
+              <p className="text-gray-600 mb-6">Choose where to save the PDF:</p>
+              
+              <div className="space-y-3">
+                <button
+                  onClick={() => handleExportActivityLogsPDF(false)}
+                  disabled={exportingPDF}
+                  className="w-full flex items-center justify-between p-4 border-2 border-gray-200 rounded-lg hover:border-[#7C1D23] hover:bg-[#FDF5F5] transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <div className="flex items-center space-x-3">
+                    <FaSave className="text-2xl text-[#7C1D23]" />
+                    <div className="text-left">
+                      <div className="font-semibold text-gray-900">Save to Computer</div>
+                      <div className="text-sm text-gray-500">Download PDF to your device</div>
+                    </div>
+                  </div>
+                  <FaDownload className="text-gray-400" />
+                </button>
+                
+                <button
+                  onClick={() => handleExportActivityLogsPDF(true)}
+                  disabled={exportingPDF || !driveStatus.connected}
+                  className="w-full flex items-center justify-between p-4 border-2 border-gray-200 rounded-lg hover:border-[#7C1D23] hover:bg-[#FDF5F5] transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <div className="flex items-center space-x-3">
+                    <FaCloud className="text-2xl text-[#7C1D23]" />
+                    <div className="text-left">
+                      <div className="font-semibold text-gray-900">Save to Google Drive</div>
+                      <div className="text-sm text-gray-500">
+                        {driveStatus.connected 
+                          ? "Upload PDF to your Google Drive Reports folder"
+                          : "Connect Google Drive in Settings first"}
+                      </div>
+                    </div>
+                  </div>
+                  {driveStatus.loading ? (
+                    <span className="animate-spin h-5 w-5 border-2 border-[#7C1D23] border-t-transparent rounded-full" />
+                  ) : (
+                    <FaCloud className="text-gray-400" />
+                  )}
+                </button>
+              </div>
+
+              {!driveStatus.connected && (
+                <div className="mt-4 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
+                  <p className="text-sm text-yellow-800">
+                    <FaExclamationTriangle className="inline mr-2" />
+                    Google Drive is not connected. Please connect it in Settings to use this option.
+                  </p>
+                </div>
+              )}
+
+              <div className="mt-6 flex justify-end">
+                <button
+                  onClick={() => setShowExportModal(false)}
+                  disabled={exportingPDF}
+                  className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+              </div>
             </div>
           </div>
         )}
@@ -1762,6 +2129,142 @@ const Admin = ({ user, setUser }) => {
               </form>
             </div>
           </div>
+        )}
+
+        {/* Backup Tab */}
+        {activeTab === "backup" && (
+          <div>
+            <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center mb-6 gap-4">
+              <div>
+                <h2 className="text-2xl font-bold text-gray-900">Backup & Recovery</h2>
+                <p className="text-gray-600 mt-1">Manage database and file backups</p>
+              </div>
+              <div className="flex flex-wrap gap-3">
+                <button
+                  onClick={handleCreateBackup}
+                  disabled={creatingBackup}
+                  className="px-4 py-2 bg-[#7C1D23] text-white rounded-lg font-medium hover:bg-[#5a1519] disabled:opacity-50 flex items-center space-x-2"
+                >
+                  {creatingBackup ? (
+                    <>
+                      <span className="animate-spin h-4 w-4 border-2 border-white border-t-transparent rounded-full" />
+                      <span>Creating...</span>
+                    </>
+                  ) : (
+                    <>
+                      <FaDownload />
+                      <span>Create Backup</span>
+                    </>
+                  )}
+                </button>
+                <button
+                  onClick={handleCleanBackups}
+                  className="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg font-medium hover:bg-gray-50 flex items-center space-x-2"
+                >
+                  <FaTrashAlt />
+                  <span>Clean Old Backups</span>
+                </button>
+                <button
+                  onClick={fetchBackups}
+                  disabled={backupLoading}
+                  className="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg font-medium hover:bg-gray-50 flex items-center space-x-2"
+                >
+                  <FaDatabase />
+                  <span>Refresh</span>
+                </button>
+              </div>
+            </div>
+
+            <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+              {backupLoading ? (
+                <div className="p-12 text-center text-gray-500 flex flex-col items-center space-y-3">
+                  <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-[#7C1D23]" />
+                  <p>Loading backups...</p>
+                </div>
+              ) : backups.length === 0 ? (
+                <div className="p-12 text-center text-gray-500">
+                  <FaDatabase className="mx-auto h-12 w-12 mb-4 text-gray-300" />
+                  <p className="text-lg font-medium mb-2">No backups found</p>
+                  <p className="text-sm">Create your first backup to get started</p>
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="min-w-full divide-y divide-gray-200">
+                    <thead className="bg-gray-50">
+                      <tr>
+                        <th className="px-6 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
+                          Type
+                        </th>
+                        <th className="px-6 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
+                          Timestamp
+                        </th>
+                        <th className="px-6 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
+                          Size
+                        </th>
+                        <th className="px-6 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">
+                          Details
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody className="bg-white divide-y divide-gray-100">
+                      {backups.map((backup, index) => (
+                        <tr key={index} className="hover:bg-[#FDF5F5] transition-colors duration-150">
+                          <td className="px-6 py-4 whitespace-nowrap">
+                            <span className={`px-3 py-1 rounded-full text-xs font-semibold ${
+                              backup.type === "metadata" 
+                                ? "bg-blue-100 text-blue-800" 
+                                : backup.type === "database"
+                                ? "bg-green-100 text-green-800"
+                                : "bg-purple-100 text-purple-800"
+                            }`}>
+                              {backup.type === "metadata" ? "Full Backup" : backup.type}
+                            </span>
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                            {formatBackupDate(backup.timestamp || backup.mtime)}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-700">
+                            {formatFileSize(backup.size)}
+                          </td>
+                          <td className="px-6 py-4 text-sm text-gray-700">
+                            {backup.type === "metadata" && backup.backups ? (
+                              <div className="space-y-1">
+                                {backup.backups.database && (
+                                  <div className="text-xs">Database: {backup.backups.database.fileName}</div>
+                                )}
+                                {backup.backups.uploads && (
+                                  <div className="text-xs">Uploads: {formatFileSize(backup.backups.uploads.size)}</div>
+                                )}
+                              </div>
+                            ) : (
+                              backup.name
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
+            <div className="mt-6 bg-blue-50 border border-blue-200 rounded-lg p-4">
+              <div className="flex items-start">
+                <FaExclamationTriangle className="text-blue-600 mt-1 mr-3" />
+                <div className="text-sm text-blue-800">
+                  <p className="font-semibold mb-1">Backup Information</p>
+                  <ul className="list-disc list-inside space-y-1 text-xs">
+                    <li>Backups are created automatically daily at 2:00 AM</li>
+                    <li>Old backups are automatically cleaned after 30 days</li>
+                    <li>Full backups include both database and uploaded files</li>
+                    <li>To restore a backup, use the restore command: <code className="bg-blue-100 px-1 rounded">npm run restore</code></li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+          </>
         )}
       </div>
     </div>

@@ -269,23 +269,60 @@ const DeanDashboard = ({ setUser, user }) => {
     }
   }, [selectedTab]); // setSearchParams is stable, doesn't need to be in deps
 
-  // Track permission warnings shown per tab
-  const permissionWarningsRef = useRef({});
-
-  // Check permissions when tab changes
+  // Check permissions when tab changes and redirect if disabled
   useEffect(() => {
     const checkTabPermissions = async () => {
-      if (!selectedTab || permissionWarningsRef.current[selectedTab]) return;
+      if (!selectedTab) return;
 
       const permissionMap = {
-        'faculty': { permissions: ['manage_users', 'view_users'], feature: 'Faculty Management', context: 'You will not be able to invite or manage faculty members.' },
-        'research': { permissions: ['view_research'], feature: 'Research Records', context: 'You will not be able to view research records.' },
-        'archive': { permissions: ['view_archives'], feature: 'Archived Projects', context: 'You will not be able to view archived projects.' },
-        'monitoring': { permissions: ['view_research'], feature: 'Monitoring & Evaluation', context: 'You will not be able to access monitoring features.' },
-        'panels': { permissions: ['manage_panels', 'assign_panels'], feature: 'Panel Assignment', context: 'You will not be able to assign or manage panels.' },
-        'documents': { permissions: ['view_documents'], feature: 'Documents', context: 'You will not be able to view or manage documents.' },
-        'archived-documents': { permissions: ['view_archives'], feature: 'Archived Documents', context: 'You will not be able to view archived documents.' },
-        'activity-logs': { permissions: ['view_activity'], feature: 'Activity Logs', context: 'You will not be able to view activity logs.' },
+        'faculty': { 
+          permissions: ['manage_users', 'view_users'], 
+          feature: 'Faculty Management', 
+          context: 'You will not be able to invite or manage faculty members.',
+          redirectTo: 'research'
+        },
+        'research': { 
+          permissions: ['view_research'], 
+          feature: 'Research Records', 
+          context: 'You will not be able to view research records.',
+          redirectTo: 'faculty'
+        },
+        'archive': { 
+          permissions: ['view_archives'], 
+          feature: 'Archived Projects', 
+          context: 'You will not be able to view archived projects.',
+          redirectTo: 'research'
+        },
+        'monitoring': { 
+          permissions: ['view_research'], 
+          feature: 'Monitoring & Evaluation', 
+          context: 'You will not be able to access monitoring features.',
+          redirectTo: 'research'
+        },
+        'panels': { 
+          permissions: ['manage_panels', 'assign_panels'], 
+          feature: 'Panel Assignment', 
+          context: 'You will not be able to assign or manage panels.',
+          redirectTo: 'research'
+        },
+        'documents': { 
+          permissions: ['view_documents'], 
+          feature: 'Documents', 
+          context: 'You will not be able to view or manage documents.',
+          redirectTo: 'research'
+        },
+        'archived-documents': { 
+          permissions: ['view_archives'], 
+          feature: 'Archived Documents', 
+          context: 'You will not be able to view archived documents.',
+          redirectTo: 'research'
+        },
+        'activity-logs': { 
+          permissions: ['view_activity'], 
+          feature: 'Activity Logs', 
+          context: 'You will not be able to view activity logs.',
+          redirectTo: 'research'
+        },
       };
 
       const tabConfig = permissionMap[selectedTab];
@@ -296,13 +333,20 @@ const DeanDashboard = ({ setUser, user }) => {
           tabConfig.context
         );
         if (!hasPermission) {
-          permissionWarningsRef.current[selectedTab] = true;
+          // Warning was already shown and dismissed by checkPermission
+          // Now redirect to fallback tab
+          const redirectTab = tabConfig.redirectTo || 'research';
+          
+          // Redirect immediately after warning is dismissed
+          // checkPermission already waited for the user to click OK
+          setSelectedTab(redirectTab);
+          setSearchParams({ tab: redirectTab }, { replace: true });
         }
       }
     };
 
     checkTabPermissions();
-  }, [selectedTab]);
+  }, [selectedTab, setSearchParams]);
 
   // Fetch data on component mount
   useEffect(() => {
@@ -475,7 +519,13 @@ const DeanDashboard = ({ setUser, user }) => {
 
 
   const handleArchiveDocument = async (id) => {
-    if (!window.confirm('Are you sure you want to archive this document?')) return;
+    const result = await showConfirm(
+      'Archive Document',
+      'Are you sure you want to archive this document?',
+      'Archive',
+      'Cancel'
+    );
+    if (!result.isConfirmed) return;
     
     try {
       const token = localStorage.getItem('token');
@@ -1186,12 +1236,27 @@ const ResearchMonitoringCard = ({ research, onViewDetails }) => {
 const ResearchDetailsModal = ({ research, isOpen, onClose }) => {
   const [remarks, setRemarks] = useState('');
   const [feedback, setFeedback] = useState([]);
+  const [currentUserId, setCurrentUserId] = useState(null);
+  const [deletingRemarkId, setDeletingRemarkId] = useState(null);
   
   useEffect(() => {
     if (isOpen && research) {
       fetchResearchFeedback(research._id);
+      fetchCurrentUser();
     }
   }, [isOpen, research]);
+
+  const fetchCurrentUser = async () => {
+    try {
+      const token = localStorage.getItem('token');
+      const res = await axios.get('/api/auth/me', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      setCurrentUserId(res.data._id);
+    } catch (error) {
+      console.error('Error fetching current user:', error);
+    }
+  };
   
   const fetchResearchFeedback = async (researchId) => {
     try {
@@ -1202,6 +1267,27 @@ const ResearchDetailsModal = ({ research, isOpen, onClose }) => {
       setFeedback(res.data);
     } catch (error) {
       console.error('Error fetching feedback:', error);
+    }
+  };
+
+  const handleDeleteRemark = async (remarkId) => {
+    const result = await showConfirm('Delete Remark', 'Are you sure you want to delete this remark? This action cannot be undone.');
+    if (!result.isConfirmed) return;
+
+    try {
+      setDeletingRemarkId(remarkId);
+      const token = localStorage.getItem('token');
+      await axios.delete(`/api/dean/research/remarks/${remarkId}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      
+      await showSuccess('Success', 'Remark deleted successfully!');
+      fetchResearchFeedback(research._id);
+    } catch (error) {
+      console.error('Error deleting remark:', error);
+      showError('Error', 'Error deleting remark: ' + (error.response?.data?.message || error.message));
+    } finally {
+      setDeletingRemarkId(null);
     }
   };
   
@@ -1329,23 +1415,47 @@ const ResearchDetailsModal = ({ research, isOpen, onClose }) => {
           <div>
             <h4 className="font-semibold text-gray-800 mb-2">Comments & Feedback</h4>
             <div className="space-y-3 max-h-40 overflow-y-auto">
-              {feedback.map((item, index) => (
-                <div key={index} className="p-3 bg-gray-50 rounded-md">
-                  <div className="flex justify-between items-start mb-1">
-                    <span className="text-sm font-medium">{item.adviser?.name || 'Dean'}</span>
-                    <span className="text-xs text-gray-500">{new Date(item.createdAt).toLocaleDateString()}</span>
+              {feedback.map((item, index) => {
+                const createdByRole = item.createdBy?.role?.toLowerCase();
+                const isDeanRemark = createdByRole === 'dean';
+                
+                return (
+                  <div key={index} className="p-3 bg-gray-50 rounded-md relative">
+                    <div className="flex justify-between items-start mb-1">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-medium">{item.adviser?.name || 'Dean'}</span>
+                        {isDeanRemark && (
+                          <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-700">
+                            From Dean
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-gray-500">{new Date(item.createdAt).toLocaleDateString()}</span>
+                        {isDeanRemark && (
+                          <button
+                            onClick={() => handleDeleteRemark(item._id)}
+                            disabled={deletingRemarkId === item._id}
+                            className="text-red-600 hover:text-red-800 transition-colors disabled:opacity-50"
+                            title="Delete this remark"
+                          >
+                            <FaTrash className="h-3 w-3" />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                    <p className="text-sm text-gray-600">{item.message}</p>
+                    <span className={`inline-block px-2 py-1 rounded-full text-xs font-medium mt-2 ${
+                      item.type === 'approval' ? 'bg-green-100 text-green-700' :
+                      item.type === 'rejection' ? 'bg-red-100 text-red-700' :
+                      item.type === 'feedback' ? 'bg-blue-100 text-blue-700' :
+                      'bg-yellow-100 text-yellow-700'
+                    }`}>
+                      {item.type}
+                    </span>
                   </div>
-                  <p className="text-sm text-gray-600">{item.message}</p>
-                  <span className={`inline-block px-2 py-1 rounded-full text-xs font-medium mt-2 ${
-                    item.type === 'approval' ? 'bg-green-100 text-green-700' :
-                    item.type === 'rejection' ? 'bg-red-100 text-red-700' :
-                    item.type === 'feedback' ? 'bg-blue-100 text-blue-700' :
-                    'bg-yellow-100 text-yellow-700'
-                  }`}>
-                    {item.type}
-                  </span>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
           
@@ -1376,12 +1486,29 @@ const ResearchDetailsModal = ({ research, isOpen, onClose }) => {
 const ResearchRecordDetailsModal = ({ research, isOpen, onClose, onDownload }) => {
   const [feedback, setFeedback] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [remarks, setRemarks] = useState('');
+  const [currentUserId, setCurrentUserId] = useState(null);
+  const [deletingRemarkId, setDeletingRemarkId] = useState(null);
 
   useEffect(() => {
     if (isOpen && research) {
       fetchResearchFeedback(research._id);
+      setRemarks(''); // Reset remarks when modal opens
+      fetchCurrentUser();
     }
   }, [isOpen, research]);
+
+  const fetchCurrentUser = async () => {
+    try {
+      const token = localStorage.getItem('token');
+      const res = await axios.get('/api/auth/me', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      setCurrentUserId(res.data._id);
+    } catch (error) {
+      console.error('Error fetching current user:', error);
+    }
+  };
 
   const fetchResearchFeedback = async (researchId) => {
     try {
@@ -1395,6 +1522,47 @@ const ResearchRecordDetailsModal = ({ research, isOpen, onClose, onDownload }) =
       console.error('Error fetching feedback:', error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleDeleteRemark = async (remarkId) => {
+    const result = await showConfirm('Delete Remark', 'Are you sure you want to delete this remark? This action cannot be undone.');
+    if (!result.isConfirmed) return;
+
+    try {
+      setDeletingRemarkId(remarkId);
+      const token = localStorage.getItem('token');
+      await axios.delete(`/api/dean/research/remarks/${remarkId}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      
+      await showSuccess('Success', 'Remark deleted successfully!');
+      fetchResearchFeedback(research._id);
+    } catch (error) {
+      console.error('Error deleting remark:', error);
+      showError('Error', 'Error deleting remark: ' + (error.response?.data?.message || error.message));
+    } finally {
+      setDeletingRemarkId(null);
+    }
+  };
+
+  const handleSubmitRemarks = async () => {
+    try {
+      const token = localStorage.getItem('token');
+      await axios.post(`/api/dean/research/${research._id}/remarks`, {
+        message: remarks,
+        type: 'feedback'
+      }, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      
+      setRemarks('');
+      fetchResearchFeedback(research._id);
+      await showSuccess('Success', 'Remarks submitted successfully!');
+    } catch (error) {
+      console.error('Error submitting remarks:', error);
+      console.error('Error response:', error.response?.data);
+      showError('Error', 'Error submitting remarks: ' + (error.response?.data?.message || error.message));
     }
   };
 
@@ -1551,24 +1719,46 @@ const ResearchRecordDetailsModal = ({ research, isOpen, onClose, onDownload }) =
                 </div>
               ) : feedback && feedback.length > 0 ? (
                 <div className="divide-y divide-gray-200">
-                  {feedback.map((item, index) => (
-                    <div key={index} className="p-4">
-                      <div className="flex justify-between items-start mb-2">
-                        <div className="flex items-center space-x-2">
-                          <span className="text-sm font-medium text-gray-900">
-                            {item.adviser?.name || 'Dean'}
-                          </span>
-                          <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${getStatusColor(item.type)}`}>
-                            {item.type}
-                          </span>
+                  {feedback.map((item, index) => {
+                    const createdByRole = item.createdBy?.role?.toLowerCase();
+                    const isDeanRemark = createdByRole === 'dean';
+                    
+                    return (
+                      <div key={index} className="p-4">
+                        <div className="flex justify-between items-start mb-2">
+                          <div className="flex items-center space-x-2">
+                            <span className="text-sm font-medium text-gray-900">
+                              {item.adviser?.name || 'Dean'}
+                            </span>
+                            {isDeanRemark && (
+                              <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-700">
+                                From Dean
+                              </span>
+                            )}
+                            <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${getStatusColor(item.type)}`}>
+                              {item.type}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-gray-500">
+                              {new Date(item.createdAt).toLocaleDateString()}
+                            </span>
+                            {isDeanRemark && (
+                              <button
+                                onClick={() => handleDeleteRemark(item._id)}
+                                disabled={deletingRemarkId === item._id}
+                                className="text-red-600 hover:text-red-800 transition-colors disabled:opacity-50"
+                                title="Delete this remark"
+                              >
+                                <FaTrash className="h-4 w-4" />
+                              </button>
+                            )}
+                          </div>
                         </div>
-                        <span className="text-xs text-gray-500">
-                          {new Date(item.createdAt).toLocaleDateString()}
-                        </span>
+                        <p className="text-sm text-gray-700">{item.message}</p>
                       </div>
-                      <p className="text-sm text-gray-700">{item.message}</p>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               ) : (
                 <div className="p-8 text-center text-gray-500 text-sm">
@@ -1576,6 +1766,25 @@ const ResearchRecordDetailsModal = ({ research, isOpen, onClose, onDownload }) =
                 </div>
               )}
             </div>
+          </div>
+
+          {/* Dean Remarks */}
+          <div>
+            <h4 className="text-sm font-semibold text-gray-500 uppercase mb-2">Add Remarks</h4>
+            <textarea
+              value={remarks}
+              onChange={(e) => setRemarks(e.target.value)}
+              placeholder="Add your remarks or feedback for the faculty member..."
+              rows={3}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-[#7C1D23] text-sm"
+            />
+            <button
+              onClick={handleSubmitRemarks}
+              disabled={!remarks.trim()}
+              className="mt-2 px-4 py-2 bg-[#7C1D23] text-white rounded-md hover:bg-[#5a1519] transition-colors text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Submit Remarks
+            </button>
           </div>
         </div>
 
