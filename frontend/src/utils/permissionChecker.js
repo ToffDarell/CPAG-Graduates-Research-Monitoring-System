@@ -6,9 +6,10 @@ import { showWarning } from "./sweetAlert";
  * @param {string|string[]} requiredPermissions - Permission(s) to check
  * @param {string} featureName - Name of the feature to display in warning
  * @param {string} tabContext - Optional context about what tab/section this is for
+ * @param {Function} onDismissed - Optional callback function called after warning is dismissed (when user clicks OK)
  * @returns {Promise<boolean>} - Returns true if user has permission, false otherwise
  */
-export const checkPermission = async (requiredPermissions, featureName, tabContext = null) => {
+export const checkPermission = async (requiredPermissions, featureName, tabContext = null, onDismissed = null) => {
   try {
     const token = localStorage.getItem("token");
     if (!token) return false;
@@ -40,8 +41,17 @@ export const checkPermission = async (requiredPermissions, featureName, tabConte
           ? `The "${featureName}" feature has been disabled by the administrator. ${tabContext}`
           : `The "${featureName}" feature has been disabled by the administrator. You will not be able to access this feature. Please contact your administrator if you need access.`;
 
-        // Show warning and wait for it to be dismissed
+        // Show warning and wait for user to click OK button
+        // This await will pause execution until the user clicks the OK button
         await showWarning("Feature Disabled", message);
+        
+        // Only after the user clicks OK, the code continues here
+        // Now call the redirect callback if provided
+        if (onDismissed && typeof onDismissed === 'function') {
+          // This callback will trigger the redirect after OK is clicked
+          onDismissed();
+        }
+        
         // Return false after warning is dismissed to indicate no permission
         return false;
       }
