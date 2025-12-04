@@ -8,13 +8,19 @@
     "client": "cd frontend && npm run dev",
     "dev": "concurrently \"npm run server\" \"npm run client\"",
     "seed:rbac": "node backend/scripts/seedRBAC.js",
-    "reset:admin": "node backend/scripts/resetAdminPassword.js"
+    "reset:admin": "node backend/scripts/resetAdminPassword.js",
+    "backup": "node backend/scripts/backup.js",
+    "backup:manual": "node backend/scripts/backup.js",
+    "restore": "node backend/scripts/restore.js",
+    "generate:encryption-key": "node backend/scripts/generateEncryptionKey.js",
+    "encrypt:tokens": "node backend/scripts/encryptExistingTokens.js"
   },
   "type": "module",
   "keywords": [],
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "archiver": "^7.0.1",
     "bcryptjs": "^3.0.2",
     "concurrently": "^8.2.2",
     "cors": "^2.8.5",
@@ -27,6 +33,7 @@
     "jsonwebtoken": "^9.0.2",
     "mongoose": "^8.18.0",
     "multer": "^1.4.5-lts.1",
+    "node-cron": "^3.0.3",
     "node-fetch": "^3.3.2",
     "nodemailer": "^7.0.10",
     "passport": "^0.7.0",
