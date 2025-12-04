@@ -40,7 +40,9 @@ export const checkPermission = async (requiredPermissions, featureName, tabConte
           ? `The "${featureName}" feature has been disabled by the administrator. ${tabContext}`
           : `The "${featureName}" feature has been disabled by the administrator. You will not be able to access this feature. Please contact your administrator if you need access.`;
 
+        // Show warning and wait for it to be dismissed
         await showWarning("Feature Disabled", message);
+        // Return false after warning is dismissed to indicate no permission
         return false;
       }
 
