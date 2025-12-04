@@ -8,6 +8,161 @@ import 'react-big-calendar/lib/css/react-big-calendar.css';
 
 const localizer = momentLocalizer(moment);
 
+// Reusable Pagination Component
+const Pagination = ({ 
+  currentPage, 
+  totalPages, 
+  totalItems, 
+  itemsPerPage, 
+  onPageChange, 
+  onItemsPerPageChange,
+  startIndex,
+  endIndex 
+}) => {
+  const handleFirstPage = () => onPageChange(1);
+  const handlePrevPage = () => onPageChange(Math.max(1, currentPage - 1));
+  const handleNextPage = () => onPageChange(Math.min(totalPages, currentPage + 1));
+  const handleLastPage = () => onPageChange(totalPages);
+  const handlePageClick = (page) => onPageChange(page);
+
+  // Generate page numbers to display
+  const getPageNumbers = () => {
+    const pages = [];
+    const maxVisible = 5;
+    
+    if (totalPages <= maxVisible) {
+      for (let i = 1; i <= totalPages; i++) {
+        pages.push(i);
+      }
+    } else {
+      if (currentPage <= 3) {
+        for (let i = 1; i <= 4; i++) {
+          pages.push(i);
+        }
+        pages.push('...');
+        pages.push(totalPages);
+      } else if (currentPage >= totalPages - 2) {
+        pages.push(1);
+        pages.push('...');
+        for (let i = totalPages - 3; i <= totalPages; i++) {
+          pages.push(i);
+        }
+      } else {
+        pages.push(1);
+        pages.push('...');
+        for (let i = currentPage - 1; i <= currentPage + 1; i++) {
+          pages.push(i);
+        }
+        pages.push('...');
+        pages.push(totalPages);
+      }
+    }
+    
+    return pages;
+  };
+
+  // Always show pagination if there are items, even if only one page
+  if (totalItems === 0) {
+    return null; // Only hide if there are no items at all
+  }
+
+  return (
+    <div className="flex items-center justify-between border-t border-gray-200 bg-white px-4 py-3 sm:px-6">
+      <div className="flex flex-1 justify-between sm:hidden">
+        <button
+          onClick={handlePrevPage}
+          disabled={currentPage === 1}
+          className="relative inline-flex items-center rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          Previous
+        </button>
+        <button
+          onClick={handleNextPage}
+          disabled={currentPage === totalPages}
+          className="relative ml-3 inline-flex items-center rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          Next
+        </button>
+      </div>
+      <div className="hidden sm:flex sm:flex-1 sm:items-center sm:justify-between">
+        <div>
+          <p className="text-sm text-gray-700">
+            Showing <span className="font-medium">{startIndex}</span> to <span className="font-medium">{endIndex}</span> of{' '}
+            <span className="font-medium">{totalItems}</span> results
+          </p>
+        </div>
+        <div className="flex items-center space-x-2">
+          <div className="flex items-center space-x-1">
+            <label className="text-sm text-gray-700">Items per page:</label>
+            <select
+              value={itemsPerPage}
+              onChange={(e) => onItemsPerPageChange(Number(e.target.value))}
+              className="border border-gray-300 rounded-md px-2 py-1 text-sm focus:ring-2 focus:ring-[#7C1D23] focus:border-transparent"
+            >
+              <option value={5}>5</option>
+              <option value={10}>10</option>
+              <option value={20}>20</option>
+              <option value={50}>50</option>
+            </select>
+          </div>
+          <div className="flex items-center space-x-1">
+            <button
+              onClick={handleFirstPage}
+              disabled={currentPage === 1}
+              className="px-2 py-1 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+              title="First page"
+            >
+              ««
+            </button>
+            <button
+              onClick={handlePrevPage}
+              disabled={currentPage === 1}
+              className="px-2 py-1 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Previous page"
+            >
+              ‹
+            </button>
+            {getPageNumbers().map((page, idx) => (
+              <React.Fragment key={idx}>
+                {page === '...' ? (
+                  <span className="px-2 py-1 text-sm text-gray-700">...</span>
+                ) : (
+                  <button
+                    onClick={() => handlePageClick(page)}
+                    className={`px-3 py-1 border rounded-md text-sm font-medium ${
+                      currentPage === page
+                        ? 'bg-[#7C1D23] text-white border-[#7C1D23]'
+                        : 'border-gray-300 text-gray-700 hover:bg-gray-50'
+                    }`}
+                  >
+                    {page}
+                  </button>
+                )}
+              </React.Fragment>
+            ))}
+            <button
+              onClick={handleNextPage}
+              disabled={currentPage === totalPages}
+              className="px-2 py-1 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Next page"
+            >
+              ›
+            </button>
+            <button
+              onClick={handleLastPage}
+              disabled={currentPage === totalPages}
+              className="px-2 py-1 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Last page"
+            >
+              »»
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const MySchedule = ({ schedules, onRefresh }) => {
   const [viewMode, setViewMode] = useState("list"); // list or calendar
   const [calendarView, setCalendarView] = useState("week"); // 'month', 'week', 'day', 'agenda'
@@ -40,6 +195,10 @@ const MySchedule = ({ schedules, onRefresh }) => {
     startDate: "",
     endDate: "",
   });
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(10);
+  const [currentPageConsultations, setCurrentPageConsultations] = useState(1);
+  const [itemsPerPageConsultations, setItemsPerPageConsultations] = useState(10);
 
   
 
@@ -637,13 +796,19 @@ const MySchedule = ({ schedules, onRefresh }) => {
         <>
           {/* Defense Schedules */}
           {defenseSchedules.length > 0 && (
-            <div className="bg-white rounded-lg border border-gray-200 p-5">
-              <h3 className="text-lg font-semibold text-gray-800 mb-4 flex items-center">
-                <FaUsers className="mr-2 text-[#7C1D23]" />
-                Thesis Defense Sessions ({defenseSchedules.length})
-              </h3>
-              <div className="space-y-4">
-                {defenseSchedules.map((schedule) => {
+            <>
+              <div className="bg-white rounded-lg border border-gray-200 p-5">
+                <h3 className="text-lg font-semibold text-gray-800 mb-4 flex items-center">
+                  <FaUsers className="mr-2 text-[#7C1D23]" />
+                  Thesis Defense Sessions ({defenseSchedules.length})
+                </h3>
+                <div className="space-y-4">
+                  {(() => {
+                    const startIndex = (currentPage - 1) * itemsPerPage;
+                    const endIndex = startIndex + itemsPerPage;
+                    const paginatedDefenses = defenseSchedules.slice(startIndex, endIndex);
+                    
+                    return paginatedDefenses.map((schedule) => {
                   const isApproaching = new Date(schedule.datetime) - new Date() < 24 * 60 * 60 * 1000;
                   const panelists = getPanelists(schedule);
                   
@@ -748,21 +913,50 @@ const MySchedule = ({ schedules, onRefresh }) => {
                         </button>
                       </div>
                     </div>
-                  );
-                })}
+                    );
+                  });
+                })()}
+                </div>
               </div>
-            </div>
+              {defenseSchedules.length > 0 && (() => {
+                const startIndex = (currentPage - 1) * itemsPerPage;
+                const endIndex = Math.min(startIndex + itemsPerPage, defenseSchedules.length);
+                const totalPages = Math.ceil(defenseSchedules.length / itemsPerPage);
+                
+                return (
+                  <Pagination
+                    currentPage={currentPage}
+                    totalPages={totalPages}
+                    totalItems={defenseSchedules.length}
+                    itemsPerPage={itemsPerPage}
+                    onPageChange={setCurrentPage}
+                    onItemsPerPageChange={(newItemsPerPage) => {
+                      setItemsPerPage(newItemsPerPage);
+                      setCurrentPage(1);
+                    }}
+                    startIndex={startIndex + 1}
+                    endIndex={endIndex}
+                  />
+                );
+              })()}
+            </>
           )}
 
           {/* Consultation Schedules */}
           {consultationSchedules.length > 0 && (
-            <div className="bg-white rounded-lg border border-gray-200 p-5">
-              <h3 className="text-lg font-semibold text-gray-800 mb-4 flex items-center">
-                <FaCalendar className="mr-2 text-blue-600" />
-                Consultations ({consultationSchedules.length})
-              </h3>
-              <div className="space-y-3">
-                {consultationSchedules.map((schedule) => {
+            <>
+              <div className="bg-white rounded-lg border border-gray-200 p-5">
+                <h3 className="text-lg font-semibold text-gray-800 mb-4 flex items-center">
+                  <FaCalendar className="mr-2 text-blue-600" />
+                  Consultations ({consultationSchedules.length})
+                </h3>
+                <div className="space-y-3">
+                  {(() => {
+                    const startIndex = (currentPageConsultations - 1) * itemsPerPageConsultations;
+                    const endIndex = startIndex + itemsPerPageConsultations;
+                    const paginatedConsultations = consultationSchedules.slice(startIndex, endIndex);
+                    
+                    return paginatedConsultations.map((schedule) => {
                   const isApproaching = new Date(schedule.datetime) - new Date() < 24 * 60 * 60 * 1000;
                   
                   return (
@@ -815,10 +1009,33 @@ const MySchedule = ({ schedules, onRefresh }) => {
                         </div>
                       </div>
                     </div>
-                  );
-                })}
+                    );
+                  });
+                })()}
+                </div>
               </div>
-            </div>
+              {consultationSchedules.length > 0 && (() => {
+                const startIndex = (currentPageConsultations - 1) * itemsPerPageConsultations;
+                const endIndex = Math.min(startIndex + itemsPerPageConsultations, consultationSchedules.length);
+                const totalPages = Math.ceil(consultationSchedules.length / itemsPerPageConsultations);
+                
+                return (
+                  <Pagination
+                    currentPage={currentPageConsultations}
+                    totalPages={totalPages}
+                    totalItems={consultationSchedules.length}
+                    itemsPerPage={itemsPerPageConsultations}
+                    onPageChange={setCurrentPageConsultations}
+                    onItemsPerPageChange={(newItemsPerPage) => {
+                      setItemsPerPageConsultations(newItemsPerPage);
+                      setCurrentPageConsultations(1);
+                    }}
+                    startIndex={startIndex + 1}
+                    endIndex={endIndex}
+                  />
+                );
+              })()}
+            </>
           )}
 
           {myConfirmedSchedules.length === 0 && (
