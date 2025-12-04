@@ -14,6 +14,7 @@ import {
   updateCalendarEvent,
   deleteCalendarEvent 
 } from "../utils/googleCalendar.js";
+import { downloadFileFromDrive } from "../utils/googleDrive.js";
 
 // Helper function to send email notification
 const sendNotificationEmail = async (to, subject, message, html) => {
@@ -183,7 +184,8 @@ export const approveRejectSubmission = async (req, res) => {
       type: action === "approved" ? "approval" : "rejection",
       message,
       file: fileInfo, // Attach the file information from the form
-      category: action === "approved" ? "approval" : "revision_request"
+      category: action === "approved" ? "approval" : "revision_request",
+      createdBy: req.user.id // Track who created the feedback (Faculty Adviser)
     });
 
     await feedback.save();
@@ -570,6 +572,7 @@ export const uploadFeedback = async (req, res) => {
       category: category || "general",
       message,
       version: existingCount + 1,
+      createdBy: req.user.id, // Track who created the feedback (Faculty Adviser)
       file: req.file ? {
         filename: req.file.originalname,
         filepath: req.file.path,
@@ -627,6 +630,7 @@ export const getAllFeedback = async (req, res) => {
       .populate("student", "name email")
       .populate("research", "title")
       .populate("adviser", "name email")
+      .populate("createdBy", "name email role")
       .sort({ createdAt: -1 });
 
     res.json(feedback);
@@ -653,6 +657,43 @@ export const getFeedbackByResearch = async (req, res) => {
     res.json(feedback);
   } catch (error) {
     console.error("Error fetching feedback:", error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Get Dean remarks for specific research (for faculty advisers)
+export const getDeanRemarks = async (req, res) => {
+  try {
+    const { researchId } = req.params;
+
+    // Verify that the research belongs to this faculty adviser
+    const research = await Research.findById(researchId);
+    if (!research) {
+      return res.status(404).json({ message: "Research not found" });
+    }
+
+    if (research.adviser.toString() !== req.user.id) {
+      return res.status(403).json({ message: "Unauthorized access to this research" });
+    }
+
+    // Find all users with role "dean"
+    const deanUsers = await User.find({ role: "dean" }).select("_id");
+    const deanIds = deanUsers.map(dean => dean._id);
+
+    // Get feedback created by Dean for this research
+    const deanRemarks = await Feedback.find({
+      research: researchId,
+      createdBy: { $in: deanIds }
+    })
+      .populate("student", "name email")
+      .populate("research", "title")
+      .populate("adviser", "name email")
+      .populate("createdBy", "name email role")
+      .sort({ createdAt: -1 });
+
+    res.json(deanRemarks);
+  } catch (error) {
+    console.error("Error fetching Dean remarks:", error);
     res.status(500).json({ message: error.message });
   }
 };
@@ -992,10 +1033,16 @@ export const deleteFeedback = async (req, res) => {
 
     const feedback = await Feedback.findById(feedbackId)
       .populate("student", "name email")
-      .populate("research", "title adviser");
+      .populate("research", "title adviser")
+      .populate("createdBy", "name email role");
 
     if (!feedback) {
       return res.status(404).json({ message: "Feedback not found" });
+    }
+
+    // Prevent deletion of feedback created by Dean
+    if (feedback.createdBy && feedback.createdBy.role === 'dean') {
+      return res.status(403).json({ message: "Cannot delete feedback created by Dean" });
     }
 
     // Verify authorization (only the adviser who created it can delete)
@@ -2494,4 +2541,5 @@ export const viewDocument = async (req, res) => {
     res.status(500).json({ message: error.message });
   }
 };
+
 

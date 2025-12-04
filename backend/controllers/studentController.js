@@ -182,38 +182,39 @@ export const uploadComplianceForm = async (req, res) => {
     }
 
     const studentUser = await User.findById(req.user.id);
-    if (!studentUser || !studentUser.driveAccessToken) {
-      return res.status(400).json({ message: "Please connect your Google Drive account before uploading compliance forms." });
-    }
-
-    const driveFolderId = getComplianceDriveFolderId(formType);
-    const driveTokens = buildDriveTokens(studentUser);
-    if (!driveTokens?.access_token) {
-      return res.status(400).json({ message: "Google Drive access token missing. Please reconnect your Drive account." });
-    }
-
+    
+    // Try to upload to Google Drive if connected, but don't fail if it doesn't work
     let driveFileData = null;
-    try {
-      const { file: driveFile, tokens: updatedTokens } = await uploadFileToDrive(
-        req.file.path,
-        req.file.originalname,
-        req.file.mimetype,
-        driveTokens,
-        { parentFolderId: driveFolderId }
-      );
-      driveFileData = driveFile;
-      await applyUpdatedDriveTokens(studentUser, updatedTokens);
-    } catch (driveError) {
-      console.error("Error uploading compliance form to Google Drive:", driveError);
-      if (isInvalidGrantError(driveError)) {
-        await clearDriveTokens(req.user.id);
-        return res.status(401).json({
-          message: "Your Google Drive connection has expired or was revoked. Please reconnect your Drive account and try again.",
-        });
+    const driveFolderId = getComplianceDriveFolderId(formType);
+    
+    if (studentUser?.driveAccessToken) {
+      const driveTokens = buildDriveTokens(studentUser);
+      if (driveTokens?.access_token) {
+        try {
+          const { file: driveFile, tokens: updatedTokens } = await uploadFileToDrive(
+            req.file.path,
+            req.file.originalname,
+            req.file.mimetype,
+            driveTokens,
+            { parentFolderId: driveFolderId }
+          );
+          driveFileData = driveFile;
+          await applyUpdatedDriveTokens(studentUser, updatedTokens);
+          console.log("Compliance form successfully uploaded to Google Drive");
+        } catch (driveError) {
+          console.error("Error uploading compliance form to Google Drive:", driveError);
+          // If token is invalid, clear it but continue with local storage
+          if (isInvalidGrantError(driveError)) {
+            await clearDriveTokens(req.user.id);
+            console.log("Drive tokens cleared due to invalid grant. Continuing with local storage only.");
+          } else {
+            console.log("Drive upload failed, but continuing with local storage only:", driveError.message);
+          }
+          // Don't return error - continue with local storage only
+        }
       }
-      return res.status(500).json({
-        message: "Failed to upload the compliance form to Google Drive. Please reconnect your Drive account and try again.",
-      });
+    } else {
+      console.log("Google Drive not connected. Storing compliance form locally only.");
     }
 
     // Find previous version of this form type for this student/research
@@ -893,9 +894,19 @@ export const uploadChapter = async (req, res) => {
       await applyUpdatedDriveTokens(studentUser, updatedTokens);
     } catch (driveError) {
       console.error("Error uploading chapter to Google Drive:", driveError);
-      return res.status(500).json({
-        message: "Failed to upload the chapter to Google Drive. Please reconnect your Drive account and try again.",
-      });
+      // Log the error but continue with local storage
+      // Check if it's an invalid_grant error (token expired/revoked)
+      if (driveError.response?.data?.error === 'invalid_grant' || 
+          driveError.message?.includes('invalid_grant')) {
+        // Clear stored Drive tokens
+        studentUser.driveAccessToken = undefined;
+        studentUser.driveRefreshToken = undefined;
+        studentUser.driveTokenExpiry = undefined;
+        await studentUser.save();
+        console.log("Cleared expired Drive tokens for user:", studentUser._id);
+      }
+      // Continue with local storage only - don't fail the upload
+      console.log("Continuing with local storage only due to Drive upload failure");
     }
 
     // Calculate version number based on existing submissions for this chapter + partName combination
@@ -1391,9 +1402,19 @@ export const uploadChapterFromDrive = async (req, res) => {
       await applyUpdatedDriveTokens(studentUser, updatedTokens);
     } catch (driveError) {
       console.error("Error saving chapter to Google Drive folder:", driveError);
-      return res.status(500).json({
-        message: "Failed to store the chapter in Google Drive. Please reconnect your Drive account and try again.",
-      });
+      // Log the error but continue with local storage
+      // Check if it's an invalid_grant error (token expired/revoked)
+      if (driveError.response?.data?.error === 'invalid_grant' || 
+          driveError.message?.includes('invalid_grant')) {
+        // Clear stored Drive tokens
+        studentUser.driveAccessToken = undefined;
+        studentUser.driveRefreshToken = undefined;
+        studentUser.driveTokenExpiry = undefined;
+        await studentUser.save();
+        console.log("Cleared expired Drive tokens for user:", studentUser._id);
+      }
+      // Continue with local storage only - don't fail the upload
+      console.log("Continuing with local storage only due to Drive upload failure");
     }
 
     // Calculate version number based on existing submissions for this chapter + partName combination

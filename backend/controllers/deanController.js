@@ -1490,7 +1490,8 @@ export const addResearchRemarks = async (req, res) => {
       adviser: research.adviser,
       type: type,
       message: message,
-      status: 'pending'
+      status: 'pending',
+      createdBy: req.user.id // Track who created the feedback (Dean)
     });
     
     await feedback.save();
@@ -1523,6 +1524,7 @@ export const getResearchFeedback = async (req, res) => {
     const feedback = await Feedback.find({ research: researchId })
       .populate("student", "name")
       .populate("adviser", "name")
+      .populate("createdBy", "name email role")
       .sort({ createdAt: -1 });
 
     await logActivity(
@@ -1538,6 +1540,52 @@ export const getResearchFeedback = async (req, res) => {
     res.json(feedback);
   } catch (error) {
     console.error('Error fetching research feedback:', error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Delete remark (Dean can delete their own remarks)
+export const deleteResearchRemark = async (req, res) => {
+  try {
+    const { remarkId } = req.params;
+
+    const feedback = await Feedback.findById(remarkId)
+      .populate("research", "title")
+      .populate("createdBy", "name email role");
+
+    if (!feedback) {
+      return res.status(404).json({ message: "Remark not found" });
+    }
+
+    // Verify that the remark was created by the current Dean user
+    if (!feedback.createdBy || feedback.createdBy._id.toString() !== req.user.id) {
+      return res.status(403).json({ message: "Unauthorized: You can only delete your own remarks" });
+    }
+
+    // Verify that the creator is a Dean
+    if (feedback.createdBy.role !== 'dean') {
+      return res.status(403).json({ message: "Unauthorized: Only Dean remarks can be deleted through this endpoint" });
+    }
+
+    const researchTitle = feedback.research?.title || "Unknown research";
+
+    // Delete the feedback
+    await Feedback.findByIdAndDelete(remarkId);
+
+    await logActivity(
+      req.user.id,
+      'delete',
+      'feedback',
+      remarkId,
+      researchTitle,
+      `Deleted remark for research: ${researchTitle}`,
+      { remarkId, researchId: feedback.research?._id },
+      req
+    );
+
+    res.json({ message: "Remark deleted successfully" });
+  } catch (error) {
+    console.error('Error deleting remark:', error);
     res.status(500).json({ message: error.message });
   }
 };
@@ -1810,9 +1858,22 @@ export const exportResearchRecords = async (req, res) => {
       );
       driveFile = file;
       await applyUpdatedDriveTokens(user, updatedTokens);
+      console.log("Export successfully uploaded to Google Drive");
     } catch (driveError) {
       console.error("Failed to upload export to Google Drive:", driveError);
-      throw new Error("Failed to upload export to Google Drive. Please reconnect your Drive account and try again.");
+      // Check if it's an invalid_grant error (token expired/revoked)
+      if (driveError.response?.data?.error === 'invalid_grant' || 
+          driveError.message?.includes('invalid_grant')) {
+        // Clear stored Drive tokens
+        user.driveAccessToken = undefined;
+        user.driveRefreshToken = undefined;
+        user.driveTokenExpiry = undefined;
+        await user.save();
+        console.log("Cleared expired Drive tokens for user:", user._id);
+      }
+      // Continue without Drive upload - export can still succeed
+      console.log("Drive upload failed, but export will continue without Drive storage");
+      driveFile = null;
     }
 
     // Save export record to MongoDB
@@ -1866,7 +1927,9 @@ export const exportResearchRecords = async (req, res) => {
     );
 
     res.json({
-      message: `Research records exported as ${normalizedFormat.toUpperCase()} and saved to your Google Drive Reports folder.`,
+      message: driveFile 
+        ? `Research records exported as ${normalizedFormat.toUpperCase()} and saved to your Google Drive Reports folder.`
+        : `Research records exported as ${normalizedFormat.toUpperCase()}. Note: Failed to upload to Google Drive. Please reconnect your Drive account if you want future exports saved to Drive.`,
       format: normalizedFormat,
       recordCount: rows.length,
       fields: selectedFields,
@@ -2328,32 +2391,40 @@ export const uploadDocument = async (req, res) => {
     console.log('Parsed accessibleTo:', parsedAccessibleTo);
     
     const uploader = await User.findById(req.user.id);
-    if (!uploader || !uploader.driveAccessToken) {
-      return res.status(400).json({
-        message: "Please connect your Google Drive account before uploading documents.",
-      });
-    }
-
     const driveTokens = buildDriveTokens(uploader);
     const driveFolderId = getDeanDriveFolderId(req.body.category);
     let driveFileData = null;
 
-    try {
-      const { file: driveFile, tokens: updatedTokens } = await uploadFileToDrive(
-        req.file.path,
-        req.file.originalname,
-        req.file.mimetype,
-        driveTokens,
-        { parentFolderId: driveFolderId }
-      );
-      driveFileData = driveFile;
-      await applyUpdatedDriveTokens(uploader, updatedTokens);
-    } catch (driveError) {
-      console.error("Error uploading dean document to Google Drive:", driveError);
-      return res.status(500).json({
-        message:
-          "Failed to upload the document to Google Drive. Please reconnect your Drive account and try again.",
-      });
+    // Try to upload to Google Drive if connected, but don't fail if it doesn't work
+    if (uploader && uploader.driveAccessToken && driveTokens?.access_token) {
+      try {
+        const { file: driveFile, tokens: updatedTokens } = await uploadFileToDrive(
+          req.file.path,
+          req.file.originalname,
+          req.file.mimetype,
+          driveTokens,
+          { parentFolderId: driveFolderId }
+        );
+        driveFileData = driveFile;
+        await applyUpdatedDriveTokens(uploader, updatedTokens);
+        console.log("Dean document successfully uploaded to Google Drive");
+      } catch (driveError) {
+        console.error("Error uploading dean document to Google Drive:", driveError);
+        // Check if it's an invalid_grant error (token expired/revoked)
+        if (driveError.response?.data?.error === 'invalid_grant' || 
+            driveError.message?.includes('invalid_grant')) {
+          // Clear stored Drive tokens
+          uploader.driveAccessToken = undefined;
+          uploader.driveRefreshToken = undefined;
+          uploader.driveTokenExpiry = undefined;
+          await uploader.save();
+          console.log("Cleared expired Drive tokens for user:", uploader._id);
+        }
+        // Continue with local storage only - don't fail the upload
+        console.log("Drive upload failed, but continuing with local storage only:", driveError.message);
+      }
+    } else {
+      console.log("Google Drive not connected, saving document locally only");
     }
     
     const document = new Document({
@@ -3507,35 +3578,43 @@ export const exportDefenseSchedule = async (req, res) => {
     const tempFilePath = path.join(tempDirPath, fileName);
     await fs.promises.writeFile(tempFilePath, buffer);
 
-    // Upload to Google Drive
+    // Upload to Google Drive (optional)
     const driveTokens = buildDriveTokens(user);
-    if (!driveTokens?.access_token) {
-      throw new Error("Unable to read Google Drive credentials. Please reconnect your Drive account.");
-    }
-
     const reportsFolderId =
       process.env.GOOGLE_DRIVE_REPORTS_FOLDER_ID ||
       process.env.GOOGLE_DRIVE_DEAN_REPORTS_FOLDER_ID ||
       getDeanDriveFolderId("reports");
 
-    if (!reportsFolderId) {
-      throw new Error("Reports folder ID is not configured. Please set GOOGLE_DRIVE_REPORTS_FOLDER_ID.");
-    }
-
-    let driveFile;
-    try {
-      const { file, tokens: updatedTokens } = await uploadFileToDrive(
-        tempFilePath,
-        fileName,
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        driveTokens,
-        { parentFolderId: reportsFolderId }
-      );
-      driveFile = file;
-      await applyUpdatedDriveTokens(user, updatedTokens);
-    } catch (driveError) {
-      console.error("Failed to upload export to Google Drive:", driveError);
-      throw new Error("Failed to upload export to Google Drive. Please reconnect your Drive account and try again.");
+    let driveFile = null;
+    if (driveTokens?.access_token && reportsFolderId) {
+      try {
+        const { file, tokens: updatedTokens } = await uploadFileToDrive(
+          tempFilePath,
+          fileName,
+          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          driveTokens,
+          { parentFolderId: reportsFolderId }
+        );
+        driveFile = file;
+        await applyUpdatedDriveTokens(user, updatedTokens);
+        console.log("Defense schedule export successfully uploaded to Google Drive");
+      } catch (driveError) {
+        console.error("Failed to upload export to Google Drive:", driveError);
+        // Check if it's an invalid_grant error (token expired/revoked)
+        if (driveError.response?.data?.error === 'invalid_grant' || 
+            driveError.message?.includes('invalid_grant')) {
+          // Clear stored Drive tokens
+          user.driveAccessToken = undefined;
+          user.driveRefreshToken = undefined;
+          user.driveTokenExpiry = undefined;
+          await user.save();
+          console.log("Cleared expired Drive tokens for user:", user._id);
+        }
+        // Continue without Drive upload - export can still succeed
+        console.log("Drive upload failed, but export will continue without Drive storage");
+      }
+    } else {
+      console.log("Google Drive not configured or not connected, export will continue without Drive storage");
     }
 
     // Save export record
@@ -3590,7 +3669,9 @@ export const exportDefenseSchedule = async (req, res) => {
     }
 
     res.json({
-      message: `Defense schedule exported as XLSX and saved to your Google Drive Reports folder.`,
+      message: driveFile 
+        ? `Defense schedule exported as XLSX and saved to your Google Drive Reports folder.`
+        : `Defense schedule exported as XLSX. Note: Failed to upload to Google Drive. Please reconnect your Drive account if you want future exports saved to Drive.`,
       format: "xlsx",
       recordCount: schedules.length,
       driveFile,

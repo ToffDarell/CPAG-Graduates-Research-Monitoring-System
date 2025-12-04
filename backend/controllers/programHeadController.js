@@ -2421,32 +2421,40 @@ export const uploadPanelDocument = async (req, res) => {
     }
 
     const uploader = await User.findById(req.user.id);
-    if (!uploader || !uploader.driveAccessToken) {
-      return res.status(400).json({
-        message: "Please connect your Google Drive account before uploading panel documents.",
-      });
-    }
-
     const driveTokens = buildDriveTokens(uploader);
     const driveFolderId = getPanelDriveFolderId();
     let driveFileData = null;
 
-    try {
-      const { file: driveFile, tokens: updatedTokens } = await uploadFileToDrive(
-        req.file.path,
-        req.file.originalname,
-        req.file.mimetype,
-        driveTokens,
-        { parentFolderId: driveFolderId }
-      );
-      driveFileData = driveFile;
-      await applyUpdatedDriveTokens(uploader, updatedTokens);
-    } catch (driveError) {
-      console.error("Error uploading panel document to Google Drive:", driveError);
-      return res.status(500).json({
-        message:
-          "Failed to upload the document to Google Drive. Please reconnect your Drive account and try again.",
-      });
+    // Try to upload to Google Drive if connected, but don't fail if it doesn't work
+    if (uploader && uploader.driveAccessToken && driveTokens?.access_token) {
+      try {
+        const { file: driveFile, tokens: updatedTokens } = await uploadFileToDrive(
+          req.file.path,
+          req.file.originalname,
+          req.file.mimetype,
+          driveTokens,
+          { parentFolderId: driveFolderId }
+        );
+        driveFileData = driveFile;
+        await applyUpdatedDriveTokens(uploader, updatedTokens);
+        console.log("Panel document successfully uploaded to Google Drive");
+      } catch (driveError) {
+        console.error("Error uploading panel document to Google Drive:", driveError);
+        // Check if it's an invalid_grant error (token expired/revoked)
+        if (driveError.response?.data?.error === 'invalid_grant' || 
+            driveError.message?.includes('invalid_grant')) {
+          // Clear stored Drive tokens
+          uploader.driveAccessToken = undefined;
+          uploader.driveRefreshToken = undefined;
+          uploader.driveTokenExpiry = undefined;
+          await uploader.save();
+          console.log("Cleared expired Drive tokens for user:", uploader._id);
+        }
+        // Continue with local storage only - don't fail the upload
+        console.log("Drive upload failed, but continuing with local storage only:", driveError.message);
+      }
+    } else {
+      console.log("Google Drive not connected, saving document locally only");
     }
 
     // Check if document with same title exists (for versioning)
@@ -2831,32 +2839,40 @@ export const replacePanelDocument = async (req, res) => {
     }
 
     const uploader = await User.findById(req.user.id);
-    if (!uploader || !uploader.driveAccessToken) {
-      return res.status(400).json({
-        message: "Please connect your Google Drive account before replacing panel documents.",
-      });
-    }
-
     const driveTokens = buildDriveTokens(uploader);
     const driveFolderId = getPanelDriveFolderId();
     let driveFileData = null;
 
-    try {
-      const { file: driveFile, tokens: updatedTokens } = await uploadFileToDrive(
-        req.file.path,
-        req.file.originalname,
-        req.file.mimetype,
-        driveTokens,
-        { parentFolderId: driveFolderId }
-      );
-      driveFileData = driveFile;
-      await applyUpdatedDriveTokens(uploader, updatedTokens);
-    } catch (driveError) {
-      console.error("Error replacing panel document in Google Drive:", driveError);
-      return res.status(500).json({
-        message:
-          "Failed to upload the updated document to Google Drive. Please reconnect your Drive account and try again.",
-      });
+    // Try to upload to Google Drive if connected, but don't fail if it doesn't work
+    if (uploader && uploader.driveAccessToken && driveTokens?.access_token) {
+      try {
+        const { file: driveFile, tokens: updatedTokens } = await uploadFileToDrive(
+          req.file.path,
+          req.file.originalname,
+          req.file.mimetype,
+          driveTokens,
+          { parentFolderId: driveFolderId }
+        );
+        driveFileData = driveFile;
+        await applyUpdatedDriveTokens(uploader, updatedTokens);
+        console.log("Panel document replacement successfully uploaded to Google Drive");
+      } catch (driveError) {
+        console.error("Error replacing panel document in Google Drive:", driveError);
+        // Check if it's an invalid_grant error (token expired/revoked)
+        if (driveError.response?.data?.error === 'invalid_grant' || 
+            driveError.message?.includes('invalid_grant')) {
+          // Clear stored Drive tokens
+          uploader.driveAccessToken = undefined;
+          uploader.driveRefreshToken = undefined;
+          uploader.driveTokenExpiry = undefined;
+          await uploader.save();
+          console.log("Cleared expired Drive tokens for user:", uploader._id);
+        }
+        // Continue with local storage only - don't fail the upload
+        console.log("Drive upload failed, but continuing with local storage only:", driveError.message);
+      }
+    } else {
+      console.log("Google Drive not connected, saving document locally only");
     }
 
     const documentIndex = panel.documents.findIndex(
@@ -4719,9 +4735,22 @@ export const exportPanelRecords = async (req, res) => {
       );
       driveFile = file;
       await applyUpdatedDriveTokens(user, updatedTokens);
+      console.log("Export successfully uploaded to Google Drive");
     } catch (driveError) {
       console.error("Failed to upload export to Google Drive:", driveError);
-      throw new Error("Failed to upload export to Google Drive. Please reconnect your Drive account and try again.");
+      // Check if it's an invalid_grant error (token expired/revoked)
+      if (driveError.response?.data?.error === 'invalid_grant' || 
+          driveError.message?.includes('invalid_grant')) {
+        // Clear stored Drive tokens
+        user.driveAccessToken = undefined;
+        user.driveRefreshToken = undefined;
+        user.driveTokenExpiry = undefined;
+        await user.save();
+        console.log("Cleared expired Drive tokens for user:", user._id);
+      }
+      // Continue without Drive upload - export can still succeed
+      console.log("Drive upload failed, but export will continue without Drive storage");
+      driveFile = null;
     }
 
     // Save export record to MongoDB
@@ -4779,7 +4808,9 @@ export const exportPanelRecords = async (req, res) => {
     }
 
     res.json({
-      message: `Panel records exported as PDF and saved to your Google Drive Reports folder.`,
+      message: driveFile 
+        ? `Panel records exported as PDF and saved to your Google Drive Reports folder.`
+        : `Panel records exported as PDF. Note: Failed to upload to Google Drive. Please reconnect your Drive account if you want future exports saved to Drive.`,
       format: "pdf",
       recordCount: panelData.length,
       driveFile,
@@ -5177,34 +5208,43 @@ export const exportDefenseSchedule = async (req, res) => {
     const tempFilePath = path.join(tempDirPath, fileName);
     await fs.promises.writeFile(tempFilePath, excelBuffer);
 
+    // Upload to Google Drive (optional)
     const driveTokens = buildDriveTokens(user);
-    if (!driveTokens?.access_token) {
-      throw new Error("Unable to read Google Drive credentials. Please reconnect your Drive account.");
-    }
-
     const reportsFolderId =
       process.env.GOOGLE_DRIVE_REPORTS_FOLDER_ID ||
       process.env.GOOGLE_DRIVE_PROGRAM_HEAD_REPORTS_FOLDER_ID ||
       getPanelDriveFolderId();
 
-    if (!reportsFolderId) {
-      throw new Error("Reports folder ID is not configured. Please set GOOGLE_DRIVE_REPORTS_FOLDER_ID.");
-    }
-
-    let driveFile;
-    try {
-      const { file, tokens: updatedTokens } = await uploadFileToDrive(
-        tempFilePath,
-        fileName,
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        driveTokens,
-        { parentFolderId: reportsFolderId }
-      );
-      driveFile = file;
-      await applyUpdatedDriveTokens(user, updatedTokens);
-    } catch (driveError) {
-      console.error("Failed to upload export to Google Drive:", driveError);
-      throw new Error("Failed to upload export to Google Drive. Please reconnect your Drive account and try again.");
+    let driveFile = null;
+    if (driveTokens?.access_token && reportsFolderId) {
+      try {
+        const { file, tokens: updatedTokens } = await uploadFileToDrive(
+          tempFilePath,
+          fileName,
+          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          driveTokens,
+          { parentFolderId: reportsFolderId }
+        );
+        driveFile = file;
+        await applyUpdatedDriveTokens(user, updatedTokens);
+        console.log("Defense schedule export successfully uploaded to Google Drive");
+      } catch (driveError) {
+        console.error("Failed to upload export to Google Drive:", driveError);
+        // Check if it's an invalid_grant error (token expired/revoked)
+        if (driveError.response?.data?.error === 'invalid_grant' || 
+            driveError.message?.includes('invalid_grant')) {
+          // Clear stored Drive tokens
+          user.driveAccessToken = undefined;
+          user.driveRefreshToken = undefined;
+          user.driveTokenExpiry = undefined;
+          await user.save();
+          console.log("Cleared expired Drive tokens for user:", user._id);
+        }
+        // Continue without Drive upload - export can still succeed
+        console.log("Drive upload failed, but export will continue without Drive storage");
+      }
+    } else {
+      console.log("Google Drive not configured or not connected, export will continue without Drive storage");
     }
 
     // Save export record
@@ -5257,7 +5297,9 @@ export const exportDefenseSchedule = async (req, res) => {
     }
 
     res.json({
-      message: `Defense schedule exported as XLSX and saved to your Google Drive Reports folder.`,
+      message: driveFile 
+        ? `Defense schedule exported as XLSX and saved to your Google Drive Reports folder.`
+        : `Defense schedule exported as XLSX. Note: Failed to upload to Google Drive. Please reconnect your Drive account if you want future exports saved to Drive.`,
       format: "xlsx",
       recordCount: schedules.length,
       driveFile,
