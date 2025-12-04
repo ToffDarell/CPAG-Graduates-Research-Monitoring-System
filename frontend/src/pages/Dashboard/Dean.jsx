@@ -327,21 +327,21 @@ const DeanDashboard = ({ setUser, user }) => {
 
       const tabConfig = permissionMap[selectedTab];
       if (tabConfig) {
+        // Define redirect callback that will be called after user clicks OK
+        const handleRedirect = () => {
+          const redirectTab = tabConfig.redirectTo || 'research';
+          setSelectedTab(redirectTab);
+          setSearchParams({ tab: redirectTab }, { replace: true });
+        };
+
         const hasPermission = await checkPermission(
           tabConfig.permissions,
           tabConfig.feature,
-          tabConfig.context
+          tabConfig.context,
+          handleRedirect // Pass callback to be called after OK button is clicked
         );
-        if (!hasPermission) {
-          // Warning was already shown and dismissed by checkPermission
-          // Now redirect to fallback tab
-          const redirectTab = tabConfig.redirectTo || 'research';
-          
-          // Redirect immediately after warning is dismissed
-          // checkPermission already waited for the user to click OK
-          setSelectedTab(redirectTab);
-          setSearchParams({ tab: redirectTab }, { replace: true });
-        }
+        // Note: If permission check fails, the redirect callback is called automatically
+        // after the user clicks OK on the warning dialog
       }
     };
 
@@ -422,6 +422,16 @@ const DeanDashboard = ({ setUser, user }) => {
   };
 
   const handleAddFaculty = async (e) => {
+    // Check permission before allowing add action
+    const hasPermission = await checkPermission(
+      ['manage_users'],
+      'Add Faculty',
+      'You will not be able to add new faculty members.'
+    );
+    if (!hasPermission) {
+      e?.preventDefault();
+      return;
+    }
     e.preventDefault();
     setLoading(true);
     try {
@@ -440,13 +450,31 @@ const DeanDashboard = ({ setUser, user }) => {
     }
   };
 
-  const handleEditFaculty = (faculty) => {
+  const handleEditFaculty = async (faculty) => {
+    // Check permission before allowing edit action
+    const hasPermission = await checkPermission(
+      ['manage_users'],
+      'Edit Faculty',
+      'You will not be able to edit faculty members.'
+    );
+    if (!hasPermission) {
+      return;
+    }
     setEditingFaculty(faculty);
     setShowEditFacultyModal(true);
   };
 
   const handleUpdateFaculty = async (e) => {
     e.preventDefault();
+    // Check permission before allowing update action
+    const hasPermission = await checkPermission(
+      ['manage_users'],
+      'Update Faculty',
+      'You will not be able to update faculty members.'
+    );
+    if (!hasPermission) {
+      return;
+    }
     setLoading(true);
     try {
       const token = localStorage.getItem('token');
@@ -487,6 +515,15 @@ const DeanDashboard = ({ setUser, user }) => {
   }
 
   const handleDeleteFaculty = async (id) => {
+    // Check permission before allowing delete action
+    const hasPermission = await checkPermission(
+      ['manage_users'],
+      'Delete Faculty',
+      'You will not be able to remove faculty members.'
+    );
+    if (!hasPermission) {
+      return;
+    }
     const result = await showConfirm('Remove Faculty', 'Are you sure you want to remove this faculty member?');
     if (!result.isConfirmed) return;
     try {
@@ -570,6 +607,15 @@ const DeanDashboard = ({ setUser, user }) => {
 
   // Add this function after handleDeleteFaculty
   const handleToggleFacultyStatus = async (faculty) => {
+    // Check permission before allowing toggle status action
+    const hasPermission = await checkPermission(
+      ['manage_users'],
+      'Toggle Faculty Status',
+      'You will not be able to activate or deactivate faculty members.'
+    );
+    if (!hasPermission) {
+      return;
+    }
     if (!faculty) {
       showError('Error', 'Faculty member not found in the current list.');
       return;

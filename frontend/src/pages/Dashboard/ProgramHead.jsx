@@ -246,40 +246,84 @@ const ProgramHeadDashboard = ({ setUser, user }) => {
     }
   }, [selectedTab]); // setSearchParams is stable, doesn't need to be in deps
 
-  // Track permission warnings shown per tab
-  const permissionWarningsRef = useRef({});
-
-  // Check permissions when tab changes
+  // Check permissions when tab changes and redirect if disabled
   useEffect(() => {
     const checkTabPermissions = async () => {
-      if (!selectedTab || permissionWarningsRef.current[selectedTab]) return;
+      if (!selectedTab) return;
 
       const permissionMap = {
-        'panels': { permissions: ['manage_panels'], feature: 'Panel Selection', context: 'You will not be able to create or manage panels.' },
-        'advisers': { permissions: ['view_users'], feature: 'Faculty Adviser Assignment', context: 'You will not be able to view or assign faculty advisers.' },
-        'schedules': { permissions: ['manage_schedules', 'view_schedules'], feature: 'Schedule Management', context: 'You will not be able to manage schedules.' },
-        'monitoring': { permissions: ['view_research'], feature: 'Process Monitoring', context: 'You will not be able to access monitoring features.' },
-        'forms': { permissions: ['upload_documents'], feature: 'Forms & Documents', context: 'You will not be able to upload forms or documents.' },
-        'records': { permissions: ['view_research'], feature: 'Research Records', context: 'You will not be able to view research records.' },
-        'panel-records': { permissions: ['view_research'], feature: 'Panel Records', context: 'You will not be able to view panel records.' },
-        'activity-logs': { permissions: ['view_activity'], feature: 'Activity Logs', context: 'You will not be able to view activity logs.' },
+        'panels': { 
+          permissions: ['manage_panels'], 
+          feature: 'Panel Selection', 
+          context: 'You will not be able to create or manage panels.',
+          redirectTo: 'schedules'
+        },
+        'advisers': { 
+          permissions: ['view_users'], 
+          feature: 'Faculty Adviser Assignment', 
+          context: 'You will not be able to view or assign faculty advisers.',
+          redirectTo: 'panels'
+        },
+        'schedules': { 
+          permissions: ['manage_schedules', 'view_schedules'], 
+          feature: 'Schedule Management', 
+          context: 'You will not be able to manage schedules.',
+          redirectTo: 'panels'
+        },
+        'monitoring': { 
+          permissions: ['view_research'], 
+          feature: 'Process Monitoring', 
+          context: 'You will not be able to access monitoring features.',
+          redirectTo: 'panels'
+        },
+        'forms': { 
+          permissions: ['upload_documents'], 
+          feature: 'Forms & Documents', 
+          context: 'You will not be able to upload forms or documents.',
+          redirectTo: 'panels'
+        },
+        'records': { 
+          permissions: ['view_research'], 
+          feature: 'Research Records', 
+          context: 'You will not be able to view research records.',
+          redirectTo: 'panels'
+        },
+        'panel-records': { 
+          permissions: ['view_research'], 
+          feature: 'Panel Records', 
+          context: 'You will not be able to view panel records.',
+          redirectTo: 'panels'
+        },
+        'activity-logs': { 
+          permissions: ['view_activity'], 
+          feature: 'Activity Logs', 
+          context: 'You will not be able to view activity logs.',
+          redirectTo: 'panels'
+        },
       };
 
       const tabConfig = permissionMap[selectedTab];
       if (tabConfig) {
+        // Define redirect callback that will be called after user clicks OK
+        const handleRedirect = () => {
+          const redirectTab = tabConfig.redirectTo || 'panels';
+          setSelectedTab(redirectTab);
+          setSearchParams({ tab: redirectTab }, { replace: true });
+        };
+
         const hasPermission = await checkPermission(
           tabConfig.permissions,
           tabConfig.feature,
-          tabConfig.context
+          tabConfig.context,
+          handleRedirect // Pass callback to be called after OK button is clicked
         );
-        if (!hasPermission) {
-          permissionWarningsRef.current[selectedTab] = true;
-        }
+        // Note: If permission check fails, the redirect callback is called automatically
+        // after the user clicks OK on the warning dialog
       }
     };
 
     checkTabPermissions();
-  }, [selectedTab]);
+  }, [selectedTab, setSearchParams]);
 
   useEffect(() => {
     fetchDriveStatus();
@@ -689,6 +733,16 @@ const PanelSelection = () => {
   const handleCreatePanel = async (e) => {
     e.preventDefault();
     
+    // Check permission before allowing create panel action
+    const hasPermission = await checkPermission(
+      ['manage_panels'],
+      'Create Panel',
+      'You will not be able to create panels.'
+    );
+    if (!hasPermission) {
+      return;
+    }
+    
     // Debug logging
     console.log('Panel Form:', panelForm);
     console.log('Selected Members:', selectedMembers);
@@ -929,6 +983,16 @@ const PanelSelection = () => {
 
 
   const handleDeletePanel = async (panelId, panelName) => {
+    // Check permission before allowing delete panel action
+    const hasPermission = await checkPermission(
+      ['manage_panels'],
+      'Delete Panel',
+      'You will not be able to delete panels.'
+    );
+    if (!hasPermission) {
+      return;
+    }
+    
     const result1 = await showDangerConfirm(
       'WARNING: Delete Panel?',
       `Are you sure you want to permanently delete "${panelName}"? This action cannot be undone. All panel data, reviews, and documents will be permanently deleted.`,

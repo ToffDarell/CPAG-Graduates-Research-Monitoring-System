@@ -215,38 +215,72 @@ const FacultyAdviserDashboard = ({ setUser, user }) => {
     }
   }, [selectedTab]);
 
-  // Track permission warnings shown per tab
-  const permissionWarningsRef = useRef({});
-
-  // Check permissions when tab changes
+  // Check permissions when tab changes and redirect if disabled
   useEffect(() => {
     const checkTabPermissions = async () => {
-      if (!selectedTab || permissionWarningsRef.current[selectedTab]) return;
+      if (!selectedTab) return;
 
       const permissionMap = {
-        'submissions': { permissions: ['view_research'], feature: 'Student Submissions', context: 'You will not be able to view student submissions.' },
-        'feedback': { permissions: ['create_feedback', 'view_feedback'], feature: 'Feedback Management', context: 'You will not be able to create or view feedback.' },
-        'panels': { permissions: ['review_panels'], feature: 'Panel Reviews', context: 'You will not be able to review panels.' },
-        'schedule': { permissions: ['view_schedules', 'manage_schedules'], feature: 'Consultation Schedule', context: 'You will not be able to view or manage consultation schedules.' },
-        'students': { permissions: ['view_users'], feature: 'My Students', context: 'You will not be able to view your students.' },
-        'documents': { permissions: ['view_documents'], feature: 'Documents', context: 'You will not be able to view documents.' },
+        'submissions': { 
+          permissions: ['view_research'], 
+          feature: 'Student Submissions', 
+          context: 'You will not be able to view student submissions.',
+          redirectTo: 'schedule'
+        },
+        'feedback': { 
+          permissions: ['create_feedback', 'view_feedback'], 
+          feature: 'Feedback Management', 
+          context: 'You will not be able to create or view feedback.',
+          redirectTo: 'submissions'
+        },
+        'panels': { 
+          permissions: ['review_panels'], 
+          feature: 'Panel Reviews', 
+          context: 'You will not be able to review panels.',
+          redirectTo: 'submissions'
+        },
+        'schedule': { 
+          permissions: ['view_schedules', 'manage_schedules'], 
+          feature: 'Consultation Schedule', 
+          context: 'You will not be able to view or manage consultation schedules.',
+          redirectTo: 'submissions'
+        },
+        'students': { 
+          permissions: ['view_users'], 
+          feature: 'My Students', 
+          context: 'You will not be able to view your students.',
+          redirectTo: 'submissions'
+        },
+        'documents': { 
+          permissions: ['view_documents'], 
+          feature: 'Documents', 
+          context: 'You will not be able to view documents.',
+          redirectTo: 'submissions'
+        },
       };
 
       const tabConfig = permissionMap[selectedTab];
       if (tabConfig) {
+        // Define redirect callback that will be called after user clicks OK
+        const handleRedirect = () => {
+          const redirectTab = tabConfig.redirectTo || 'submissions';
+          setSelectedTab(redirectTab);
+          setSearchParams({ tab: redirectTab }, { replace: true });
+        };
+
         const hasPermission = await checkPermission(
           tabConfig.permissions,
           tabConfig.feature,
-          tabConfig.context
+          tabConfig.context,
+          handleRedirect // Pass callback to be called after OK button is clicked
         );
-        if (!hasPermission) {
-          permissionWarningsRef.current[selectedTab] = true;
-        }
+        // Note: If permission check fails, the redirect callback is called automatically
+        // after the user clicks OK on the warning dialog
       }
     };
 
     checkTabPermissions();
-  }, [selectedTab]); 
+  }, [selectedTab, setSearchParams]); 
 
   // Fetch data on component mount
   useEffect(() => {
@@ -408,6 +442,16 @@ const FacultyAdviserDashboard = ({ setUser, user }) => {
   };
 
   const handleUpdateThesisStatus = async (researchId, status, stage, progress) => {
+    // Check permission before allowing update thesis status action
+    const hasPermission = await checkPermission(
+      ['create_feedback', 'view_feedback'],
+      'Update Thesis Status',
+      'You will not be able to update thesis status.'
+    );
+    if (!hasPermission) {
+      return;
+    }
+    
     setLoading(true);
     try {
       const token = localStorage.getItem('token');
@@ -2095,6 +2139,16 @@ const FeedbackManagement = () => {
   // Add comment
   const handleAddComment = async () => {
     if (!newComment.trim()) return;
+    
+    // Check permission before allowing add comment action
+    const hasPermission = await checkPermission(
+      ['create_feedback'],
+      'Add Comment',
+      'You will not be able to add comments.'
+    );
+    if (!hasPermission) {
+      return;
+    }
 
     try {
       const token = localStorage.getItem('token');
@@ -2871,6 +2925,17 @@ const ConsultationSchedule = ({ schedules, onRefresh }) => {
 
   const handleCreateSlot = async (e) => {
     e.preventDefault();
+    
+    // Check permission before allowing create slot action
+    const hasPermission = await checkPermission(
+      ['manage_schedules'],
+      'Create Consultation Slot',
+      'You will not be able to create consultation slots.'
+    );
+    if (!hasPermission) {
+      return;
+    }
+    
     setLoading(true);
     setErrorMessage("");
 

@@ -6,6 +6,7 @@ import { renderAsync } from 'docx-preview';
 import MySchedule from "../../components/MyScheduleComponent";
 import DriveUploader from "../../components/DriveUploader";
 import { showSuccess, showError, showWarning, showDangerConfirm, showConfirm } from "../../utils/sweetAlert";
+import { checkPermission } from "../../utils/permissionChecker";
 import Settings from "../Settings";
 
 // Reusable Pagination Component
@@ -221,6 +222,73 @@ const GraduateDashboard = ({ setUser, user }) => {
       setSearchParams({ tab: selectedTab }, { replace: true });
     }
   }, [selectedTab]); // setSearchParams is stable, doesn't need to be in deps
+
+  // Check permissions when tab changes and redirect if disabled
+  useEffect(() => {
+    const checkTabPermissions = async () => {
+      if (!selectedTab) return;
+
+      const permissionMap = {
+        'chapters': { 
+          permissions: ['upload_documents'], 
+          feature: 'Research Chapters', 
+          context: 'You will not be able to upload research chapters.',
+          redirectTo: 'schedule'
+        },
+        'compliance': { 
+          permissions: ['upload_documents'], 
+          feature: 'Compliance Forms', 
+          context: 'You will not be able to upload compliance forms.',
+          redirectTo: 'chapters'
+        },
+        'schedule': { 
+          permissions: ['view_schedules', 'manage_schedules'], 
+          feature: 'My Schedule', 
+          context: 'You will not be able to view or manage your schedule.',
+          redirectTo: 'chapters'
+        },
+        'progress': { 
+          permissions: ['view_research'], 
+          feature: 'Progress Tracking', 
+          context: 'You will not be able to view your progress.',
+          redirectTo: 'chapters'
+        },
+        'completed': { 
+          permissions: ['view_research'], 
+          feature: 'Completed Thesis', 
+          context: 'You will not be able to view completed thesis.',
+          redirectTo: 'chapters'
+        },
+        'documents': { 
+          permissions: ['view_documents'], 
+          feature: 'Documents', 
+          context: 'You will not be able to view documents.',
+          redirectTo: 'chapters'
+        },
+      };
+
+      const tabConfig = permissionMap[selectedTab];
+      if (tabConfig) {
+        // Define redirect callback that will be called after user clicks OK
+        const handleRedirect = () => {
+          const redirectTab = tabConfig.redirectTo || 'chapters';
+          setSelectedTab(redirectTab);
+          setSearchParams({ tab: redirectTab }, { replace: true });
+        };
+
+        const hasPermission = await checkPermission(
+          tabConfig.permissions,
+          tabConfig.feature,
+          tabConfig.context,
+          handleRedirect // Pass callback to be called after OK button is clicked
+        );
+        // Note: If permission check fails, the redirect callback is called automatically
+        // after the user clicks OK on the warning dialog
+      }
+    };
+
+    checkTabPermissions();
+  }, [selectedTab, setSearchParams]);
 
   // Track if component has mounted to avoid double fetch
   const filtersInitialized = useRef(false);
@@ -1007,6 +1075,16 @@ const ResearchChapters = ({
   );
 
   const handleUpload = async () => {
+    // Check permission before allowing upload action
+    const hasPermission = await checkPermission(
+      ['upload_documents'],
+      'Upload Chapter',
+      'You will not be able to upload chapters.'
+    );
+    if (!hasPermission) {
+      return;
+    }
+    
     if (!selectedFile) {
       setFormError("Please select a chapter file to upload.");
       return;
@@ -2056,6 +2134,16 @@ const ComplianceForms = ({ myResearch, onFormUpload }) => {
   };
 
   const handleUpload = async () => {
+    // Check permission before allowing upload action
+    const hasPermission = await checkPermission(
+      ['upload_documents'],
+      'Upload Compliance Form',
+      'You will not be able to upload compliance forms.'
+    );
+    if (!hasPermission) {
+      return;
+    }
+    
     if (!selectedFile || !formType || !myResearch || myResearch.length === 0) {
       setErrorMessage("Please select a file, form type, and ensure you have an active research");
       setTimeout(() => setErrorMessage(""), 4000);
