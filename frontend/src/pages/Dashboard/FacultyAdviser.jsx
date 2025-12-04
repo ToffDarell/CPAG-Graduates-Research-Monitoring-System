@@ -22,6 +22,161 @@ pdfjs.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.js';
 
 const localizer = momentLocalizer(moment);
 
+// Reusable Pagination Component
+const Pagination = ({ 
+  currentPage, 
+  totalPages, 
+  totalItems, 
+  itemsPerPage, 
+  onPageChange, 
+  onItemsPerPageChange,
+  startIndex,
+  endIndex 
+}) => {
+  const handleFirstPage = () => onPageChange(1);
+  const handlePrevPage = () => onPageChange(Math.max(1, currentPage - 1));
+  const handleNextPage = () => onPageChange(Math.min(totalPages, currentPage + 1));
+  const handleLastPage = () => onPageChange(totalPages);
+  const handlePageClick = (page) => onPageChange(page);
+
+  // Generate page numbers to display
+  const getPageNumbers = () => {
+    const pages = [];
+    const maxVisible = 5;
+    
+    if (totalPages <= maxVisible) {
+      for (let i = 1; i <= totalPages; i++) {
+        pages.push(i);
+      }
+    } else {
+      if (currentPage <= 3) {
+        for (let i = 1; i <= 4; i++) {
+          pages.push(i);
+        }
+        pages.push('...');
+        pages.push(totalPages);
+      } else if (currentPage >= totalPages - 2) {
+        pages.push(1);
+        pages.push('...');
+        for (let i = totalPages - 3; i <= totalPages; i++) {
+          pages.push(i);
+        }
+      } else {
+        pages.push(1);
+        pages.push('...');
+        for (let i = currentPage - 1; i <= currentPage + 1; i++) {
+          pages.push(i);
+        }
+        pages.push('...');
+        pages.push(totalPages);
+      }
+    }
+    
+    return pages;
+  };
+
+  // Always show pagination if there are items, even if only one page
+  if (totalItems === 0) {
+    return null; // Only hide if there are no items at all
+  }
+
+  return (
+    <div className="flex items-center justify-between border-t border-gray-200 bg-white px-4 py-3 sm:px-6">
+      <div className="flex flex-1 justify-between sm:hidden">
+        <button
+          onClick={handlePrevPage}
+          disabled={currentPage === 1}
+          className="relative inline-flex items-center rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          Previous
+        </button>
+        <button
+          onClick={handleNextPage}
+          disabled={currentPage === totalPages}
+          className="relative ml-3 inline-flex items-center rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          Next
+        </button>
+      </div>
+      <div className="hidden sm:flex sm:flex-1 sm:items-center sm:justify-between">
+        <div>
+          <p className="text-sm text-gray-700">
+            Showing <span className="font-medium">{startIndex}</span> to <span className="font-medium">{endIndex}</span> of{' '}
+            <span className="font-medium">{totalItems}</span> results
+          </p>
+        </div>
+        <div className="flex items-center space-x-2">
+          <div className="flex items-center space-x-1">
+            <label className="text-sm text-gray-700">Items per page:</label>
+            <select
+              value={itemsPerPage}
+              onChange={(e) => onItemsPerPageChange(Number(e.target.value))}
+              className="border border-gray-300 rounded-md px-2 py-1 text-sm focus:ring-2 focus:ring-[#7C1D23] focus:border-transparent"
+            >
+              <option value={5}>5</option>
+              <option value={10}>10</option>
+              <option value={20}>20</option>
+              <option value={50}>50</option>
+            </select>
+          </div>
+          <div className="flex items-center space-x-1">
+            <button
+              onClick={handleFirstPage}
+              disabled={currentPage === 1}
+              className="px-2 py-1 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+              title="First page"
+            >
+              ««
+            </button>
+            <button
+              onClick={handlePrevPage}
+              disabled={currentPage === 1}
+              className="px-2 py-1 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Previous page"
+            >
+              ‹
+            </button>
+            {getPageNumbers().map((page, idx) => (
+              <React.Fragment key={idx}>
+                {page === '...' ? (
+                  <span className="px-2 py-1 text-sm text-gray-700">...</span>
+                ) : (
+                  <button
+                    onClick={() => handlePageClick(page)}
+                    className={`px-3 py-1 border rounded-md text-sm font-medium ${
+                      currentPage === page
+                        ? 'bg-[#7C1D23] text-white border-[#7C1D23]'
+                        : 'border-gray-300 text-gray-700 hover:bg-gray-50'
+                    }`}
+                  >
+                    {page}
+                  </button>
+                )}
+              </React.Fragment>
+            ))}
+            <button
+              onClick={handleNextPage}
+              disabled={currentPage === totalPages}
+              className="px-2 py-1 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Next page"
+            >
+              ›
+            </button>
+            <button
+              onClick={handleLastPage}
+              disabled={currentPage === totalPages}
+              className="px-2 py-1 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Last page"
+            >
+              »»
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const FacultyAdviserDashboard = ({ setUser, user }) => {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -501,6 +656,7 @@ const FacultyAdviserDashboard = ({ setUser, user }) => {
           </div>
         </div>
       </div>
+
       </div>
     </div>
   );
@@ -1546,6 +1702,8 @@ const FeedbackManagement = () => {
   const [errorMessage, setErrorMessage] = useState("");
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [selectedFeedback, setSelectedFeedback] = useState(null);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(10);
   // Document viewer state
   const [showDocumentViewer, setShowDocumentViewer] = useState(false);
   const [viewingFeedback, setViewingFeedback] = useState(null);
@@ -2256,12 +2414,23 @@ const FeedbackManagement = () => {
             <p className="text-gray-500 text-sm">No feedback uploaded yet.</p>
           </div>
         ) : (
-          <div className="space-y-3">
-            {feedbackList.map((feedback) => (
-              <div key={feedback._id} className="border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow">
+          <>
+            <div className="space-y-3">
+              {(() => {
+                const startIndex = (currentPage - 1) * itemsPerPage;
+                const endIndex = startIndex + itemsPerPage;
+                const paginatedFeedback = feedbackList.slice(startIndex, endIndex);
+                const totalPages = Math.ceil(feedbackList.length / itemsPerPage);
+                
+                return paginatedFeedback.map((feedback) => (
+              <div key={feedback._id} className={`border rounded-lg p-4 hover:shadow-md transition-shadow ${
+                feedback.createdBy && feedback.createdBy.role === 'dean' 
+                  ? 'border-purple-300 bg-purple-50' 
+                  : 'border-gray-200'
+              }`}>
                 <div className="flex items-start justify-between">
                   <div className="flex-1">
-                    <div className="flex items-center space-x-2 mb-2">
+                    <div className="flex items-center space-x-2 mb-2 flex-wrap">
                       <span className={`px-2 py-1 rounded-full text-xs font-medium ${
                         feedback.category === 'approval' ? 'bg-green-100 text-green-700' :
                         feedback.category === 'revision_request' ? 'bg-orange-100 text-orange-700' :
@@ -2270,11 +2439,21 @@ const FeedbackManagement = () => {
                       }`}>
                         {feedback.category.replace('_', ' ').toUpperCase()}
                       </span>
+                      {feedback.createdBy && feedback.createdBy.role === 'dean' && (
+                        <span className="px-2 py-1 rounded-full text-xs font-medium bg-purple-100 text-purple-700 border border-purple-300">
+                          From Dean
+                        </span>
+                      )}
                       <span className="text-xs text-gray-500">Version {feedback.version}</span>
                     </div>
                     <h4 className="font-semibold text-gray-800">
                       To: {feedback.student?.name}
                     </h4>
+                    {feedback.createdBy && feedback.createdBy.role === 'dean' && (
+                      <p className="text-sm text-purple-700 font-medium mt-1">
+                        From: {feedback.createdBy.name || 'Dean'}
+                      </p>
+                    )}
                     <p className="text-sm text-gray-600 mt-1">
                       Research: {feedback.research?.title}
                     </p>
@@ -2307,23 +2486,48 @@ const FeedbackManagement = () => {
                         </button>
                       </>
                     )}
-                    <button
-                      onClick={() => handleDeleteClick(feedback)}
-                      className="px-3 py-1 bg-red-100 text-red-700 rounded-md hover:bg-red-200 text-xs font-medium"
-                    >
-                      Delete
-                    </button>
+                    {!(feedback.createdBy && feedback.createdBy.role === 'dean') && (
+                      <button
+                        onClick={() => handleDeleteClick(feedback)}
+                        className="px-3 py-1 bg-red-100 text-red-700 rounded-md hover:bg-red-200 text-xs font-medium"
+                      >
+                        Delete
+                      </button>
+                    )}
                   </div>
                 </div>
               </div>
-            ))}
-          </div>
+                ));
+              })()}
+            </div>
+            {feedbackList.length > 0 && (() => {
+              const startIndex = (currentPage - 1) * itemsPerPage;
+              const endIndex = Math.min(startIndex + itemsPerPage, feedbackList.length);
+              const totalPages = Math.ceil(feedbackList.length / itemsPerPage);
+              
+              return (
+                <Pagination
+                  currentPage={currentPage}
+                  totalPages={totalPages}
+                  totalItems={feedbackList.length}
+                  itemsPerPage={itemsPerPage}
+                  onPageChange={setCurrentPage}
+                  onItemsPerPageChange={(newItemsPerPage) => {
+                    setItemsPerPage(newItemsPerPage);
+                    setCurrentPage(1);
+                  }}
+                  startIndex={startIndex + 1}
+                  endIndex={endIndex}
+                />
+              );
+            })()}
+          </>
         )}
       </div>
 
       {/* Delete Confirmation Dialog */}
       {showDeleteDialog && selectedFeedback && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4 py-6">
           <div className="bg-white rounded-lg shadow-lg max-w-md w-full p-6">
             <div className="flex items-center mb-4">
               <div className="h-12 w-12 rounded-full bg-red-100 flex items-center justify-center mr-4">
@@ -2336,6 +2540,14 @@ const FeedbackManagement = () => {
               Are you sure you want to delete this feedback?
             </p>
 
+            {selectedFeedback.createdBy && selectedFeedback.createdBy.role === 'dean' && (
+              <div className="mb-4 p-3 bg-red-50 border-l-4 border-red-400 rounded">
+                <p className="text-sm text-red-800">
+                  <strong>Warning:</strong> This feedback was created by the Dean and cannot be deleted.
+                </p>
+              </div>
+            )}
+
             <div className="bg-gray-50 rounded-lg p-3 mb-4">
               <p className="text-sm text-gray-700">
                 <span className="font-medium">Student:</span> {selectedFeedback.student?.name}
@@ -2343,6 +2555,11 @@ const FeedbackManagement = () => {
               <p className="text-sm text-gray-700">
                 <span className="font-medium">Category:</span> {selectedFeedback.category}
               </p>
+              {selectedFeedback.createdBy && selectedFeedback.createdBy.role === 'dean' && (
+                <p className="text-sm text-purple-700 mt-1">
+                  <span className="font-medium">From:</span> {selectedFeedback.createdBy.name || 'Dean'}
+                </p>
+              )}
               {selectedFeedback.file && (
                 <p className="text-sm text-gray-700">
                   <span className="font-medium">File:</span> {selectedFeedback.file.filename}
@@ -2363,8 +2580,8 @@ const FeedbackManagement = () => {
               </button>
               <button
                 onClick={confirmDelete}
-                disabled={loading}
-                className="px-6 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 transition-colors text-sm font-medium disabled:opacity-50"
+                disabled={loading || (selectedFeedback.createdBy && selectedFeedback.createdBy.role === 'dean')}
+                className="px-6 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 transition-colors text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {loading ? "Deleting..." : "Delete"}
               </button>
@@ -2640,6 +2857,8 @@ const ConsultationSchedule = ({ schedules, onRefresh }) => {
   const [declineReason, setDeclineReason] = useState("");
   const [declineReasonType, setDeclineReasonType] = useState("predefined"); // "predefined" or "custom"
   const [refreshTrigger, setRefreshTrigger] = useState(0);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(10);
 
   // Convert schedules to calendar events format
   const calendarEvents = schedules.map(schedule => ({
@@ -3346,70 +3565,101 @@ const ConsultationSchedule = ({ schedules, onRefresh }) => {
               <p className="text-gray-400 text-center text-xs mt-1">Click "Add Consultation Slot" to create your first slot.</p>
             </div>
           ) : (
-            upcomingSchedules.map((schedule) => {
-            const studentParticipant = schedule.participants?.find(p => p.role === 'student');
-            const isApproaching = new Date(schedule.datetime) - new Date() < 24 * 60 * 60 * 1000; // Within 24 hours
+            <>
+              <div className="space-y-4">
+                {(() => {
+                  const startIndex = (currentPage - 1) * itemsPerPage;
+                  const endIndex = startIndex + itemsPerPage;
+                  const paginatedSchedules = upcomingSchedules.slice(startIndex, endIndex);
+                  
+                  return paginatedSchedules.map((schedule) => {
+                    const studentParticipant = schedule.participants?.find(p => p.role === 'student');
+                    const isApproaching = new Date(schedule.datetime) - new Date() < 24 * 60 * 60 * 1000; // Within 24 hours
 
-            return (
-              <div 
-                key={schedule._id} 
-                className={`bg-white border rounded-lg p-5 hover:shadow-md transition-shadow ${
-                  isApproaching ? 'border-orange-300 bg-orange-50' : 'border-gray-200'
-                }`}
-              >
-                <div className="flex items-start justify-between">
-                  <div className="flex-1">
-                    {isApproaching && (
-                      <div className="mb-2">
-                        <span className="px-2 py-1 bg-orange-100 text-orange-700 rounded-full text-xs font-medium">
-                          <FaClock className="inline mr-1" />
-                          Approaching Soon
-                        </span>
+                    return (
+                      <div 
+                        key={schedule._id} 
+                        className={`bg-white border rounded-lg p-5 hover:shadow-md transition-shadow ${
+                          isApproaching ? 'border-orange-300 bg-orange-50' : 'border-gray-200'
+                        }`}
+                      >
+                        <div className="flex items-start justify-between">
+                          <div className="flex-1">
+                            {isApproaching && (
+                              <div className="mb-2">
+                                <span className="px-2 py-1 bg-orange-100 text-orange-700 rounded-full text-xs font-medium">
+                                  <FaClock className="inline mr-1" />
+                                  Approaching Soon
+                                </span>
+                              </div>
+                            )}
+                            <h3 className="text-base font-semibold text-gray-800">{schedule.title}</h3>
+                            <p className="text-sm text-gray-600 mt-1">
+                              {studentParticipant ? `with ${studentParticipant.user?.name}` : 'Available Slot'}
+                            </p>
+                            <p className="text-sm text-gray-500 mt-1">
+                              <FaCalendar className="inline mr-1" />
+                              {new Date(schedule.datetime).toLocaleDateString()} at {new Date(schedule.datetime).toLocaleTimeString()}
+                            </p>
+                            <p className="text-sm text-gray-500">Location: {schedule.location}</p>
+                            <p className="text-sm text-gray-500">Duration: {schedule.duration} minutes</p>
+                          </div>
+                          <div className="text-right ml-4 space-y-2">
+                            <span className={`px-3 py-1 rounded-full text-xs font-medium block ${
+                              schedule.status === 'confirmed' ? 'bg-green-100 text-green-700' :
+                              schedule.status === 'scheduled' ? 'bg-blue-100 text-blue-700' :
+                              schedule.status === 'cancelled' ? 'bg-gray-100 text-gray-700' :
+                              'bg-yellow-100 text-yellow-700'
+                            }`}>
+                              {schedule.status}
+                            </span>
+                            {schedule.status !== 'cancelled' && (
+                              <div className="flex flex-col space-y-1">
+                                <button
+                                  onClick={() => handleEditClick(schedule)}
+                                  className="px-3 py-1 bg-blue-100 text-blue-700 rounded-md hover:bg-blue-200 text-xs font-medium"
+                                >
+                                  Edit
+                                </button>
+                                <button
+                                  onClick={() => handleDeleteClick(schedule)}
+                                  className="px-3 py-1 bg-red-100 text-red-700 rounded-md hover:bg-red-200 text-xs font-medium"
+                                >
+                                  Delete
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        </div>
                       </div>
-                    )}
-                <h3 className="text-base font-semibold text-gray-800">{schedule.title}</h3>
-                <p className="text-sm text-gray-600 mt-1">
-                      {studentParticipant ? `with ${studentParticipant.user?.name}` : 'Available Slot'}
-                    </p>
-                    <p className="text-sm text-gray-500 mt-1">
-                      <FaCalendar className="inline mr-1" />
-                      {new Date(schedule.datetime).toLocaleDateString()} at {new Date(schedule.datetime).toLocaleTimeString()}
-                    </p>
-                    <p className="text-sm text-gray-500">Location: {schedule.location}</p>
-                    <p className="text-sm text-gray-500">Duration: {schedule.duration} minutes</p>
-                  </div>
-                  <div className="text-right ml-4 space-y-2">
-                    <span className={`px-3 py-1 rounded-full text-xs font-medium block ${
-                  schedule.status === 'confirmed' ? 'bg-green-100 text-green-700' :
-                  schedule.status === 'scheduled' ? 'bg-blue-100 text-blue-700' :
-                      schedule.status === 'cancelled' ? 'bg-gray-100 text-gray-700' :
-                      'bg-yellow-100 text-yellow-700'
-                }`}>
-                  {schedule.status}
-                </span>
-                    {schedule.status !== 'cancelled' && (
-                      <div className="flex flex-col space-y-1">
-                        <button
-                          onClick={() => handleEditClick(schedule)}
-                          className="px-3 py-1 bg-blue-100 text-blue-700 rounded-md hover:bg-blue-200 text-xs font-medium"
-                        >
-                          Edit
-                        </button>
-                        <button
-                          onClick={() => handleDeleteClick(schedule)}
-                          className="px-3 py-1 bg-red-100 text-red-700 rounded-md hover:bg-red-200 text-xs font-medium"
-                        >
-                          Delete
-                        </button>
+                    );
+                  });
+                })()}
               </div>
-                    )}
-            </div>
-          </div>
-              </div>
-            );
-          })
-        )}
-        </div>
+              {upcomingSchedules.length > 0 && (() => {
+                const startIndex = (currentPage - 1) * itemsPerPage;
+                const endIndex = Math.min(startIndex + itemsPerPage, upcomingSchedules.length);
+                const totalPages = Math.ceil(upcomingSchedules.length / itemsPerPage);
+                
+                return (
+                  <Pagination
+                    currentPage={currentPage}
+                    totalPages={totalPages}
+                    totalItems={upcomingSchedules.length}
+                    itemsPerPage={itemsPerPage}
+                    onPageChange={setCurrentPage}
+                    onItemsPerPageChange={(newItemsPerPage) => {
+                      setItemsPerPage(newItemsPerPage);
+                      setCurrentPage(1);
+                    }}
+                    startIndex={startIndex + 1}
+                    endIndex={endIndex}
+                  />
+                );
+              })()}
+            </>
+          )}
+      </div>
       )}
 
       {/* Create Consultation Slot Modal */}
@@ -3752,6 +4002,8 @@ const StudentList = ({ students, onUpdateStatus, loading }) => {
   const [selectedStage, setSelectedStage] = useState("");
   const [selectedProgress, setSelectedProgress] = useState(0);
   const [showConfirmation, setShowConfirmation] = useState(false);
+  const [deanRemarks, setDeanRemarks] = useState([]);
+  const [loadingDeanRemarks, setLoadingDeanRemarks] = useState(false);
 
   useEffect(() => {
     fetchAssignedResearch();
@@ -3776,6 +4028,23 @@ const StudentList = ({ students, onUpdateStatus, loading }) => {
     setSelectedStage(research.stage);
     setSelectedProgress(research.progress || 0);
     setDetailedView(true);
+    fetchDeanRemarks(research._id);
+  };
+
+  const fetchDeanRemarks = async (researchId) => {
+    try {
+      setLoadingDeanRemarks(true);
+      const token = localStorage.getItem('token');
+      const res = await axios.get(`/api/faculty/feedback/research/${researchId}/dean-remarks`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      setDeanRemarks(res.data);
+    } catch (error) {
+      console.error('Error fetching Dean remarks:', error);
+      setDeanRemarks([]);
+    } finally {
+      setLoadingDeanRemarks(false);
+    }
   };
 
   const handleUpdateStatus = async () => {
@@ -3947,6 +4216,42 @@ const StudentList = ({ students, onUpdateStatus, loading }) => {
               </div>
             </div>
 
+            {/* Dean Remarks Section */}
+            <div className="p-4 bg-purple-50 rounded-lg border border-purple-200">
+              <h4 className="text-md font-semibold text-gray-800 mb-3">Comments from Dean</h4>
+              {loadingDeanRemarks ? (
+                <div className="text-center py-4">
+                  <div className="inline-block animate-spin rounded-full h-5 w-5 border-b-2 border-[#7C1D23]"></div>
+                  <p className="mt-2 text-sm text-gray-500">Loading Dean remarks...</p>
+                </div>
+              ) : deanRemarks && deanRemarks.length > 0 ? (
+                <div className="space-y-3 max-h-60 overflow-y-auto">
+                  {deanRemarks.map((remark, index) => (
+                    <div key={index} className="p-3 bg-white rounded-md border border-purple-100">
+                      <div className="flex justify-between items-start mb-2">
+                        <div className="flex items-center space-x-2">
+                          <span className="text-sm font-medium text-purple-800">
+                            {remark.createdBy?.name || 'Dean'}
+                          </span>
+                          <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-700">
+                            {remark.type || 'feedback'}
+                          </span>
+                        </div>
+                        <span className="text-xs text-gray-500">
+                          {new Date(remark.createdAt).toLocaleDateString()}
+                        </span>
+                      </div>
+                      <p className="text-sm text-gray-700">{remark.message}</p>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-center py-4 text-gray-500 text-sm">
+                  No remarks from Dean yet.
+                </div>
+              )}
+            </div>
+
             {/* Action Buttons */}
             <div className="flex justify-end space-x-2 pt-4">
               <button
@@ -4064,6 +4369,8 @@ const PanelReviews = () => {
     recommendation: 'pending',
   });
   const [submitting, setSubmitting] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(10);
 
   useEffect(() => {
     fetchPanels();
@@ -4174,8 +4481,14 @@ const PanelReviews = () => {
           <p className="text-sm text-gray-500">You haven't been assigned to any panels yet</p>
         </div>
       ) : (
-        <div className="space-y-4">
-          {panels.map(panel => (
+        <>
+          <div className="space-y-4">
+            {(() => {
+              const startIndex = (currentPage - 1) * itemsPerPage;
+              const endIndex = startIndex + itemsPerPage;
+              const paginatedPanels = panels.slice(startIndex, endIndex);
+              
+              return paginatedPanels.map(panel => (
             <div
               key={panel._id}
               className={`bg-white border rounded-lg p-5 hover:shadow-md transition-shadow ${
@@ -4360,8 +4673,31 @@ const PanelReviews = () => {
                 </div>
               </div>
             </div>
-          ))}
-        </div>
+              ));
+            })()}
+          </div>
+          {panels.length > 0 && (() => {
+            const startIndex = (currentPage - 1) * itemsPerPage;
+            const endIndex = Math.min(startIndex + itemsPerPage, panels.length);
+            const totalPages = Math.ceil(panels.length / itemsPerPage);
+            
+            return (
+              <Pagination
+                currentPage={currentPage}
+                totalPages={totalPages}
+                totalItems={panels.length}
+                itemsPerPage={itemsPerPage}
+                onPageChange={setCurrentPage}
+                onItemsPerPageChange={(newItemsPerPage) => {
+                  setItemsPerPage(newItemsPerPage);
+                  setCurrentPage(1);
+                }}
+                startIndex={startIndex + 1}
+                endIndex={endIndex}
+              />
+            );
+          })()}
+        </>
       )}
 
       {/* Review Submission Modal (Submit Review) */}
@@ -4466,6 +4802,8 @@ const DocumentsView = () => {
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("all");
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(10);
   // Document viewer state (for inline preview)
   const [viewUrl, setViewUrl] = useState(null);
   const [viewFilename, setViewFilename] = useState("");
@@ -4645,8 +4983,14 @@ const DocumentsView = () => {
             No documents available
           </div>
         ) : (
-          <div className="divide-y divide-gray-200">
-            {filteredDocuments.map((doc) => (
+          <>
+            <div className="divide-y divide-gray-200">
+              {(() => {
+                const startIndex = (currentPage - 1) * itemsPerPage;
+                const endIndex = startIndex + itemsPerPage;
+                const paginatedDocuments = filteredDocuments.slice(startIndex, endIndex);
+                
+                return paginatedDocuments.map((doc) => (
               <div key={doc._id} className="p-4 hover:bg-gray-50 transition-colors">
                 <div className="flex items-start justify-between">
                   <div className="flex-1">
@@ -4686,8 +5030,31 @@ const DocumentsView = () => {
                   </div>
                 </div>
               </div>
-            ))}
-          </div>
+                ));
+              })()}
+            </div>
+            {filteredDocuments.length > 0 && (() => {
+              const startIndex = (currentPage - 1) * itemsPerPage;
+              const endIndex = Math.min(startIndex + itemsPerPage, filteredDocuments.length);
+              const totalPages = Math.ceil(filteredDocuments.length / itemsPerPage);
+              
+              return (
+                <Pagination
+                  currentPage={currentPage}
+                  totalPages={totalPages}
+                  totalItems={filteredDocuments.length}
+                  itemsPerPage={itemsPerPage}
+                  onPageChange={setCurrentPage}
+                  onItemsPerPageChange={(newItemsPerPage) => {
+                    setItemsPerPage(newItemsPerPage);
+                    setCurrentPage(1);
+                  }}
+                  startIndex={startIndex + 1}
+                  endIndex={endIndex}
+                />
+              );
+            })()}
+          </>
         )}
       </div>
 

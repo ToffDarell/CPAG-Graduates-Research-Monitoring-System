@@ -5,8 +5,163 @@ import axios from "axios";
 import { renderAsync } from 'docx-preview';
 import MySchedule from "../../components/MyScheduleComponent";
 import DriveUploader from "../../components/DriveUploader";
-import { showSuccess, showError, showWarning, showDangerConfirm } from "../../utils/sweetAlert";
+import { showSuccess, showError, showWarning, showDangerConfirm, showConfirm } from "../../utils/sweetAlert";
 import Settings from "../Settings";
+
+// Reusable Pagination Component
+const Pagination = ({ 
+  currentPage, 
+  totalPages, 
+  totalItems, 
+  itemsPerPage, 
+  onPageChange, 
+  onItemsPerPageChange,
+  startIndex,
+  endIndex 
+}) => {
+  const handleFirstPage = () => onPageChange(1);
+  const handlePrevPage = () => onPageChange(Math.max(1, currentPage - 1));
+  const handleNextPage = () => onPageChange(Math.min(totalPages, currentPage + 1));
+  const handleLastPage = () => onPageChange(totalPages);
+  const handlePageClick = (page) => onPageChange(page);
+
+  // Generate page numbers to display
+  const getPageNumbers = () => {
+    const pages = [];
+    const maxVisible = 5;
+    
+    if (totalPages <= maxVisible) {
+      for (let i = 1; i <= totalPages; i++) {
+        pages.push(i);
+      }
+    } else {
+      if (currentPage <= 3) {
+        for (let i = 1; i <= 4; i++) {
+          pages.push(i);
+        }
+        pages.push('...');
+        pages.push(totalPages);
+      } else if (currentPage >= totalPages - 2) {
+        pages.push(1);
+        pages.push('...');
+        for (let i = totalPages - 3; i <= totalPages; i++) {
+          pages.push(i);
+        }
+      } else {
+        pages.push(1);
+        pages.push('...');
+        for (let i = currentPage - 1; i <= currentPage + 1; i++) {
+          pages.push(i);
+        }
+        pages.push('...');
+        pages.push(totalPages);
+      }
+    }
+    
+    return pages;
+  };
+
+  // Always show pagination if there are items, even if only one page
+  if (totalItems === 0) {
+    return null; // Only hide if there are no items at all
+  }
+
+  return (
+    <div className="flex items-center justify-between border-t border-gray-200 bg-white px-4 py-3 sm:px-6">
+      <div className="flex flex-1 justify-between sm:hidden">
+        <button
+          onClick={handlePrevPage}
+          disabled={currentPage === 1}
+          className="relative inline-flex items-center rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          Previous
+        </button>
+        <button
+          onClick={handleNextPage}
+          disabled={currentPage === totalPages}
+          className="relative ml-3 inline-flex items-center rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          Next
+        </button>
+      </div>
+      <div className="hidden sm:flex sm:flex-1 sm:items-center sm:justify-between">
+        <div>
+          <p className="text-sm text-gray-700">
+            Showing <span className="font-medium">{startIndex}</span> to <span className="font-medium">{endIndex}</span> of{' '}
+            <span className="font-medium">{totalItems}</span> results
+          </p>
+        </div>
+        <div className="flex items-center space-x-2">
+          <div className="flex items-center space-x-1">
+            <label className="text-sm text-gray-700">Items per page:</label>
+            <select
+              value={itemsPerPage}
+              onChange={(e) => onItemsPerPageChange(Number(e.target.value))}
+              className="border border-gray-300 rounded-md px-2 py-1 text-sm focus:ring-2 focus:ring-[#7C1D23] focus:border-transparent"
+            >
+              <option value={5}>5</option>
+              <option value={10}>10</option>
+              <option value={20}>20</option>
+              <option value={50}>50</option>
+            </select>
+          </div>
+          <div className="flex items-center space-x-1">
+            <button
+              onClick={handleFirstPage}
+              disabled={currentPage === 1}
+              className="px-2 py-1 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+              title="First page"
+            >
+              ««
+            </button>
+            <button
+              onClick={handlePrevPage}
+              disabled={currentPage === 1}
+              className="px-2 py-1 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Previous page"
+            >
+              ‹
+            </button>
+            {getPageNumbers().map((page, idx) => (
+              <React.Fragment key={idx}>
+                {page === '...' ? (
+                  <span className="px-2 py-1 text-sm text-gray-700">...</span>
+                ) : (
+                  <button
+                    onClick={() => handlePageClick(page)}
+                    className={`px-3 py-1 border rounded-md text-sm font-medium ${
+                      currentPage === page
+                        ? 'bg-[#7C1D23] text-white border-[#7C1D23]'
+                        : 'border-gray-300 text-gray-700 hover:bg-gray-50'
+                    }`}
+                  >
+                    {page}
+                  </button>
+                )}
+              </React.Fragment>
+            ))}
+            <button
+              onClick={handleNextPage}
+              disabled={currentPage === totalPages}
+              className="px-2 py-1 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Next page"
+            >
+              ›
+            </button>
+            <button
+              onClick={handleLastPage}
+              disabled={currentPage === totalPages}
+              className="px-2 py-1 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Last page"
+            >
+              »»
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
 
 const GraduateDashboard = ({ setUser, user }) => {
   const navigate = useNavigate();
@@ -365,9 +520,16 @@ const GraduateDashboard = ({ setUser, user }) => {
   };
 
 
-  const handleLogout = () => {
-    // Show confirmation dialog
-    if (window.confirm('Are you sure you want to log out?')) {
+  const handleLogout = async () => {
+    // Show confirmation dialog with SweetAlert
+    const result = await showConfirm(
+      'Log Out', 
+      'Are you sure you want to log out?',
+      'Log Out',
+      'Cancel'
+    );
+    
+    if (result.isConfirmed) {
       // Clear session data
       localStorage.removeItem('token');
       sessionStorage.removeItem('selectedRole');
@@ -1817,8 +1979,14 @@ const ComplianceForms = ({ myResearch, onFormUpload }) => {
   const [selectedForm, setSelectedForm] = useState(null);
   const [showVersionHistory, setShowVersionHistory] = useState(false);
   const [successMessage, setSuccessMessage] = useState("");
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(10);
   const [errorMessage, setErrorMessage] = useState("");
   const fileInputRef = React.useRef(null);
+  const [viewingDocument, setViewingDocument] = useState(null);
+  const [showDocumentViewer, setShowDocumentViewer] = useState(false);
+  const [documentBlobUrl, setDocumentBlobUrl] = useState(null);
+  const docxPreviewRef = useRef(null);
 
   useEffect(() => {
     fetchComplianceForms();
@@ -2047,19 +2215,99 @@ const ComplianceForms = ({ myResearch, onFormUpload }) => {
   const handleView = async (formId) => {
     try {
       const token = localStorage.getItem('token');
+      // Find form in complianceForms array
+      const form = complianceForms.find(f => f._id === formId);
+      
+      if (!form) {
+        setErrorMessage('Form not found');
+        setTimeout(() => setErrorMessage(""), 4000);
+        return;
+      }
+
+      const filename = form.filename || 'compliance-form';
+      const fileExtension = filename.split('.').pop()?.toLowerCase();
+      const isDocx = fileExtension === 'docx' || fileExtension === 'doc';
+
       const response = await axios.get(`/api/student/compliance-forms/${formId}/view`, {
         headers: { Authorization: `Bearer ${token}` },
-        responseType: 'blob'
+        responseType: isDocx ? 'arraybuffer' : 'blob'
       });
 
-      const url = window.URL.createObjectURL(new Blob([response.data]));
-      window.open(url, '_blank');
+      if (isDocx) {
+        // For DOCX files, store as blob for docx-preview
+        const blob = new Blob([response.data], { 
+          type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' 
+        });
+        setDocumentBlobUrl(URL.createObjectURL(blob));
+        setViewingDocument({ ...form, fileExtension });
+        setShowDocumentViewer(true);
+      } else {
+        // For PDF and other files, create blob URL for iframe
+        const blob = new Blob([response.data], { type: response.headers['content-type'] || 'application/pdf' });
+        const url = URL.createObjectURL(blob);
+        setDocumentBlobUrl(url);
+        setViewingDocument({ ...form, fileExtension });
+        setShowDocumentViewer(true);
+      }
     } catch (error) {
       console.error('Error viewing compliance form:', error);
       setErrorMessage('Failed to view compliance form');
       setTimeout(() => setErrorMessage(""), 4000);
     }
   };
+
+  // Cleanup blob URL when modal closes
+  const handleCloseViewer = () => {
+    if (documentBlobUrl) {
+      URL.revokeObjectURL(documentBlobUrl);
+      setDocumentBlobUrl(null);
+    }
+    // Clear DOCX preview
+    if (docxPreviewRef.current) {
+      docxPreviewRef.current.innerHTML = '';
+    }
+    setShowDocumentViewer(false);
+    setViewingDocument(null);
+  };
+
+  // Effect to render DOCX files
+  useEffect(() => {
+    if (showDocumentViewer && viewingDocument && documentBlobUrl && docxPreviewRef.current) {
+      const isDocx = viewingDocument.fileExtension === 'docx' || viewingDocument.fileExtension === 'doc';
+      
+      if (isDocx) {
+        // Clear previous content
+        docxPreviewRef.current.innerHTML = '';
+        
+        // Fetch and render DOCX
+        fetch(documentBlobUrl)
+          .then(response => response.blob())
+          .then(blob => {
+            renderAsync(blob, docxPreviewRef.current, null, {
+              className: 'docx-wrapper',
+              inWrapper: true,
+              ignoreWidth: false,
+              ignoreHeight: false,
+              ignoreFonts: false,
+              breakPages: true,
+              experimental: false,
+              trimXmlDeclaration: true,
+              useBase64URL: false,
+              useMathMLPolyfill: true,
+              showChanges: false,
+            })
+            .catch(error => {
+              console.error('Error rendering DOCX:', error);
+              docxPreviewRef.current.innerHTML = '<p class="text-red-500 p-4">Error rendering document. Please try downloading the file.</p>';
+            });
+          })
+          .catch(error => {
+            console.error('Error fetching DOCX:', error);
+            docxPreviewRef.current.innerHTML = '<p class="text-red-500 p-4">Error loading document. Please try again.</p>';
+          });
+      }
+    }
+  }, [showDocumentViewer, viewingDocument, documentBlobUrl]);
 
   const handleViewVersionHistory = async (formId) => {
     try {
@@ -2213,12 +2461,27 @@ const ComplianceForms = ({ myResearch, onFormUpload }) => {
       {/* Upload Modal */}
       {showUploadModal && (
         // Match global modal overlay style (Dean / Export PDF-Excel)
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4 py-6">
-          <div className="bg-white rounded-lg shadow-lg max-w-md w-full p-6">
+        <div 
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4 py-6"
+          onClick={(e) => {
+            // Close modal when clicking outside
+            if (e.target === e.currentTarget) {
+              setShowUploadModal(false);
+              setSelectedFile(null);
+            }
+          }}
+        >
+          <div 
+            className="bg-white rounded-lg shadow-lg max-w-md w-full p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="flex justify-between items-center mb-4">
               <h3 className="text-lg font-semibold text-gray-800">Upload Compliance Form</h3>
               <button
-                onClick={() => {
+                type="button"
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
                   setShowUploadModal(false);
                   setSelectedFile(null);
                 }}
@@ -2260,7 +2523,10 @@ const ComplianceForms = ({ myResearch, onFormUpload }) => {
 
             <div className="flex justify-end space-x-3">
               <button
-                onClick={() => {
+                type="button"
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
                   setShowUploadModal(false);
                   setSelectedFile(null);
                 }}
@@ -2269,7 +2535,12 @@ const ComplianceForms = ({ myResearch, onFormUpload }) => {
                 Cancel
               </button>
               <button
-                onClick={handleUpload}
+                type="button"
+                onClick={async (e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  await handleUpload();
+                }}
                 disabled={uploading || !selectedFile || !formType}
                 className="px-4 py-2 bg-[#7C1D23] text-white rounded-md hover:bg-[#5a1519] transition-colors text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
               >
@@ -2292,8 +2563,14 @@ const ComplianceForms = ({ myResearch, onFormUpload }) => {
             <p className="text-gray-500 text-sm">No compliance forms uploaded yet.</p>
           </div>
         ) : (
-      <div className="space-y-4">
-            {Object.values(groupedForms).map((form) => (
+          <>
+            <div className="space-y-4">
+              {(() => {
+                const startIndex = (currentPage - 1) * itemsPerPage;
+                const endIndex = startIndex + itemsPerPage;
+                const paginatedForms = Object.values(groupedForms).slice(startIndex, endIndex);
+                
+                return paginatedForms.map((form) => (
               <div key={form._id} className="border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow">
                 <div className="flex items-start justify-between">
                   <div className="flex-1">
@@ -2348,8 +2625,31 @@ const ComplianceForms = ({ myResearch, onFormUpload }) => {
                 </div>
               </div>
               </div>
-            ))}
-          </div>
+                ));
+              })()}
+            </div>
+            {Object.values(groupedForms).length > 0 && (() => {
+              const startIndex = (currentPage - 1) * itemsPerPage;
+              const endIndex = Math.min(startIndex + itemsPerPage, Object.values(groupedForms).length);
+              const totalPages = Math.ceil(Object.values(groupedForms).length / itemsPerPage);
+              
+              return (
+                <Pagination
+                  currentPage={currentPage}
+                  totalPages={totalPages}
+                  totalItems={Object.values(groupedForms).length}
+                  itemsPerPage={itemsPerPage}
+                  onPageChange={setCurrentPage}
+                  onItemsPerPageChange={(newItemsPerPage) => {
+                    setItemsPerPage(newItemsPerPage);
+                    setCurrentPage(1);
+                  }}
+                  startIndex={startIndex + 1}
+                  endIndex={endIndex}
+                />
+              );
+            })()}
+          </>
         )}
       </div>
 
@@ -2430,6 +2730,53 @@ const ComplianceForms = ({ myResearch, onFormUpload }) => {
                 <p className="text-center text-gray-500 py-8">No version history available</p>
               );
             })()}
+          </div>
+        </div>
+      )}
+
+      {/* Document Viewer Modal */}
+      {showDocumentViewer && viewingDocument && documentBlobUrl && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4 py-6">
+          <div className="bg-white rounded-lg shadow-xl max-w-6xl w-full h-full flex flex-col">
+            {/* Modal Header */}
+            <div className="bg-gradient-to-r from-[#7C1D23] to-[#5a1519] text-white p-4 rounded-t-lg flex justify-between items-center">
+              <h3 className="text-lg font-bold">{viewingDocument.filename || 'Compliance Form'}</h3>
+              <button 
+                onClick={handleCloseViewer}
+                className="text-white hover:text-gray-200 transition-colors"
+              >
+                <FaClose className="h-5 w-5" />
+              </button>
+            </div>
+            
+            {/* Document Content */}
+            <div className="flex-1 p-4 overflow-auto">
+              {viewingDocument.fileExtension === 'docx' || viewingDocument.fileExtension === 'doc' ? (
+                <div 
+                  ref={docxPreviewRef}
+                  className="w-full h-full docx-container"
+                  style={{ padding: '20px', backgroundColor: '#fff' }}
+                />
+              ) : viewingDocument.fileExtension === 'pdf' ? (
+                <iframe
+                  src={documentBlobUrl}
+                  className="w-full h-full border-0"
+                  title={viewingDocument.filename}
+                />
+              ) : (
+                <div className="flex items-center justify-center h-full">
+                  <p className="text-gray-500">
+                    Document preview not available for this file type. 
+                    <button 
+                      onClick={() => handleDownload(viewingDocument._id)}
+                      className="ml-2 text-[#7C1D23] hover:underline"
+                    >
+                      Download to view
+                    </button>
+                  </p>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}
@@ -3223,6 +3570,8 @@ const DocumentsView = () => {
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("all");
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(10);
   const [viewerOpen, setViewerOpen] = useState(false);
   const [viewerTitle, setViewerTitle] = useState("");
   const [viewerType, setViewerType] = useState(null); // 'docx' | 'pdf' | 'other'
@@ -3465,8 +3814,14 @@ const DocumentsView = () => {
             No documents available
           </div>
         ) : (
-          <div className="divide-y divide-gray-200">
-            {filteredDocuments.map((doc) => (
+          <>
+            <div className="divide-y divide-gray-200">
+              {(() => {
+                const startIndex = (currentPage - 1) * itemsPerPage;
+                const endIndex = startIndex + itemsPerPage;
+                const paginatedDocuments = filteredDocuments.slice(startIndex, endIndex);
+                
+                return paginatedDocuments.map((doc) => (
               <div key={doc._id} className="p-4 hover:bg-gray-50 transition-colors">
                 <div className="flex items-start justify-between">
                   <div className="flex-1">
@@ -3506,8 +3861,31 @@ const DocumentsView = () => {
                   </div>
                 </div>
               </div>
-            ))}
-          </div>
+                ));
+              })()}
+            </div>
+            {filteredDocuments.length > 0 && (() => {
+              const startIndex = (currentPage - 1) * itemsPerPage;
+              const endIndex = Math.min(startIndex + itemsPerPage, filteredDocuments.length);
+              const totalPages = Math.ceil(filteredDocuments.length / itemsPerPage);
+              
+              return (
+                <Pagination
+                  currentPage={currentPage}
+                  totalPages={totalPages}
+                  totalItems={filteredDocuments.length}
+                  itemsPerPage={itemsPerPage}
+                  onPageChange={setCurrentPage}
+                  onItemsPerPageChange={(newItemsPerPage) => {
+                    setItemsPerPage(newItemsPerPage);
+                    setCurrentPage(1);
+                  }}
+                  startIndex={startIndex + 1}
+                  endIndex={endIndex}
+                />
+              );
+            })()}
+          </>
         )}
       </div>
     </div>
