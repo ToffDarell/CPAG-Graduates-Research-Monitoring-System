@@ -193,9 +193,12 @@ const Settings = ({ user, setUser, embedded = false, onClose }) => {
   };
 
   useEffect(() => {
-    fetchCalendarStatus();
+    const isAdmin = user?.role === "admin";
+    if (!isAdmin) {
+      fetchCalendarStatus();
+      fetchSheetsStatus();
+    }
     fetchDriveStatus();
-    fetchSheetsStatus();
   }, []);
 
   useEffect(() => {
@@ -876,165 +879,173 @@ const Settings = ({ user, setUser, embedded = false, onClose }) => {
     </div>
   );
 
-  const renderIntegrationsTab = () => (
-    <div className="space-y-6 mt-6">
-      <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
-        <div className="flex items-center justify-between flex-wrap gap-4">
-          <div className="flex items-center space-x-3">
-            <div className="p-3 bg-[#F9E8EA] text-[#7C1D23] rounded-full">
-              <FaGoogle className="text-xl" />
+  const renderIntegrationsTab = () => {
+    const isAdmin = user?.role === "admin";
+    
+    return (
+      <div className="space-y-6 mt-6">
+        {!isAdmin && (
+          <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
+            <div className="flex items-center justify-between flex-wrap gap-4">
+              <div className="flex items-center space-x-3">
+                <div className="p-3 bg-[#F9E8EA] text-[#7C1D23] rounded-full">
+                  <FaGoogle className="text-xl" />
+                </div>
+                <div>
+                  <h2 className="text-lg font-semibold text-gray-900">
+                    Google Calendar
+                  </h2>
+                  <p className="text-sm text-gray-500">
+                    Sync consultations and defense schedules. After connecting you
+                    will be redirected to your dashboard.
+                  </p>
+                </div>
+              </div>
+              {statusBadge(calendarStatus.connected, calendarStatus.needsReauth)}
             </div>
-            <div>
-              <h2 className="text-lg font-semibold text-gray-900">
-                Google Calendar
-              </h2>
-              <p className="text-sm text-gray-500">
-                Sync consultations and defense schedules. After connecting you
-                will be redirected to your dashboard.
+
+            <div className="mt-4 space-y-3">
+              <Alert
+                type={calendarMessage.type}
+                message={calendarMessage.text}
+              />
+              <p className="text-xs text-gray-500">
+                Token expires: {formatExpiry(calendarStatus.expiresAt)}
               </p>
+
+              <div className="flex flex-wrap gap-3">
+                <button
+                  onClick={
+                    calendarStatus.connected ? disconnectCalendar : connectCalendar
+                  }
+                  disabled={calendarStatus.loading}
+                  className={`px-4 py-2 rounded-md font-medium text-sm text-white ${
+                    calendarStatus.connected
+                      ? "bg-red-500 hover:bg-red-600"
+                      : "bg-[#7C1D23] hover:bg-[#5c151a]"
+                  } disabled:opacity-60`}
+                >
+                  {calendarStatus.loading
+                    ? "Please wait..."
+                    : calendarStatus.connected
+                    ? "Disconnect Calendar"
+                    : "Connect Calendar"}
+                </button>
+                <button
+                  onClick={fetchCalendarStatus}
+                  className="px-4 py-2 rounded-md border border-gray-300 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                >
+                  Refresh status
+                </button>
+              </div>
             </div>
           </div>
-          {statusBadge(calendarStatus.connected, calendarStatus.needsReauth)}
-        </div>
+        )}
 
-        <div className="mt-4 space-y-3">
-          <Alert
-            type={calendarMessage.type}
-            message={calendarMessage.text}
-          />
-          <p className="text-xs text-gray-500">
-            Token expires: {formatExpiry(calendarStatus.expiresAt)}
-          </p>
+        <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
+          <div className="flex items-center justify-between flex-wrap gap-4">
+            <div className="flex items-center space-x-3">
+              <div className="p-3 bg-[#E3F2FD] text-[#1A73E8] rounded-full">
+                <FaGoogleDrive className="text-xl" />
+              </div>
+              <div>
+                <h2 className="text-lg font-semibold text-gray-900">
+                  Google Drive
+                </h2>
+                <p className="text-sm text-gray-500">
+                  Attach files directly from Drive and keep uploads in sync.
+                </p>
+              </div>
+            </div>
+            {statusBadge(driveStatus.connected, driveStatus.needsReauth)}
+          </div>
 
-          <div className="flex flex-wrap gap-3">
-            <button
-              onClick={
-                calendarStatus.connected ? disconnectCalendar : connectCalendar
-              }
-              disabled={calendarStatus.loading}
-              className={`px-4 py-2 rounded-md font-medium text-sm text-white ${
-                calendarStatus.connected
-                  ? "bg-red-500 hover:bg-red-600"
-                  : "bg-[#7C1D23] hover:bg-[#5c151a]"
-              } disabled:opacity-60`}
-            >
-              {calendarStatus.loading
-                ? "Please wait..."
-                : calendarStatus.connected
-                ? "Disconnect Calendar"
-                : "Connect Calendar"}
-            </button>
-            <button
-              onClick={fetchCalendarStatus}
-              className="px-4 py-2 rounded-md border border-gray-300 text-sm font-medium text-gray-700 hover:bg-gray-50"
-            >
-              Refresh status
-            </button>
+          <div className="mt-4 space-y-3">
+            <Alert type={driveMessage.type} message={driveMessage.text} />
+            <p className="text-xs text-gray-500">
+              Token expires: {formatExpiry(driveStatus.expiresAt)}
+            </p>
+
+            <div className="flex flex-wrap gap-3">
+              <button
+                onClick={driveStatus.connected ? disconnectDrive : connectDrive}
+                disabled={driveStatus.loading}
+                className={`px-4 py-2 rounded-md font-medium text-sm text-white ${
+                  driveStatus.connected
+                    ? "bg-red-500 hover:bg-red-600"
+                    : "bg-[#1A73E8] hover:bg-[#0F5FDB]"
+                } disabled:opacity-60`}
+              >
+                {driveStatus.loading
+                  ? "Please wait..."
+                  : driveStatus.connected
+                  ? "Disconnect Drive"
+                  : "Connect Drive"}
+              </button>
+              <button
+                onClick={fetchDriveStatus}
+                className="px-4 py-2 rounded-md border border-gray-300 text-sm font-medium text-gray-700 hover:bg-gray-50"
+              >
+                Refresh status
+              </button>
+            </div>
           </div>
         </div>
-      </div>
 
-      <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
-        <div className="flex items-center justify-between flex-wrap gap-4">
-          <div className="flex items-center space-x-3">
-            <div className="p-3 bg-[#E3F2FD] text-[#1A73E8] rounded-full">
-              <FaGoogleDrive className="text-xl" />
+        {!isAdmin && (
+          <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
+            <div className="flex items-center justify-between flex-wrap gap-4">
+              <div className="flex items-center space-x-3">
+                <div className="p-3 bg-[#E8F5E9] text-[#0F9D58] rounded-full">
+                  <FaTable className="text-xl" />
+                </div>
+                <div>
+                  <h2 className="text-lg font-semibold text-gray-900">
+                    Google Sheets
+                  </h2>
+                  <p className="text-sm text-gray-500">
+                    Export research data, activity logs, and reports to Google Sheets.
+                  </p>
+                </div>
+              </div>
+              {statusBadge(sheetsStatus.connected, sheetsStatus.needsReauth)}
             </div>
-            <div>
-              <h2 className="text-lg font-semibold text-gray-900">
-                Google Drive
-              </h2>
-              <p className="text-sm text-gray-500">
-                Attach files directly from Drive and keep uploads in sync.
+
+            <div className="mt-4 space-y-3">
+              <Alert type={sheetsMessage.type} message={sheetsMessage.text} />
+              <p className="text-xs text-gray-500">
+                Token expires: {formatExpiry(sheetsStatus.expiresAt)}
               </p>
+
+              <div className="flex flex-wrap gap-3">
+                <button
+                  onClick={sheetsStatus.connected ? disconnectSheets : connectSheets}
+                  disabled={sheetsStatus.loading}
+                  className={`px-4 py-2 rounded-md font-medium text-sm text-white ${
+                    sheetsStatus.connected
+                      ? "bg-red-500 hover:bg-red-600"
+                      : "bg-[#0F9D58] hover:bg-[#0B8043]"
+                  } disabled:opacity-60`}
+                >
+                  {sheetsStatus.loading
+                    ? "Please wait..."
+                    : sheetsStatus.connected
+                    ? "Disconnect Sheets"
+                    : "Connect Sheets"}
+                </button>
+                <button
+                  onClick={fetchSheetsStatus}
+                  className="px-4 py-2 rounded-md border border-gray-300 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                >
+                  Refresh status
+                </button>
+              </div>
             </div>
           </div>
-          {statusBadge(driveStatus.connected, driveStatus.needsReauth)}
-        </div>
-
-        <div className="mt-4 space-y-3">
-          <Alert type={driveMessage.type} message={driveMessage.text} />
-          <p className="text-xs text-gray-500">
-            Token expires: {formatExpiry(driveStatus.expiresAt)}
-          </p>
-
-          <div className="flex flex-wrap gap-3">
-            <button
-              onClick={driveStatus.connected ? disconnectDrive : connectDrive}
-              disabled={driveStatus.loading}
-              className={`px-4 py-2 rounded-md font-medium text-sm text-white ${
-                driveStatus.connected
-                  ? "bg-red-500 hover:bg-red-600"
-                  : "bg-[#1A73E8] hover:bg-[#0F5FDB]"
-              } disabled:opacity-60`}
-            >
-              {driveStatus.loading
-                ? "Please wait..."
-                : driveStatus.connected
-                ? "Disconnect Drive"
-                : "Connect Drive"}
-            </button>
-            <button
-              onClick={fetchDriveStatus}
-              className="px-4 py-2 rounded-md border border-gray-300 text-sm font-medium text-gray-700 hover:bg-gray-50"
-            >
-              Refresh status
-            </button>
-          </div>
-        </div>
+        )}
       </div>
-
-      <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6">
-        <div className="flex items-center justify-between flex-wrap gap-4">
-          <div className="flex items-center space-x-3">
-            <div className="p-3 bg-[#E8F5E9] text-[#0F9D58] rounded-full">
-              <FaTable className="text-xl" />
-            </div>
-            <div>
-              <h2 className="text-lg font-semibold text-gray-900">
-                Google Sheets
-              </h2>
-              <p className="text-sm text-gray-500">
-                Export research data, activity logs, and reports to Google Sheets.
-              </p>
-            </div>
-          </div>
-          {statusBadge(sheetsStatus.connected, sheetsStatus.needsReauth)}
-        </div>
-
-        <div className="mt-4 space-y-3">
-          <Alert type={sheetsMessage.type} message={sheetsMessage.text} />
-          <p className="text-xs text-gray-500">
-            Token expires: {formatExpiry(sheetsStatus.expiresAt)}
-          </p>
-
-          <div className="flex flex-wrap gap-3">
-            <button
-              onClick={sheetsStatus.connected ? disconnectSheets : connectSheets}
-              disabled={sheetsStatus.loading}
-              className={`px-4 py-2 rounded-md font-medium text-sm text-white ${
-                sheetsStatus.connected
-                  ? "bg-red-500 hover:bg-red-600"
-                  : "bg-[#0F9D58] hover:bg-[#0B8043]"
-              } disabled:opacity-60`}
-            >
-              {sheetsStatus.loading
-                ? "Please wait..."
-                : sheetsStatus.connected
-                ? "Disconnect Sheets"
-                : "Connect Sheets"}
-            </button>
-            <button
-              onClick={fetchSheetsStatus}
-              className="px-4 py-2 rounded-md border border-gray-300 text-sm font-medium text-gray-700 hover:bg-gray-50"
-            >
-              Refresh status
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
+    );
+  };
 
   const containerClasses = embedded ? "w-full" : "min-h-screen bg-gray-50 pb-12";
   const innerClasses = embedded
