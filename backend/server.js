@@ -7,9 +7,11 @@ import panelReviewRoutes from "./routes/panelReview.js";
 import googleDriveRoutes from "./routes/googleDrive.js";
 import googleSheetsRoutes from "./routes/googleSheets.js";
 import adminRoutes from "./routes/admin.js";
+import backupRoutes from "./routes/backup.js";
 import Permission from "./models/Permission.js";
 import Role from "./models/Role.js";
-
+import { startBackupScheduler } from "./services/backupScheduler.js";
+import { enforceHTTPS, securityHeaders } from "./middleware/https.js";
 
 import express from 'express';
 import dotenv from 'dotenv'
@@ -58,6 +60,14 @@ app.use(cors({
   credentials: true
 }));
 
+// Security headers (must be before routes)
+app.use(securityHeaders);
+
+// Enforce HTTPS in production (must be before routes)
+if (process.env.NODE_ENV === "production") {
+  app.use(enforceHTTPS);
+}
+
 app.use(express.json());
 
 //Routes
@@ -75,6 +85,7 @@ app.use("/api/google-calendar", googleCalendarRoutes);
 app.use("/api/google-drive", googleDriveRoutes);
 app.use("/api/google-sheets", googleSheetsRoutes);
 app.use("/api/admin", adminRoutes);
+app.use("/api/backup", backupRoutes);
 
 // Error handling middleware
 app.use((err, req, res, next) => {
@@ -88,7 +99,15 @@ process.on('unhandledRejection', (err, promise) => {
 });
 
 connectDB()
-  .then(() => ensureStudentDeletePermission())
+  .then(() => {
+    ensureStudentDeletePermission();
+    // Start automated backup scheduler if enabled
+    if (process.env.ENABLE_AUTO_BACKUP !== "false") {
+      startBackupScheduler();
+    } else {
+      console.log("Automated backup scheduler is disabled (ENABLE_AUTO_BACKUP=false)");
+    }
+  })
   .catch((error) => console.error("Error initializing permissions:", error));
 
 app.listen(PORT, () => {
