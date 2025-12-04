@@ -38,6 +38,9 @@ export const verifyRecaptchaToken = async (recaptchaToken, remoteIp) => {
 };
 
 export const generateToken = (id) => {
+    if (!process.env.JWT_SECRET) {
+        throw new Error('JWT_SECRET is not configured in environment variables');
+    }
     return jwt.sign({ id }, process.env.JWT_SECRET, { expiresIn: '30d' });
 };
 
@@ -201,18 +204,17 @@ export const register = async (req, res) => {
 
 // ========== Login ==========
 export const login = async (req, res) => {
-    const { email, password, role } = req.body;
-
-    // reCAPTCHA check - only verify if secret key is configured
-    const recaptchaSecretKey = process.env.RECAPTCHA_SECRET_KEY;
-    if (recaptchaSecretKey) {
-        const isHuman = await verifyRecaptchaToken(req.body.recaptcha, req.ip);
-        if (!isHuman) {
-            return res.status(400).json({ message: 'Recaptcha verification failed. Please complete the reCAPTCHA verification.' });
-        }
-    }
-
     try {
+        const { email, password, role } = req.body;
+
+        // reCAPTCHA check - only verify if secret key is configured
+        const recaptchaSecretKey = process.env.RECAPTCHA_SECRET_KEY;
+        if (recaptchaSecretKey) {
+            const isHuman = await verifyRecaptchaToken(req.body.recaptcha, req.ip);
+            if (!isHuman) {
+                return res.status(400).json({ message: 'Recaptcha verification failed. Please complete the reCAPTCHA verification.' });
+            }
+        }
         if (!email || !password) {
             return res.status(400).json({ message: 'All fields are required' });
         }
@@ -236,6 +238,13 @@ export const login = async (req, res) => {
             });
         }
 
+        // Check if user has a password set
+        if (!user.password) {
+            return res.status(401).json({ 
+                message: 'Account not fully set up. Please complete your registration.' 
+            });
+        }
+
         // Check if password matches
         if (!(await user.matchPassword(password))) {
             return res.status(401).json({ message: 'Invalid email or password' });
@@ -250,8 +259,12 @@ export const login = async (req, res) => {
             token,
         });
     } catch (err) {
-        console.error(err);
-        res.status(500).json({ message: 'Login failed' });
+        console.error('Login error:', err);
+        console.error('Error stack:', err.stack);
+        res.status(500).json({ 
+            message: 'Login failed', 
+            error: process.env.NODE_ENV === 'development' ? err.message : undefined 
+        });
     }
 };
 
