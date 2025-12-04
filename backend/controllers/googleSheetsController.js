@@ -287,9 +287,52 @@ const transformResearchForExport = (researchDoc, panelDoc) => {
 // Create research progress dashboard with logo and header matching Excel format
 export const createResearchDashboard = async (req, res) => {
   try {
-    const user = await User.findById(req.user.id);
+    // Fetch user and refresh token if needed before proceeding
+    let user = await User.findById(req.user.id);
     if (!user || !user.sheetsAccessToken) {
       return res.status(401).json({ message: "Google Sheets not connected" });
+    }
+
+    // Check if token is expired and refresh if needed
+    const tokenExpiresAt = user.sheetsTokenExpiry;
+    const isExpired = tokenExpiresAt && tokenExpiresAt.getTime() < Date.now();
+    
+    if (isExpired && user.sheetsRefreshToken) {
+      try {
+        const oauth2Client = createSheetsOAuthClient();
+        oauth2Client.setCredentials({
+          refresh_token: user.sheetsRefreshToken,
+        });
+        
+        const { credentials } = await oauth2Client.refreshAccessToken();
+        
+        // Update user with new tokens
+        const newExpiryDate = new Date();
+        if (credentials.expiry_date) {
+          newExpiryDate.setTime(credentials.expiry_date);
+        } else {
+          newExpiryDate.setHours(newExpiryDate.getHours() + 1);
+        }
+
+        await User.findByIdAndUpdate(user._id, {
+          sheetsAccessToken: credentials.access_token,
+          sheetsTokenExpiry: newExpiryDate,
+          ...(credentials.refresh_token && { sheetsRefreshToken: credentials.refresh_token }),
+        });
+
+        // Refresh user object with new tokens
+        user = await User.findById(req.user.id);
+      } catch (refreshError) {
+        console.error('Error refreshing Sheets token:', refreshError);
+        if (refreshError.message && refreshError.message.includes('invalid_grant')) {
+          return res.status(401).json({ 
+            message: 'Google Sheets access expired. Please reconnect Google Sheets in Settings -> Integrations.' 
+          });
+        }
+        return res.status(401).json({ 
+          message: 'Failed to refresh Google Sheets token. Please reconnect in Settings -> Integrations.' 
+        });
+      }
     }
 
     // Get filters and fields from request body (matching Excel export)
@@ -339,15 +382,27 @@ export const createResearchDashboard = async (req, res) => {
       .map(([key, value]) => `${key}: ${value}`)
       .join(", ");
 
-    // Create spreadsheet
+    // Create spreadsheet - this will also refresh token if needed
     const title = `Research Records Report - ${new Date().toLocaleDateString()}`;
-    const result = await createSpreadsheet(
-      title,
-      user._id,
-      user.sheetsAccessToken,
-      user.sheetsRefreshToken
-    );
+    let result;
+    try {
+      result = await createSpreadsheet(
+        title,
+        user._id,
+        user.sheetsAccessToken,
+        user.sheetsRefreshToken
+      );
+    } catch (error) {
+      if (error.message && error.message.includes('invalid_grant')) {
+        return res.status(401).json({ 
+          message: 'Google Sheets access expired. Please reconnect Google Sheets in Settings -> Integrations.' 
+        });
+      }
+      throw error;
+    }
 
+    // Refresh user object to get latest tokens (in case they were refreshed)
+    user = await User.findById(req.user.id);
     const spreadsheetId = result.spreadsheetId;
     const sheets = await getSheetsClient(user._id, user.sheetsAccessToken, user.sheetsRefreshToken);
     const spreadsheet = await sheets.spreadsheets.get({ spreadsheetId });
@@ -1035,16 +1090,34 @@ export const createResearchDashboard = async (req, res) => {
       response: error.response?.data
     });
     
+    // Handle invalid_grant error specifically
+    const errorMessage = error.message || '';
+    const errorResponse = error.response?.data?.error || '';
+    
+    if (errorMessage.includes('invalid_grant') || errorResponse.includes('invalid_grant')) {
+      return res.status(401).json({ 
+        message: 'Google Sheets access expired. Please reconnect Google Sheets in Settings -> Integrations.' 
+      });
+    }
+    
+    // Handle other authentication errors
+    if (errorMessage.includes('unauthorized') || errorMessage.includes('Unauthorized') || 
+        errorResponse.includes('unauthorized') || errorResponse.includes('Unauthorized')) {
+      return res.status(401).json({ 
+        message: 'Google Sheets access expired. Please reconnect Google Sheets in Settings -> Integrations.' 
+      });
+    }
+    
     // Provide more specific error messages
-    let errorMessage = "Failed to create research dashboard";
-    if (error.message) {
-      errorMessage = error.message;
-    } else if (error.response?.data?.error) {
-      errorMessage = error.response.data.error;
+    let finalErrorMessage = "Failed to create research dashboard";
+    if (errorMessage) {
+      finalErrorMessage = errorMessage;
+    } else if (errorResponse) {
+      finalErrorMessage = errorResponse;
     }
     
     res.status(500).json({ 
-      message: errorMessage,
+      message: finalErrorMessage,
       error: process.env.NODE_ENV === 'development' ? {
         stack: error.stack,
         name: error.name,
@@ -1698,16 +1771,11 @@ export const getAuthUrl = async (req, res) => {
     // Add service identifier to state so callback can route correctly
     const state = `sheets:${req.user.id}`;
     
-    // Get user email to use as login hint for account pre-selection
-    const user = await User.findById(req.user.id).select('email');
-    const loginHint = user?.email || undefined;
-    
     const authUrl = oauth2Client.generateAuthUrl({
       access_type: "offline",
-      prompt: "consent",
+      prompt: "select_account consent", // Show account picker to select from existing accounts, then consent if needed
       scope: SHEETS_SCOPES,
       state: state,
-      login_hint: loginHint, // Pre-select user's email account
     });
     res.json({ authUrl });
   } catch (error) {

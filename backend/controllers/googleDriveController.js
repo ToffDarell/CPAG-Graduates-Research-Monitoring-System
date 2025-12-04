@@ -12,16 +12,11 @@ export const getAuthUrl = async (req, res) => {
     // Add service identifier to state so callback can route correctly
     const state = `drive:${req.user.id}`;
     
-    // Get user email to use as login hint for account pre-selection
-    const user = await User.findById(req.user.id).select('email');
-    const loginHint = user?.email || undefined;
-    
     const authUrl = oauth2Client.generateAuthUrl({
       access_type: 'offline',
-      prompt: 'consent',
+      prompt: 'select_account consent', // Show account picker to select from existing accounts, then consent if needed
       scope: DRIVE_SCOPES,
       state: state,
-      login_hint: loginHint, // Pre-select user's email account
     });
     res.json({ authUrl });
   } catch (error) {

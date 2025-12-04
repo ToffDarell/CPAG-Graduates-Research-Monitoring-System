@@ -27,16 +27,11 @@ export const getAuthUrl = async (req, res) => {
   try {
     const oauth2Client = createOAuthClient();
 
-    // Get user email to use as login hint for account pre-selection
-    const user = await User.findById(req.user.id).select('email');
-    const loginHint = user?.email || undefined;
-
     const authUrl = oauth2Client.generateAuthUrl({
       access_type: 'offline',
       scope: SCOPES,
-      prompt: 'consent',
+      prompt: 'select_account consent', // Show account picker to select from existing accounts, then consent if needed
       state: req.user.id,
-      login_hint: loginHint, // Pre-select user's email account
     });
 
     res.json({ 
