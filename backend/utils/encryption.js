@@ -1,7 +1,12 @@
 import crypto from "crypto";
 import dotenv from "dotenv";
+import path from "path";
+import { fileURLToPath } from "url";
 
-dotenv.config();
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+dotenv.config({ path: path.join(__dirname, '..', '.env') });
 
 // Get encryption key from environment (32 bytes for AES-256)
 // Generate with: node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"

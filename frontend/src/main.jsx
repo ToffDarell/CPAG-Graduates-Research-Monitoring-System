@@ -6,6 +6,14 @@ import { GoogleOAuthProvider } from '@react-oauth/google'
 
 const CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID 
 
+// Check if CLIENT_ID is configured
+if (!CLIENT_ID) {
+  console.error('❌ ERROR: VITE_GOOGLE_CLIENT_ID is not defined in frontend/.env!');
+  console.error('   Google OAuth will not work without this.');
+} else {
+  console.log('✅ Google OAuth CLIENT_ID loaded:', CLIENT_ID);
+}
+
 // Suppress FedCM errors in console (these are expected and handled by fallback)
 // These errors occur when:
 // - Google Sign-In components unmount during navigation (AbortError)

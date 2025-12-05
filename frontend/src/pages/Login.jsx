@@ -77,15 +77,31 @@ const Login = ({ setUser }) => {
 
   const handleGoogleLogin = async (credentialResponse) => {
     try {
+      console.log("Google login attempt...");
+      if (!credentialResponse?.credential) {
+        setError("Google credential not received. Please try again.");
+        return;
+      }
+
       const res = await axios.post("/api/users/google", { 
         credential: credentialResponse.credential,
         selectedRole: null
       });
+      
       localStorage.setItem("token", res.data.token);
       setUser(res.data);
       navigate(`/dashboard/${getDashboardPath(res.data.role)}`);
     } catch (err) {
-      setError(err.response?.data?.message || "Google login failed");
+      console.error("Google login error:", err);
+      const errorMessage = err.response?.data?.message || 
+                          err.response?.data?.error ||
+                          "Google login failed. Please try again.";
+      setError(errorMessage);
+      
+      // Log full error details for debugging
+      if (err.response?.data) {
+        console.error("Error details:", err.response.data);
+      }
     }
   };
 

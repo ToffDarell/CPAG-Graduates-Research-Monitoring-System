@@ -8,10 +8,11 @@ import { fileURLToPath } from "url";
 import archiver from "archiver";
 import dotenv from "dotenv";
 
-dotenv.config();
 const execAsync = promisify(exec);
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+dotenv.config({ path: path.join(__dirname, '..', '.env') });
 
 const BACKUP_DIR = path.join(__dirname, "..", "..", "backups");
 const MAX_BACKUPS = parseInt(process.env.MAX_BACKUPS || "30"); // Keep 30 days of backups
