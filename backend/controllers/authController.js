@@ -3,11 +3,20 @@ import Role from '../models/Role.js';
 import jwt from 'jsonwebtoken';
 import { OAuth2Client } from 'google-auth-library';
 import dotenv from 'dotenv';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import crypto from 'crypto';
 import nodemailer from 'nodemailer';
 
-dotenv.config();
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+dotenv.config({ path: path.join(__dirname, '..', '.env') });
 const CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
+if (!CLIENT_ID) {
+    console.error('❌ ERROR: GOOGLE_CLIENT_ID is not defined in backend/.env!');
+    console.error('   Google OAuth will not work without this.');
+}
 const client = new OAuth2Client(CLIENT_ID);
 
 // ========== Helper Functions ==========
@@ -740,10 +749,23 @@ export const changePassword = async (req, res) => {
 // ========== Google OAuth ==========
 export const googleAuth = async (req, res) => {
     try {
+        // Check if CLIENT_ID is configured
+        if (!CLIENT_ID) {
+            console.error('❌ Google Auth Error: GOOGLE_CLIENT_ID not configured');
+            return res.status(500).json({ 
+                message: 'Google authentication is not configured. Please contact administrator.',
+                error: 'CLIENT_ID_MISSING'
+            });
+        }
+
         const { credential, selectedRole, studentId } = req.body;  
         if (!credential) {
             return res.status(400).json({ message: 'Missing Google credential' });
         }
+
+        // Debug: Log the CLIENT_ID being used for verification
+        console.log('🔍 Verifying Google token with CLIENT_ID:', CLIENT_ID);
+        console.log('🔍 Token credential received:', credential ? credential.substring(0, 50) + '...' : 'MISSING');
 
         const ticket = await client.verifyIdToken({
             idToken: credential,
@@ -823,10 +845,27 @@ export const googleAuth = async (req, res) => {
             token,
         });
     } catch (err) {
-        console.error('Google auth error:', err);
+        console.error('❌ Google auth error:', err);
+        console.error('Error details:', {
+            message: err.message,
+            code: err.code,
+            stack: process.env.NODE_ENV === 'development' ? err.stack : undefined
+        });
+        
+        // Provide more helpful error messages
+        let errorMessage = 'Google authentication failed';
+        if (err.message?.includes('Invalid token signature')) {
+            errorMessage = 'Invalid Google token. Please try again.';
+        } else if (err.message?.includes('audience')) {
+            errorMessage = 'Google Client ID mismatch. Please contact administrator.';
+        } else if (err.message) {
+            errorMessage = `Google authentication failed: ${err.message}`;
+        }
+        
         return res.status(401).json({ 
-            message: 'Google authentication failed', 
-            error: err.message 
+            message: errorMessage, 
+            error: err.message || 'UNKNOWN_ERROR',
+            code: err.code || 'GOOGLE_AUTH_FAILED'
         });
     }
 };
