@@ -2,13 +2,20 @@ import { google } from 'googleapis';
 import User from '../models/User.js';
 
 const createOAuthClient = () => {
-  const clientId = process.env.GOOGLE_CLIENT_ID;
-  const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
-  const redirectUri = process.env.GOOGLE_REDIRECT_URI;
+  // Use GOOGLE_CALENDAR_CLIENT_ID if available, otherwise fall back to GOOGLE_CLIENT_ID
+  const clientId = process.env.GOOGLE_CALENDAR_CLIENT_ID || process.env.GOOGLE_CLIENT_ID;
+  const clientSecret = process.env.GOOGLE_CALENDAR_CLIENT_SECRET || process.env.GOOGLE_CLIENT_SECRET;
+  const redirectUri = process.env.GOOGLE_CALENDAR_REDIRECT_URI || process.env.GOOGLE_REDIRECT_URI;
+
+  console.log('🔍 Google Calendar OAuth Configuration:', {
+    clientId: clientId ? clientId.substring(0, 30) + '...' : 'NOT SET',
+    redirectUri: redirectUri || 'NOT SET',
+    usingCalendarSpecific: !!process.env.GOOGLE_CALENDAR_CLIENT_ID
+  });
 
   if (!clientId || !clientSecret || !redirectUri) {
     throw new Error(
-      'Google OAuth environment variables are not fully configured. Please set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and GOOGLE_REDIRECT_URI.'
+      'Google OAuth environment variables are not fully configured. Please set GOOGLE_CALENDAR_CLIENT_ID (or GOOGLE_CLIENT_ID), GOOGLE_CALENDAR_CLIENT_SECRET (or GOOGLE_CLIENT_SECRET), and GOOGLE_CALENDAR_REDIRECT_URI (or GOOGLE_REDIRECT_URI).'
     );
   }
 
