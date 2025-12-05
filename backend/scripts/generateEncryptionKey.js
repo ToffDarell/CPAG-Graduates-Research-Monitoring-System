@@ -16,3 +16,4 @@ console.log("4. Add it to your .env file immediately");
 console.log("\n" + "=".repeat(60) + "\n");
 
 
+
