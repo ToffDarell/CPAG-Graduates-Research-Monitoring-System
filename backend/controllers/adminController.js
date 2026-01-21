@@ -8,6 +8,7 @@ import { fileURLToPath } from "url";
 import fs from "fs";
 import os from "os";
 import { uploadFileToDrive } from "../utils/googleDrive.js";
+import { rateLimitedSendMail } from "../utils/outboundRateLimit.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -642,7 +643,7 @@ export const inviteDean = async (req, res) => {
       },
     });
 
-    await transporter.sendMail({
+    await rateLimitedSendMail(transporter, {
       from: process.env.SMTP_FROM,
       to: email,
       subject:

@@ -1,5 +1,6 @@
 import { google } from 'googleapis';
 import User from '../models/User.js';
+import { checkOutboundLimit } from './outboundRateLimit.js';
 
 // Initialize Calendar client with automatic token refresh
 export const getCalendarClient = async (userId, accessToken, refreshToken) => {
@@ -49,6 +50,7 @@ export const getCalendarClient = async (userId, accessToken, refreshToken) => {
  */
 export const createConsultationEvent = async (scheduleData, accessToken, refreshToken, userId) => {
   try {
+    checkOutboundLimit('gcal', 60, 'global');
     console.log('[Google Calendar] Creating event:', {
       title: scheduleData.title,
       datetime: scheduleData.datetime,
@@ -265,6 +267,7 @@ ${scheduleData.researchTitle ? `Research: ${scheduleData.researchTitle}` : ''}
  */
 export const getCalendarEventLink = async (eventId, accessToken, refreshToken, userId) => {
   try {
+    checkOutboundLimit('gcal', 60, 'global');
     const calendar = await getCalendarClient(userId, accessToken, refreshToken);
     
     // Fetch the event to get the htmlLink
@@ -314,6 +317,7 @@ export const constructCalendarLink = (eventId) => {
  */
 export const updateCalendarEvent = async (eventId, updates, accessToken, refreshToken, userId) => {
   try {
+    checkOutboundLimit('gcal', 60, 'global');
     const calendar = await getCalendarClient(userId, accessToken, refreshToken);
 
     const updateData = {};
@@ -447,6 +451,7 @@ export const deleteCalendarEvent = async (eventId, accessToken, refreshToken, us
  */
 export const getCalendarEvents = async (startDate, endDate, accessToken, refreshToken, userId) => {
   try {
+    checkOutboundLimit('gcal', 60, 'global');
     const calendar = await getCalendarClient(userId, accessToken, refreshToken);
 
     const response = await calendar.events.list({

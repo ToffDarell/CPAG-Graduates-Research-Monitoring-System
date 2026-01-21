@@ -3,7 +3,10 @@ import { createSheetsOAuthClient } from '../utils/googleSheets.js';
 import User from '../models/User.js';
 import DriveUpload from '../models/DriveUpload.js';
 
-const DRIVE_SCOPES = ['https://www.googleapis.com/auth/drive.file'];
+// NOTE: We upload into pre-configured folder IDs from .env.
+// `drive.file` can be too restrictive for accessing arbitrary existing folders.
+// Using full Drive scope avoids "folder not found / not accessible" issues.
+const DRIVE_SCOPES = ['https://www.googleapis.com/auth/drive'];
 
 // Generate Google Drive OAuth URL
 export const getAuthUrl = async (req, res) => {

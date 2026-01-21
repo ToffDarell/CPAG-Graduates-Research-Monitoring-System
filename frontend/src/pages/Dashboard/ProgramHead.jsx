@@ -201,7 +201,7 @@ const ProgramHeadDashboard = ({ setUser, user }) => {
     { id: 2, name: "Dr. Johnson", role: "Member", status: "Pending" },
   ]);
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  
+
   // Google Calendar state
   const [calendarConnected, setCalendarConnected] = useState(false);
   const [calendarLoading, setCalendarLoading] = useState(false);
@@ -1304,7 +1304,7 @@ const PanelSelection = () => {
                   className="px-4 py-2 bg-[#7C1D23] text-white rounded-md text-sm font-medium hover:bg-[#5a1519] transition-colors"
                 >
                   Add to Panel
-                </button>
+      </button>
               </div>
             </div>
           )}
@@ -1338,7 +1338,7 @@ const PanelSelection = () => {
             </button>
           </div>
         </form>
-      </div>
+    </div>
 
       {/* All Panels List */}
       <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
@@ -1364,7 +1364,7 @@ const PanelSelection = () => {
               
               return (
                 <>
-                  <div className="grid gap-4">
+    <div className="grid gap-4">
                     {paginatedPanels.map(panel => (
               <div key={panel._id} className="border border-gray-200 rounded-lg p-5 hover:shadow-md transition-shadow">
                 <div className="flex items-start justify-between gap-4 mb-4">
@@ -1374,14 +1374,14 @@ const PanelSelection = () => {
                       <span className="px-2 py-1 text-xs font-medium rounded bg-blue-100 text-blue-700">
                         {panel.type?.replace(/_/g, ' ')}
                       </span>
-                    </div>
+              </div>
                     {panel.description && (
                       <p className="text-sm text-gray-700 mb-2">{panel.description}</p>
                     )}
                     <p className="text-sm text-gray-600">
                       <span className="font-medium">Research:</span> {panel.research?.title || 'N/A'}
                     </p>
-                  </div>
+              </div>
                   <div className="flex gap-2">
                     <button
                       onClick={() => handleOpenSelectModal(panel)}
@@ -1397,7 +1397,7 @@ const PanelSelection = () => {
                       <FaTrash className="inline mr-1" />
                       Delete
                     </button>
-                  </div>
+            </div>
                 </div>
 
                 {/* Panel Members Summary */}
@@ -1423,7 +1423,7 @@ const PanelSelection = () => {
                           {m.isSelected && <span className="text-xs font-semibold">✓ Active</span>}
                           {!m.isSelected && <span className="text-xs text-gray-400">Inactive</span>}
                           {m.status === 'invited' && <span className="text-xs text-orange-600">Invited</span>}
-                        </span>
+              </span>
                       ))
                     )}
                   </div>
@@ -1483,8 +1483,8 @@ const PanelSelection = () => {
                           handleUpdateMembers(panel._id, next);
                         }} className="w-full bg-white border border-gray-300 px-4 py-2 rounded-md text-sm hover:bg-gray-50 transition-colors">
                           Add Panelist
-                        </button>
-                      </div>
+              </button>
+            </div>
                     </div>
                   ) : (
                     <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 space-y-3">
@@ -1557,9 +1557,9 @@ const PanelSelection = () => {
                       </div>
                     </div>
                   )}
-                </div>
-              </div>
-                  ))}
+          </div>
+        </div>
+      ))}
                 </div>
                 {panels.length > itemsPerPage && (
                   <Pagination
@@ -1581,7 +1581,7 @@ const PanelSelection = () => {
           })()
         )}
         </div>
-      </div>
+    </div>
 
       {/* Select Members Modal (Manage Active Panelists) */}
       {selectModalOpen && currentPanel && (
@@ -1608,8 +1608,8 @@ const PanelSelection = () => {
             {/* Search Bar and Select All */}
             <div className="p-5 border-b border-gray-200">
               <div className="flex gap-3 items-center">
-                <input
-                  type="text"
+        <input
+          type="text"
                   placeholder="Search panelists by name, email, or role..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
@@ -1629,10 +1629,10 @@ const PanelSelection = () => {
                         allMemberIds.every(id => selectedMemberIds.includes(id));
                       return allSelected ? 'Deselect All' : 'Select All';
                     })()}
-                  </button>
+        </button>
                 )}
-              </div>
-            </div>
+      </div>
+    </div>
 
             {/* Member List */}
             <div className="flex-1 overflow-y-auto p-5">
@@ -1702,8 +1702,8 @@ const PanelSelection = () => {
                   })}
                 </div>
               )}
-            </div>
-
+  </div>
+  
             {/* Modal Footer */}
             <div className="p-5 border-t border-gray-200 bg-gray-50">
               <div className="flex items-center justify-between">
@@ -2192,7 +2192,7 @@ const ScheduleManagement = () => {
     <div className="space-y-6">
       {/* Header */}
       <div className="bg-white border border-gray-200 rounded-lg p-5">
-        <div className="flex justify-between items-center">
+    <div className="flex justify-between items-center">
           <div>
             <h2 className="text-xl font-bold text-gray-800 mb-2">Schedule Finalization</h2>
             <p className="text-sm text-gray-600">Finalize consultation schedules and create panel defense schedules</p>
@@ -2365,9 +2365,9 @@ const ScheduleManagement = () => {
                         }}
                         className="ml-4 px-4 py-2 bg-[#7C1D23] text-white rounded-md text-sm font-medium hover:bg-[#5a1519] transition-colors"
                       >
-                        Create Schedule
-                      </button>
-                    </div>
+        Create Schedule
+      </button>
+    </div>
                   </div>
                 ))}
               </div>
@@ -2397,7 +2397,7 @@ const ScheduleManagement = () => {
                 {createdPanelSchedules.map(schedule => (
                   <div key={schedule._id} className="border border-gray-200 rounded-lg p-5 hover:shadow-md transition-shadow">
                     <div className="flex items-start justify-between mb-3">
-                      <div className="flex-1">
+          <div className="flex-1">
                         <div className="flex items-center gap-3 mb-2">
                           <h4 className="text-base font-semibold text-gray-900">{schedule.panel?.name || schedule.title}</h4>
                           <span className={`px-2 py-1 text-xs font-medium rounded ${
@@ -2409,7 +2409,7 @@ const ScheduleManagement = () => {
                           }`}>
                             {schedule.status.charAt(0).toUpperCase() + schedule.status.slice(1)}
                           </span>
-                        </div>
+          </div>
                         <p className="text-sm text-gray-600 mb-2">{schedule.research?.title || schedule.panel?.research?.title || 'N/A'}</p>
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3 text-sm">
                           <div className="flex items-center gap-2">
@@ -2473,7 +2473,7 @@ const ScheduleManagement = () => {
                             title="Edit"
                           >
                             <FaEdit />
-                          </button>
+              </button>
                         )}
                         {schedule.status !== 'completed' && (
                           <button
@@ -2507,13 +2507,13 @@ const ScheduleManagement = () => {
                             title="Delete Schedule"
                           >
                             <FaTrash />
-                          </button>
+              </button>
                         )}
-                      </div>
-                    </div>
-                  </div>
+            </div>
+          </div>
+        </div>
                 ))}
-              </div>
+      </div>
             )}
           </div>
         )}
@@ -2667,7 +2667,7 @@ const ScheduleManagement = () => {
               <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
                 <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
                   <div className="p-5 border-b border-gray-200">
-                    <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between">
                       <h3 className="text-lg font-semibold text-gray-900">Schedule Details</h3>
                       <button
                         onClick={() => setSelectedEvent(null)}
@@ -2893,13 +2893,13 @@ const ScheduleManagement = () => {
                   {checkingConflicts ? 'Checking...' : 'Check Conflicts'}
                 </button>
                 {conflicts && (
-                  <div className="flex-1">
+          <div className="flex-1">
                     {conflicts.hasConflicts ? (
                       <div className="bg-red-50 border border-red-200 rounded-lg p-3">
                         <div className="flex items-center gap-2 text-red-800 mb-2">
                           <FaExclamationTriangle />
                           <span className="font-medium">Conflicts Detected</span>
-                        </div>
+          </div>
                         <div className="space-y-3">
                           {conflicts.conflicts.map((conflict, idx) => (
                             <div key={idx} className="text-sm text-red-700">
@@ -2958,7 +2958,7 @@ const ScheduleManagement = () => {
                   }`}
                 >
                   {loading ? 'Creating...' : conflicts && conflicts.hasConflicts ? 'Create & Finalize (Override Conflicts)' : 'Create & Finalize Schedule'}
-                </button>
+              </button>
                 <button
                   onClick={() => {
                     setShowCreateModal(false);
@@ -2969,11 +2969,11 @@ const ScheduleManagement = () => {
                   className="px-4 py-2 bg-gray-200 text-gray-700 rounded-md text-sm font-medium hover:bg-gray-300 transition-colors"
                 >
                   Cancel
-                </button>
-              </div>
+              </button>
             </div>
           </div>
         </div>
+      </div>
       )}
 
       {/* Edit Schedule Modal */}
@@ -2994,7 +2994,7 @@ const ScheduleManagement = () => {
                 >
                   <FaClose className="h-5 w-5" />
                 </button>
-              </div>
+    </div>
             </div>
 
             <div className="p-5 space-y-4">
@@ -3105,8 +3105,8 @@ const ScheduleManagement = () => {
           </div>
         </div>
       )}
-    </div>
-  );
+  </div>
+);
 };
 
 // Process Monitoring Component
@@ -3204,9 +3204,9 @@ const ProcessMonitoring = () => {
         </div>
         <div className="bg-white rounded-lg border-l-4 border-purple-500 p-5 shadow-sm">
           <div className="flex items-center justify-between mb-2">
-            <h3 className="text-sm font-semibold text-gray-600 uppercase">In Progress</h3>
+          <h3 className="text-sm font-semibold text-gray-600 uppercase">In Progress</h3>
             <FaChartLine className="h-5 w-5 text-purple-500" />
-          </div>
+        </div>
           <p className="text-2xl font-bold text-gray-800">{stats.inProgress}</p>
         </div>
         <div className="bg-white rounded-lg border-l-4 border-red-500 p-5 shadow-sm">
@@ -3235,7 +3235,7 @@ const ProcessMonitoring = () => {
               <option value="in_progress">In Progress</option>
               <option value="completed">Completed</option>
             </select>
-          </div>
+        </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Start Date</label>
             <input
@@ -3262,8 +3262,8 @@ const ProcessMonitoring = () => {
               Clear Filters
             </button>
           </div>
-        </div>
       </div>
+    </div>
 
       {/* Panels List */}
       <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
@@ -3566,7 +3566,7 @@ const ProcessMonitoring = () => {
               {panelDetails.panel.documents && panelDetails.panel.documents.filter(d => d.isActive).length > 0 && (
                 <div>
                   <h4 className="text-base font-semibold text-gray-800 mb-3">Resources</h4>
-                  <div className="space-y-2">
+      <div className="space-y-2">
                     {panelDetails.panel.documents.filter(d => d.isActive).map(doc => (
                       <div key={doc._id} className="border border-gray-200 rounded-lg p-3 flex items-center justify-between">
                         <div className="flex items-center space-x-3 flex-1">
@@ -3578,8 +3578,8 @@ const ProcessMonitoring = () => {
                           <div className="flex-1">
                             <p className="font-medium text-gray-900">{doc.title}</p>
                             <p className="text-xs text-gray-500">{doc.filename} • v{doc.version}</p>
-                          </div>
-                        </div>
+        </div>
+        </div>
                         <a
                           href={`/api/programhead/panels/${panelDetails.panel._id}/documents/${doc._id}/download`}
                           download
@@ -3587,10 +3587,10 @@ const ProcessMonitoring = () => {
                         >
                           <FaDownload />
                         </a>
-                      </div>
+        </div>
                     ))}
-                  </div>
-                </div>
+      </div>
+    </div>
               )}
 
               {/* Schedules */}
@@ -3604,7 +3604,7 @@ const ProcessMonitoring = () => {
                         <p className="text-sm text-gray-600">
                           {new Date(schedule.datetime).toLocaleString()} • {schedule.location}
                         </p>
-                      </div>
+  </div>
                     ))}
                   </div>
                 </div>
@@ -3980,8 +3980,8 @@ const FormsManagement = ({ driveStatus }) => {
   };
 
   return (
-    <div className="space-y-5">
-      <div className="flex justify-between items-center">
+  <div className="space-y-5">
+    <div className="flex justify-between items-center">
         <h2 className="text-xl font-bold text-gray-800">Upload Forms & Documents</h2>
       </div>
 
@@ -4066,7 +4066,7 @@ const FormsManagement = ({ driveStatus }) => {
                         className="px-4 py-2 bg-[#7C1D23] text-white rounded-md hover:bg-[#5a1519] transition-colors text-sm font-medium"
                       >
                         Select File from Computer
-                      </button>
+      </button>
                       <DriveUploader
                         defaultType="other"
                         driveButtonLabel="Upload from Google Drive"
@@ -4090,7 +4090,7 @@ const FormsManagement = ({ driveStatus }) => {
                           setUploadForm({ ...uploadForm, file: virtualFile });
                         }}
                       />
-                    </div>
+    </div>
 
                     {uploadForm.file && (
                       <div className="mt-4 inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white border border-gray-200 text-sm text-gray-700">
@@ -4264,7 +4264,7 @@ const FormsManagement = ({ driveStatus }) => {
                         <div className="space-y-2 max-h-60 overflow-y-auto">
                           {doc.versions.map((version, idx) => (
                             <div key={idx} className="bg-gray-50 rounded p-2 text-xs">
-                              <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between">
                                 <span className="font-medium">Version {version.version}</span>
                                 <span className="text-gray-500">
                                   {new Date(version.uploadedAt).toLocaleDateString()}
@@ -4489,7 +4489,7 @@ const DeanDocumentsSection = () => {
 
       {/* Search and Filter */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-        <div>
+            <div>
           <input
             type="text"
             placeholder="Search documents..."
@@ -4497,7 +4497,7 @@ const DeanDocumentsSection = () => {
             onChange={(e) => setSearchQuery(e.target.value)}
             className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-transparent text-sm"
           />
-        </div>
+            </div>
         <div>
           <select
             value={categoryFilter}
@@ -4568,10 +4568,10 @@ const DeanDocumentsSection = () => {
                     <FaDownload className="h-4 w-4" />
                   </button>
                 </div>
-              </div>
-            </div>
-                  ))}
-                </div>
+          </div>
+        </div>
+      ))}
+    </div>
                 {filteredDocuments.length > 0 && (
                   <Pagination
                     currentPage={currentPage}
@@ -4650,8 +4650,8 @@ const DeanDocumentsSection = () => {
           </div>
         </div>
       )}
-    </div>
-  );
+  </div>
+);
 };
 
 // Faculty Adviser Assignment Component
@@ -4967,11 +4967,11 @@ const FacultyAdviserAssignment = () => {
       {/* Existing Research Titles List */}
       <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
         <div className="space-y-4 p-5">
-          {researchTitles.length === 0 ? (
-            <div className="bg-gray-50 rounded-lg border border-gray-200 p-8">
-              <p className="text-gray-500 text-center text-sm">No research titles found.</p>
-            </div>
-          ) : (
+        {researchTitles.length === 0 ? (
+          <div className="bg-gray-50 rounded-lg border border-gray-200 p-8">
+            <p className="text-gray-500 text-center text-sm">No research titles found.</p>
+          </div>
+        ) : (
             (() => {
               const startIndex = (currentPage - 1) * itemsPerPage;
               const endIndex = startIndex + itemsPerPage;
@@ -5353,10 +5353,10 @@ const ResearchRecords = () => {
       <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
         <div className="space-y-4 p-5">
           {activeResearch.length === 0 ? (
-            <div className="bg-gray-50 rounded-lg border border-gray-200 p-8">
-              <p className="text-gray-500 text-center text-sm">No research records found.</p>
-            </div>
-          ) : (
+          <div className="bg-gray-50 rounded-lg border border-gray-200 p-8">
+            <p className="text-gray-500 text-center text-sm">No research records found.</p>
+          </div>
+        ) : (
             (() => {
               const startIndex = (currentPage - 1) * itemsPerPage;
               const endIndex = startIndex + itemsPerPage;
@@ -5420,14 +5420,14 @@ const ResearchRecords = () => {
                   </div>
                   <div className="flex flex-col gap-2">
                     {research.status === 'completed' && !research.finalizedDate && (
-                      <button 
+                    <button 
                         onClick={() => handleFinalizeResearch(research)}
                         disabled={loading || finalizing}
                         className="px-3 py-1 bg-green-600 text-white rounded-md text-xs font-medium hover:bg-green-700 transition-colors disabled:opacity-50"
                         title="Finalize this research to make it appear in student's Completed Thesis page"
                       >
                         Finalize
-                      </button>
+                    </button>
                     )}
                     {research.finalizedDate && (
                       <span className="px-3 py-1 bg-green-100 text-green-700 rounded-md text-xs font-medium text-center">

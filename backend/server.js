@@ -14,6 +14,7 @@ import { startBackupScheduler } from "./services/backupScheduler.js";
 import { enforceHTTPS, securityHeaders } from "./middleware/https.js";
 
 import express from 'express';
+import rateLimit from 'express-rate-limit';
 import dotenv from 'dotenv'
 import authRoutes from './routes/auth.js';
 import { connectDB } from './config/db.js';
@@ -70,6 +71,16 @@ if (process.env.NODE_ENV === "production") {
 
 app.use(express.json());
 
+// API rate limiter: 60 requests per minute per IP to prevent abuse, DoS, and server overload
+const apiLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  message: { message: 'Too many requests, please try again later.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+app.use('/api', apiLimiter);
+
 //Routes
 app.use("/api/users", authRoutes)
 
@@ -89,6 +100,9 @@ app.use("/api/backup", backupRoutes);
 
 // Error handling middleware
 app.use((err, req, res, next) => {
+  if (err && err.name === 'OutboundRateLimitError') {
+    return res.status(429).json({ message: 'Too many requests to an external service. Please try again later.' });
+  }
   console.error(err.stack);
   res.status(500).json({ message: 'Something went wrong!' });
 });

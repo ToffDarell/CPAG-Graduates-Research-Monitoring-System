@@ -16,6 +16,7 @@ import ExcelJS from "exceljs";
 import PDFDocument from "pdfkit";
 import crypto from "crypto";
 import { uploadFileToDrive } from "../utils/googleDrive.js";
+import { rateLimitedSendMail } from "../utils/outboundRateLimit.js";
 const getDeanDriveFolderId = (category) => {
   if (category) {
     const envKey = `GOOGLE_DRIVE_DEAN_${category.toUpperCase()}_FOLDER_ID`;
@@ -32,9 +33,13 @@ const getDeanDriveFolderId = (category) => {
 
 const buildDriveTokens = (user) => {
   if (!user) return null;
+  // Use decryption methods to get the actual token values
+  const accessToken = user.getDecryptedDriveAccessToken ? user.getDecryptedDriveAccessToken() : user.driveAccessToken;
+  const refreshToken = user.getDecryptedDriveRefreshToken ? user.getDecryptedDriveRefreshToken() : user.driveRefreshToken;
+  
   return {
-    access_token: user.driveAccessToken,
-    refresh_token: user.driveRefreshToken,
+    access_token: accessToken,
+    refresh_token: refreshToken,
     expiry_date: user.driveTokenExpiry ? user.driveTokenExpiry.getTime() : undefined,
   };
 };
@@ -1841,6 +1846,8 @@ export const exportResearchRecords = async (req, res) => {
     const reportsFolderId =
       process.env.GOOGLE_DRIVE_REPORTS_FOLDER_ID ||
       process.env.GOOGLE_DRIVE_DEAN_REPORTS_FOLDER_ID ||
+      process.env.GOOGLE_DRIVE_DEAN_DOCUMENTS_FOLDER_ID ||
+      process.env.GOOGLE_DRIVE_DEAN_FOLDER_ID ||
       getDeanDriveFolderId("reports");
 
     if (!reportsFolderId) {
@@ -1848,18 +1855,20 @@ export const exportResearchRecords = async (req, res) => {
     }
 
     let driveFile;
+    let driveUploadError = null;
     try {
       const { file, tokens: updatedTokens } = await uploadFileToDrive(
         tempFilePath,
         fileName,
         mimeType,
         driveTokens,
-        { parentFolderId: reportsFolderId }
+        { parentFolderId: reportsFolderId, userId: user._id.toString() }
       );
       driveFile = file;
       await applyUpdatedDriveTokens(user, updatedTokens);
       console.log("Export successfully uploaded to Google Drive");
     } catch (driveError) {
+      driveUploadError = driveError;
       console.error("Failed to upload export to Google Drive:", driveError);
       // Check if it's an invalid_grant error (token expired/revoked)
       if (driveError.response?.data?.error === 'invalid_grant' || 
@@ -1927,9 +1936,11 @@ export const exportResearchRecords = async (req, res) => {
     );
 
     res.json({
-      message: driveFile 
+      message: driveFile
         ? `Research records exported as ${normalizedFormat.toUpperCase()} and saved to your Google Drive Reports folder.`
-        : `Research records exported as ${normalizedFormat.toUpperCase()}. Note: Failed to upload to Google Drive. Please reconnect your Drive account if you want future exports saved to Drive.`,
+        : driveUploadError?.name === "OutboundRateLimitError" || driveUploadError?.message?.includes("rate limit")
+          ? `Research records exported as ${normalizedFormat.toUpperCase()}. Note: Upload to Google Drive was rate-limited. Please wait 1 minute and try exporting again.`
+          : `Research records exported as ${normalizedFormat.toUpperCase()}. Note: Failed to upload to Google Drive (${driveUploadError?.message || "unknown error"}). If this is a permissions/scope issue, disconnect & reconnect Drive in Settings, then try again.`,
       format: normalizedFormat,
       recordCount: rows.length,
       fields: selectedFields,
@@ -3009,7 +3020,7 @@ const sendEmailNotification = async (to, subject, text, html) => {
         pass: process.env.SMTP_PASS,
       },
     });
-    await transporter.sendMail({
+    await rateLimitedSendMail(transporter, {
       from: process.env.SMTP_FROM,
       to,
       subject,
@@ -3095,7 +3106,7 @@ export const inviteFaculty = async (req, res) => {
       },
     });
     
-    const emailResult = await transporter.sendMail({
+    const emailResult = await rateLimitedSendMail(transporter, {
       from: process.env.SMTP_FROM,
       to: email,
       subject: "Faculty Invitation - CPAG Masteral Research Archive and Monitoring System",
@@ -3583,9 +3594,11 @@ export const exportDefenseSchedule = async (req, res) => {
     const reportsFolderId =
       process.env.GOOGLE_DRIVE_REPORTS_FOLDER_ID ||
       process.env.GOOGLE_DRIVE_DEAN_REPORTS_FOLDER_ID ||
+      process.env.GOOGLE_DRIVE_DEAN_FOLDER_ID ||
       getDeanDriveFolderId("reports");
 
     let driveFile = null;
+    let driveUploadError = null;
     if (driveTokens?.access_token && reportsFolderId) {
       try {
         const { file, tokens: updatedTokens } = await uploadFileToDrive(
@@ -3593,12 +3606,13 @@ export const exportDefenseSchedule = async (req, res) => {
           fileName,
           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
           driveTokens,
-          { parentFolderId: reportsFolderId }
+          { parentFolderId: reportsFolderId, userId: user._id.toString() }
         );
         driveFile = file;
         await applyUpdatedDriveTokens(user, updatedTokens);
         console.log("Defense schedule export successfully uploaded to Google Drive");
       } catch (driveError) {
+        driveUploadError = driveError;
         console.error("Failed to upload export to Google Drive:", driveError);
         // Check if it's an invalid_grant error (token expired/revoked)
         if (driveError.response?.data?.error === 'invalid_grant' || 
@@ -3669,9 +3683,11 @@ export const exportDefenseSchedule = async (req, res) => {
     }
 
     res.json({
-      message: driveFile 
+      message: driveFile
         ? `Defense schedule exported as XLSX and saved to your Google Drive Reports folder.`
-        : `Defense schedule exported as XLSX. Note: Failed to upload to Google Drive. Please reconnect your Drive account if you want future exports saved to Drive.`,
+        : driveUploadError?.name === "OutboundRateLimitError" || driveUploadError?.message?.includes("rate limit")
+          ? `Defense schedule exported as XLSX. Note: Upload to Google Drive was rate-limited. Please wait 1 minute and try exporting again.`
+          : `Defense schedule exported as XLSX. Note: Failed to upload to Google Drive (${driveUploadError?.message || "unknown error"}). If this is a permissions/scope issue, disconnect & reconnect Drive in Settings, then try again.`,
       format: "xlsx",
       recordCount: schedules.length,
       driveFile,

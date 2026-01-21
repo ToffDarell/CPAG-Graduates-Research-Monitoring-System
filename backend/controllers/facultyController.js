@@ -15,6 +15,7 @@ import {
   deleteCalendarEvent 
 } from "../utils/googleCalendar.js";
 import { downloadFileFromDrive } from "../utils/googleDrive.js";
+import { rateLimitedSendMail } from "../utils/outboundRateLimit.js";
 
 // Helper function to send email notification
 const sendNotificationEmail = async (to, subject, message, html) => {
@@ -30,7 +31,7 @@ const sendNotificationEmail = async (to, subject, message, html) => {
       },
     });
 
-    await transporter.sendMail({
+    await rateLimitedSendMail(transporter, {
       from: process.env.SMTP_FROM || process.env.SMTP_USER,
       to,
       subject,

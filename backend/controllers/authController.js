@@ -7,6 +7,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import crypto from 'crypto';
 import nodemailer from 'nodemailer';
+import { checkOutboundLimit, rateLimitedSendMail, OutboundRateLimitError } from '../utils/outboundRateLimit.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -23,6 +24,8 @@ const client = new OAuth2Client(CLIENT_ID);
 export const verifyRecaptchaToken = async (recaptchaToken, remoteIp) => {
     try {
         if (!recaptchaToken) return false;
+
+        checkOutboundLimit('recaptcha', 60, remoteIp || 'unknown');
 
         const secretKey = process.env.RECAPTCHA_SECRET_KEY;
         if (!secretKey) return false;
@@ -122,6 +125,9 @@ export const completeRegistration = async (req, res) => {
             },
         });
     } catch (error) {
+        if (error instanceof OutboundRateLimitError) {
+            return res.status(429).json({ message: 'Too many requests. Please try again later.' });
+        }
         console.error('Registration completion error:', error);
         res.status(500).json({ message: error.message || 'Error completing registration' });
     }
@@ -268,6 +274,9 @@ export const login = async (req, res) => {
             token,
         });
     } catch (err) {
+        if (err instanceof OutboundRateLimitError) {
+            return res.status(429).json({ message: 'Too many requests. Please try again later.' });
+        }
         console.error('Login error:', err);
         console.error('Error stack:', err.stack);
         res.status(500).json({ 
@@ -323,7 +332,7 @@ export const forgotPassword = async (req, res) => {
             },
         });
 
-        await transporter.sendMail({
+        await rateLimitedSendMail(transporter, {
             from: process.env.SMTP_FROM || process.env.SMTP_USER,
             to: user.email,
             subject: 'Password Reset Request',
@@ -656,7 +665,7 @@ export const requestChangePasswordCode = async (req, res) => {
             },
         });
 
-        await transporter.sendMail({
+        await rateLimitedSendMail(transporter, {
             from: process.env.SMTP_FROM || process.env.SMTP_USER,
             to: user.email,
             subject: 'Password Change Verification Code',

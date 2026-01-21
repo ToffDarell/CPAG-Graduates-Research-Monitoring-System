@@ -15,6 +15,7 @@ import PDFDocument from "pdfkit";
 import ExcelJS from "exceljs";
 import { createConsultationEvent, deleteCalendarEvent } from "../utils/googleCalendar.js";
 import { uploadFileToDrive } from "../utils/googleDrive.js";
+import { rateLimitedSendMail } from "../utils/outboundRateLimit.js";
 
 const getPanelDriveFolderId = () => {
   return (
@@ -27,9 +28,13 @@ const getPanelDriveFolderId = () => {
 
 const buildDriveTokens = (user) => {
   if (!user) return null;
+  // Use decryption methods to get the actual token values
+  const accessToken = user.getDecryptedDriveAccessToken ? user.getDecryptedDriveAccessToken() : user.driveAccessToken;
+  const refreshToken = user.getDecryptedDriveRefreshToken ? user.getDecryptedDriveRefreshToken() : user.driveRefreshToken;
+  
   return {
-    access_token: user.driveAccessToken,
-    refresh_token: user.driveRefreshToken,
+    access_token: accessToken,
+    refresh_token: refreshToken,
     expiry_date: user.driveTokenExpiry ? user.driveTokenExpiry.getTime() : undefined,
   };
 };
@@ -241,7 +246,7 @@ export const createPanel = async (req, res) => {
           ? studentNames.join(", ") 
           : "Not specified";
 
-        await transporter.sendMail({
+        await rateLimitedSendMail(transporter, {
           from: process.env.SMTP_FROM,
           to: panelistEmails.join(","),
           subject: `Panel Assignment: ${name}`,
@@ -1101,7 +1106,7 @@ export const updateSchedule = async (req, res) => {
           const researchTitle = schedule.research?.title || schedule.panel?.research?.title || "Research";
           const panelName = schedule.panel?.name || schedule.title;
 
-          await transporter.sendMail({
+          await rateLimitedSendMail(transporter, {
             from: process.env.SMTP_FROM,
             to: uniqueEmails.join(","),
             subject: `Schedule Updated: ${panelName}`,
@@ -1306,7 +1311,7 @@ export const deleteSchedule = async (req, res) => {
           const researchTitle = scheduleForEmail.research?.title || "Research";
           const panelName = scheduleForEmail.panel?.name || scheduleForEmail.title;
 
-          await transporter.sendMail({
+          await rateLimitedSendMail(transporter, {
             from: process.env.SMTP_FROM,
             to: uniqueEmails.join(","),
             subject: `Schedule Cancelled: ${panelName}`,
@@ -1482,7 +1487,7 @@ export const archiveSchedule = async (req, res) => {
             minute: '2-digit',
           });
 
-          await transporter.sendMail({
+          await rateLimitedSendMail(transporter, {
             from: process.env.SMTP_FROM,
             to: uniqueEmails.join(","),
             subject: `Schedule Cancelled: ${schedule.panel.name}`,
@@ -2111,7 +2116,7 @@ export const invitePanelist = async (req, res) => {
         ? new Date(reviewDeadline).toLocaleDateString() 
         : "To be determined";
 
-      await transporter.sendMail({
+      await rateLimitedSendMail(transporter, {
         from: process.env.SMTP_FROM,
         to: email,
         subject: `Panel Invitation: ${panel.name}`,
@@ -2433,7 +2438,7 @@ export const uploadPanelDocument = async (req, res) => {
           req.file.originalname,
           req.file.mimetype,
           driveTokens,
-          { parentFolderId: driveFolderId }
+          { parentFolderId: driveFolderId, userId: uploader._id.toString() }
         );
         driveFileData = driveFile;
         await applyUpdatedDriveTokens(uploader, updatedTokens);
@@ -2574,7 +2579,7 @@ export const uploadPanelDocument = async (req, res) => {
               ? new Date(panel.reviewDeadline).toLocaleDateString() 
               : "To be determined";
             try {
-              await transporter.sendMail({
+              await rateLimitedSendMail(transporter, {
                 from: process.env.SMTP_FROM,
                 to: member.email,
                 subject: `New Document Available: ${title} - ${panel.name}`,
@@ -2623,7 +2628,7 @@ export const uploadPanelDocument = async (req, res) => {
           } else {
             // Fallback: External panelist without token - send notification to contact Program Head
             try {
-              await transporter.sendMail({
+              await rateLimitedSendMail(transporter, {
                 from: process.env.SMTP_FROM,
                 to: member.email,
                 subject: `New Document Available: ${title} - ${panel.name}`,
@@ -2671,7 +2676,7 @@ export const uploadPanelDocument = async (req, res) => {
       console.log(`[Document Upload] Internal emails: ${internalEmails.join(', ')}`);
       console.log(`[Document Upload] External emails tracked: ${Array.from(externalEmails).join(', ')}`);
       if (internalEmails.length > 0) {
-        await transporter.sendMail({
+        await rateLimitedSendMail(transporter, {
           from: process.env.SMTP_FROM,
           to: internalEmails.join(","),
           subject: `New Document Available: ${title} - ${panel.name}`,
@@ -2851,7 +2856,7 @@ export const replacePanelDocument = async (req, res) => {
           req.file.originalname,
           req.file.mimetype,
           driveTokens,
-          { parentFolderId: driveFolderId }
+          { parentFolderId: driveFolderId, userId: uploader._id.toString() }
         );
         driveFileData = driveFile;
         await applyUpdatedDriveTokens(uploader, updatedTokens);
@@ -2973,7 +2978,7 @@ export const replacePanelDocument = async (req, res) => {
               ? new Date(panel.reviewDeadline).toLocaleDateString() 
               : "To be determined";
             try {
-              await transporter.sendMail({
+              await rateLimitedSendMail(transporter, {
                 from: process.env.SMTP_FROM,
                 to: member.email,
                 subject: `Document Updated: ${existingDoc.title} - ${panel.name}`,
@@ -3023,7 +3028,7 @@ export const replacePanelDocument = async (req, res) => {
           } else {
             // Fallback: External panelist without token - send notification to contact Program Head
             try {
-              await transporter.sendMail({
+              await rateLimitedSendMail(transporter, {
                 from: process.env.SMTP_FROM,
                 to: member.email,
                 subject: `Document Updated: ${existingDoc.title} - ${panel.name}`,
@@ -3069,7 +3074,7 @@ export const replacePanelDocument = async (req, res) => {
       const internalEmails = internalMembers.map(m => m.faculty.email).filter(Boolean);
       console.log(`[Document Replace] Internal members found: ${internalMembers.length}`);
       if (internalEmails.length > 0) {
-        await transporter.sendMail({
+        await rateLimitedSendMail(transporter, {
           from: process.env.SMTP_FROM,
           to: internalEmails.join(","),
           subject: `Document Updated: ${existingDoc.title} - ${panel.name}`,
@@ -4314,9 +4319,20 @@ const generatePanelRecordsExcelBuffer = async (panelData, { generatedBy, filters
 };
 
 export const exportPanelRecords = async (req, res) => {
+  // Write to file to confirm function is called
+  try {
+    await fs.promises.appendFile('export-debug.log', `\n\n[${new Date().toISOString()}] Export function called\n`);
+  } catch (e) {}
+  
+  console.log('\n\n========================================');
+  console.log('🔥🔥🔥 [Export Panel Records] FUNCTION CALLED 🔥🔥🔥');
+  console.log('========================================\n');
+  
   let tempDirPath = null;
   try {
-    console.log('[Export] Starting panel records export');
+    console.log('[Export Panel Records] Starting panel records export');
+    console.log('[Export Panel Records] Request body:', JSON.stringify(req.body));
+    console.log('[Export Panel Records] User ID:', req.user?.id);
     const { filters = {}, format = "pdf" } = req.body || {};
     const { 
       status, 
@@ -4710,46 +4726,139 @@ export const exportPanelRecords = async (req, res) => {
     const tempFilePath = path.join(tempDirPath, fileName);
     await fs.promises.writeFile(tempFilePath, fileBuffer);
 
+    console.log("[Export Panel Records] User Drive connection status:", {
+      hasDriveAccessToken: !!user.driveAccessToken,
+      hasDriveRefreshToken: !!user.driveRefreshToken,
+      driveConnected: user.driveConnected,
+      driveTokenExpiry: user.driveTokenExpiry
+    });
+    
+    console.log("[Export Panel Records] Building Drive tokens...");
     const driveTokens = buildDriveTokens(user);
+    
+    // Log to file
+    try {
+      await fs.promises.appendFile('export-debug.log', 
+        `Drive tokens: hasAccess=${!!driveTokens?.access_token}, hasRefresh=${!!driveTokens?.refresh_token}\n` +
+        `Access token length: ${driveTokens?.access_token?.length || 0}\n` +
+        `Refresh token length: ${driveTokens?.refresh_token?.length || 0}\n`
+      );
+    } catch (e) {}
+    
+    console.log("[Export Panel Records] Drive tokens built:", {
+      hasAccessToken: !!driveTokens?.access_token,
+      hasRefreshToken: !!driveTokens?.refresh_token,
+      accessTokenLength: driveTokens?.access_token?.length || 0,
+      refreshTokenLength: driveTokens?.refresh_token?.length || 0,
+      expiryDate: driveTokens?.expiry_date ? new Date(driveTokens.expiry_date).toISOString() : 'N/A'
+    });
+    
     if (!driveTokens?.access_token) {
+      console.error("[Export Panel Records] ERROR: No access token found!");
+      
+      // Log to file
+      try {
+        await fs.promises.appendFile('export-debug.log', `ERROR: No access token!\n`);
+      } catch (e) {}
+      
       throw new Error("Unable to read Google Drive credentials. Please reconnect your Drive account.");
     }
 
+    console.log("[Export Panel Records] Getting Panel folder ID...");
     const reportsFolderId =
-      process.env.GOOGLE_DRIVE_REPORTS_FOLDER_ID ||
-      process.env.GOOGLE_DRIVE_PROGRAM_HEAD_REPORTS_FOLDER_ID ||
+      process.env.GOOGLE_DRIVE_PROGRAM_HEAD_PANEL_FOLDER_ID ||
+      process.env.GOOGLE_DRIVE_PROGRAM_HEAD_FOLDER_ID ||
       getPanelDriveFolderId();
 
+    console.log("[Export Panel Records] Panel folder ID:", reportsFolderId || 'NOT FOUND');
+    
     if (!reportsFolderId) {
-      throw new Error("Reports folder ID is not configured. Please set GOOGLE_DRIVE_REPORTS_FOLDER_ID.");
+      console.error("[Export Panel Records] ERROR: Panel folder ID not configured!");
+      throw new Error("Panel folder ID is not configured. Please set GOOGLE_DRIVE_PROGRAM_HEAD_PANEL_FOLDER_ID.");
     }
 
     let driveFile;
+    let driveUploadError = null;
     try {
+      console.log("========================================");
+      console.log("[Export Panel Records] PREPARING TO UPLOAD TO GOOGLE DRIVE");
+      console.log("[Export Panel Records] Upload details:", {
+        hasAccessToken: !!driveTokens?.access_token,
+        hasRefreshToken: !!driveTokens?.refresh_token,
+        tokenExpiry: driveTokens?.expiry_date ? new Date(driveTokens.expiry_date).toISOString() : 'N/A',
+        reportsFolderId,
+        fileName,
+        tempFilePath,
+        userId: user._id.toString()
+      });
+      
+      console.log("[Export Panel Records] CALLING uploadFileToDrive NOW...");
       const { file, tokens: updatedTokens } = await uploadFileToDrive(
         tempFilePath,
         fileName,
         mimeType,
         driveTokens,
-        { parentFolderId: reportsFolderId }
+        { parentFolderId: reportsFolderId, userId: user._id.toString() }
       );
+      
+      if (!file || !file.id) {
+        throw new Error("Upload succeeded but did not return a valid file ID.");
+      }
+      
       driveFile = file;
       await applyUpdatedDriveTokens(user, updatedTokens);
-      console.log("Export successfully uploaded to Google Drive");
+      console.log("[Export Panel Records] Successfully uploaded to Google Drive:", {
+        fileId: file.id,
+        fileName: file.name,
+        webViewLink: file.webViewLink
+      });
     } catch (driveError) {
-      console.error("Failed to upload export to Google Drive:", driveError);
+      driveUploadError = driveError;
+      // Log to file
+      try {
+        await fs.promises.appendFile('export-debug.log', 
+          `DRIVE UPLOAD FAILED: ${driveError.message}\nStack: ${driveError.stack}\n`
+        );
+      } catch (e) {}
+      
+      console.error("========================================");
+      console.error("[Export Panel Records] FAILED TO UPLOAD TO GOOGLE DRIVE");
+      console.error("[Export Panel Records] Error details:", {
+        error: driveError.message,
+        errorName: driveError.name,
+        errorType: driveError.constructor?.name,
+        stack: driveError.stack,
+        response: driveError.response?.data,
+        status: driveError.response?.status,
+        statusText: driveError.response?.statusText
+      });
+      
+      // Check if it's a rate limit error
+      if (driveError.name === 'OutboundRateLimitError' || 
+          driveError.message?.includes('rate limit') ||
+          driveError.message?.includes('Too many requests')) {
+        console.error("[Export Panel Records] ⚠️ RATE LIMIT ERROR - Too many Google Drive requests!");
+        console.error("[Export Panel Records] You've exceeded 5 Google Drive calls per minute.");
+        console.error("[Export Panel Records] Please wait 1 minute before trying again.");
+        // Continue without Drive upload - export can still succeed
+        console.log("[Export Panel Records] Drive upload failed due to rate limit, but export will continue without Drive storage");
+      }
       // Check if it's an invalid_grant error (token expired/revoked)
-      if (driveError.response?.data?.error === 'invalid_grant' || 
+      else if (driveError.response?.data?.error === 'invalid_grant' || 
           driveError.message?.includes('invalid_grant')) {
+        console.error("[Export Panel Records] INVALID GRANT ERROR - Token expired/revoked");
         // Clear stored Drive tokens
         user.driveAccessToken = undefined;
         user.driveRefreshToken = undefined;
         user.driveTokenExpiry = undefined;
         await user.save();
-        console.log("Cleared expired Drive tokens for user:", user._id);
+        console.log("[Export Panel Records] Cleared expired Drive tokens for user:", user._id);
+      } else {
+        console.error("[Export Panel Records] UNKNOWN ERROR - Other Google Drive error");
       }
+      
       // Continue without Drive upload - export can still succeed
-      console.log("Drive upload failed, but export will continue without Drive storage");
+      console.log("[Export Panel Records] Drive upload failed, but export will continue without Drive storage");
       driveFile = null;
     }
 
@@ -4807,16 +4916,32 @@ export const exportPanelRecords = async (req, res) => {
       console.error('Error cleaning up temp files:', cleanupError);
     }
 
+    console.log("[Export Panel Records] Preparing response:", {
+      hasDriveFile: !!driveFile,
+      driveFileId: driveFile?.id,
+      recordCount: panelData.length
+    });
+    
+    const exportedAs = format === "excel" || format === "xlsx" ? "Excel" : "PDF";
+    const responseMessage = driveFile
+      ? `Panel records exported as ${exportedAs} and saved to your Google Drive Panel folder.`
+      : driveUploadError?.name === "OutboundRateLimitError" || driveUploadError?.message?.includes("rate limit")
+        ? `Panel records exported as ${exportedAs}. Note: Upload to Google Drive was rate-limited. Please wait 1 minute and try exporting again.`
+        : `Panel records exported as ${exportedAs}. Note: Failed to upload to Google Drive (${driveUploadError?.message || "unknown error"}). If this is a permissions/scope issue, disconnect & reconnect Drive in Settings, then try again.`;
+    
+    console.log("[Export Panel Records] Response message:", responseMessage);
+    console.log("[Export Panel Records] Sending response to client...");
+    
     res.json({
-      message: driveFile 
-        ? `Panel records exported as PDF and saved to your Google Drive Reports folder.`
-        : `Panel records exported as PDF. Note: Failed to upload to Google Drive. Please reconnect your Drive account if you want future exports saved to Drive.`,
+      message: responseMessage,
       format: "pdf",
       recordCount: panelData.length,
       driveFile,
       filters: filtersSummary || null,
       exportId: exportRecord?._id || null
     });
+    
+    console.log("[Export Panel Records] Response sent successfully");
   } catch (error) {
     console.error("Error exporting panel records:", error);
     console.error("Error stack:", error.stack);
@@ -4854,6 +4979,11 @@ export const exportPanelRecords = async (req, res) => {
 export const exportDefenseSchedule = async (req, res) => {
   let tempDirPath = null;
   try {
+    console.log('\n\n========================================');
+    console.log('🚀 [EXPORT DEFENSE SCHEDULE] FUNCTION CALLED');
+    console.log('========================================');
+    console.log('[Export] User ID:', req.user?.id);
+    console.log('[Export] Request body:', JSON.stringify(req.body));
     console.log('[Export] Starting defense schedule export');
     const { filters = {} } = req.body || {};
     const { startDate, endDate, type } = filters;
@@ -4910,9 +5040,9 @@ export const exportDefenseSchedule = async (req, res) => {
     }
 
     const user = await User.findById(req.user.id);
-    if (!user || !user.driveAccessToken) {
+    if (!user) {
       return res.status(400).json({
-        message: "Please connect your Google Drive account in Settings before exporting defense schedules."
+        message: "User not found. Please log in again."
       });
     }
 
@@ -5209,27 +5339,99 @@ export const exportDefenseSchedule = async (req, res) => {
     await fs.promises.writeFile(tempFilePath, excelBuffer);
 
     // Upload to Google Drive (optional)
+    console.log('\n[Export] ========== GOOGLE DRIVE UPLOAD SECTION ==========');
+    console.log('[Export] User drive connection status:', {
+      hasDriveAccessToken: !!user.driveAccessToken,
+      hasDriveRefreshToken: !!user.driveRefreshToken,
+      driveConnected: user.driveConnected,
+      driveTokenExpiry: user.driveTokenExpiry
+    });
+    
     const driveTokens = buildDriveTokens(user);
+    console.log('[Export] Drive tokens built:', {
+      hasAccessToken: !!driveTokens?.access_token,
+      hasRefreshToken: !!driveTokens?.refresh_token,
+      accessTokenLength: driveTokens?.access_token?.length || 0,
+      refreshTokenLength: driveTokens?.refresh_token?.length || 0,
+      expiryDate: driveTokens?.expiry_date ? new Date(driveTokens.expiry_date).toISOString() : 'N/A'
+    });
+    
     const reportsFolderId =
-      process.env.GOOGLE_DRIVE_REPORTS_FOLDER_ID ||
-      process.env.GOOGLE_DRIVE_PROGRAM_HEAD_REPORTS_FOLDER_ID ||
-      getPanelDriveFolderId();
+        process.env.GOOGLE_DRIVE_PROGRAM_HEAD_SCHEDULES_FOLDER_ID ||
+        process.env.GOOGLE_DRIVE_PROGRAM_HEAD_FOLDER_ID ||
+        getPanelDriveFolderId();
+    
+    console.log('[Export] Reports folder ID:', reportsFolderId || 'NOT FOUND');
+    console.log('[Export] Environment variables check:', {
+      GOOGLE_DRIVE_PROGRAM_HEAD_SCHEDULES_FOLDER_ID: !!process.env.GOOGLE_DRIVE_PROGRAM_HEAD_SCHEDULES_FOLDER_ID,
+      GOOGLE_DRIVE_PROGRAM_HEAD_FOLDER_ID: !!process.env.GOOGLE_DRIVE_PROGRAM_HEAD_FOLDER_ID
+    });
 
     let driveFile = null;
+    let driveUploadError = null;
+    
+    // Verify temp file exists before attempting upload
+    try {
+      const fileStats = await fs.promises.stat(tempFilePath);
+      console.log("[Export Defense Schedule] Temp file created:", {
+        path: tempFilePath,
+        size: fileStats.size,
+        fileName
+      });
+    } catch (statError) {
+      console.error("[Export Defense Schedule] Temp file check failed:", statError);
+    }
+
     if (driveTokens?.access_token && reportsFolderId) {
+      console.log("\n[Export Defense Schedule] ✅ Both access token and folder ID present");
+      console.log("[Export Defense Schedule] Attempting Google Drive upload:", {
+        hasAccessToken: !!driveTokens.access_token,
+        reportsFolderId,
+        fileName,
+        tempFilePath,
+        userId: user._id.toString()
+      });
+      console.log("[Export Defense Schedule] Calling uploadFileToDrive...\n");
+      
       try {
         const { file, tokens: updatedTokens } = await uploadFileToDrive(
           tempFilePath,
           fileName,
           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
           driveTokens,
-          { parentFolderId: reportsFolderId }
+          { parentFolderId: reportsFolderId, userId: user._id.toString() }
         );
+        
+        if (!file || !file.id) {
+          throw new Error("Upload succeeded but did not return a valid file ID.");
+        }
+        
         driveFile = file;
         await applyUpdatedDriveTokens(user, updatedTokens);
-        console.log("Defense schedule export successfully uploaded to Google Drive");
+        console.log("[Export Defense Schedule] Successfully uploaded to Google Drive:", {
+          fileId: file.id,
+          fileName: file.name,
+          webViewLink: file.webViewLink
+        });
       } catch (driveError) {
-        console.error("Failed to upload export to Google Drive:", driveError);
+        driveUploadError = driveError;
+        console.error("\n========================================");
+        console.error("❌ [Export Defense Schedule] FAILED TO UPLOAD TO GOOGLE DRIVE");
+        console.error("========================================");
+        console.error("[Export Defense Schedule] Error name:", driveError.name);
+        console.error("[Export Defense Schedule] Error message:", driveError.message);
+        console.error("[Export Defense Schedule] Error response:", driveError.response?.data);
+        console.error("[Export Defense Schedule] Error status:", driveError.response?.status);
+        console.error("[Export Defense Schedule] Full error:", {
+          name: driveError.name,
+          message: driveError.message,
+          response: driveError.response?.data,
+          status: driveError.response?.status,
+          statusText: driveError.response?.statusText,
+          stack: driveError.stack
+        });
+        console.error("========================================\n");
+        
         // Check if it's an invalid_grant error (token expired/revoked)
         if (driveError.response?.data?.error === 'invalid_grant' || 
             driveError.message?.includes('invalid_grant')) {
@@ -5238,13 +5440,21 @@ export const exportDefenseSchedule = async (req, res) => {
           user.driveRefreshToken = undefined;
           user.driveTokenExpiry = undefined;
           await user.save();
-          console.log("Cleared expired Drive tokens for user:", user._id);
+          console.log("[Export Defense Schedule] Cleared expired Drive tokens for user:", user._id);
         }
         // Continue without Drive upload - export can still succeed
-        console.log("Drive upload failed, but export will continue without Drive storage");
       }
     } else {
-      console.log("Google Drive not configured or not connected, export will continue without Drive storage");
+      console.log("\n[Export Defense Schedule] ⚠️  SKIPPING DRIVE UPLOAD");
+      if (!driveTokens?.access_token) {
+        console.log("[Export Defense Schedule] ❌ Reason: No access token");
+        console.log("[Export Defense Schedule] User driveAccessToken exists:", !!user.driveAccessToken);
+        console.log("[Export Defense Schedule] User driveConnected:", user.driveConnected);
+      }
+      if (!reportsFolderId) {
+        console.log("[Export Defense Schedule] ❌ Reason: No folder ID configured");
+      }
+      console.log("========================================\n");
     }
 
     // Save export record
@@ -5296,10 +5506,32 @@ export const exportDefenseSchedule = async (req, res) => {
       console.error('Error cleaning up temp files:', cleanupError);
     }
 
+    let message = `Defense schedule exported as XLSX.`;
+    if (driveFile) {
+      message += ` File saved to your Google Drive Schedules folder.`;
+      console.log("\n✅ [Export Defense Schedule] SUCCESS - File uploaded to Drive");
+    } else if (driveTokens?.access_token && reportsFolderId) {
+      if (driveUploadError?.name === "OutboundRateLimitError" || driveUploadError?.message?.includes("rate limit")) {
+        message += ` Note: Upload to Google Drive was rate-limited. Please wait 1 minute and try exporting again.`;
+        console.log("\n⚠️  [Export Defense Schedule] RATE LIMITED");
+      } else {
+        const errorMsg = driveUploadError?.message || "unknown error";
+        message += ` Note: Failed to upload to Google Drive (${errorMsg}). Check backend logs for details.`;
+        console.log("\n❌ [Export Defense Schedule] UPLOAD FAILED - Error:", errorMsg);
+      }
+    } else if (!driveTokens?.access_token) {
+      message += ` Note: Google Drive is not connected. Connect your Drive account in Settings to save exports to Drive.`;
+      console.log("\n⚠️  [Export Defense Schedule] NO ACCESS TOKEN");
+    } else if (!reportsFolderId) {
+      message += ` Note: Google Drive folder is not configured. Please configure GOOGLE_DRIVE_REPORTS_FOLDER_ID.`;
+      console.log("\n⚠️  [Export Defense Schedule] NO FOLDER ID");
+    }
+    
+    console.log('\n[Export Defense Schedule] Final message:', message);
+    console.log('========================================\n');
+
     res.json({
-      message: driveFile 
-        ? `Defense schedule exported as XLSX and saved to your Google Drive Reports folder.`
-        : `Defense schedule exported as XLSX. Note: Failed to upload to Google Drive. Please reconnect your Drive account if you want future exports saved to Drive.`,
+      message,
       format: "xlsx",
       recordCount: schedules.length,
       driveFile,
@@ -5485,7 +5717,7 @@ export const finalizeSchedule = async (req, res) => {
                           "Final Defense";
 
       if (uniqueEmails.length > 0) {
-        await transporter.sendMail({
+        await rateLimitedSendMail(transporter, {
           from: process.env.SMTP_FROM,
           to: uniqueEmails.join(","),
           subject: `${scheduleType} Schedule Finalized: ${schedule.title}`,
@@ -5939,7 +6171,7 @@ export const createPanelSchedule = async (req, res) => {
       if (uniqueEmails.length > 0) {
         const researchTitle = panel.research?.title || "Research";
         
-        await transporter.sendMail({
+        await rateLimitedSendMail(transporter, {
           from: process.env.SMTP_FROM,
           to: uniqueEmails.join(","),
           subject: `Panel Defense Schedule Finalized: ${panel.name}`,

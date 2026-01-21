@@ -2536,9 +2536,9 @@ const ComplianceForms = ({ myResearch, onFormUpload }) => {
               onFilePicked={handleGoogleDriveFileSelected}
             />
       </div>
-          <input
+          <input 
             ref={fileInputRef}
-            type="file"
+            type="file" 
             onChange={handleFileInputChange}
             accept=".pdf,.doc,.docx"
             className="hidden"
@@ -2565,7 +2565,7 @@ const ComplianceForms = ({ myResearch, onFormUpload }) => {
           >
             <div className="flex justify-between items-center mb-4">
               <h3 className="text-lg font-semibold text-gray-800">Upload Compliance Form</h3>
-              <button
+          <button 
                 type="button"
                 onClick={(e) => {
                   e.preventDefault();
@@ -2576,7 +2576,7 @@ const ComplianceForms = ({ myResearch, onFormUpload }) => {
                 className="text-gray-500 hover:text-gray-700"
               >
                 <FaClose className="h-6 w-6" />
-              </button>
+          </button>
         </div>
 
             {selectedFile && (
@@ -2589,7 +2589,7 @@ const ComplianceForms = ({ myResearch, onFormUpload }) => {
                 {selectedFile.isDriveFile && (
                   <p className="text-xs text-blue-600 mt-1">📁 From Google Drive</p>
                 )}
-            </div>
+      </div>
             )}
 
             <div className="mb-4">
@@ -3230,7 +3230,7 @@ const ProgressTracking = ({ data, loading, error, onRefresh, fallback, feedback 
                       <span className="text-xs text-gray-400">
                         {new Date(item.createdAt).toLocaleDateString()}
                     </span>
-                    </div>
+                  </div>
                     <p className="text-xs text-gray-500 capitalize mb-1">{item.type}</p>
                     <p className="text-sm text-gray-700 mb-2">{item.message}</p>
                     {item.file && (
@@ -3243,10 +3243,10 @@ const ProgressTracking = ({ data, loading, error, onRefresh, fallback, feedback 
                           ? `View Feedback (${item.totalComments || item.commentCount})`
                           : 'View Document'}
                       </button>
-                    )}
-                  </div>
-                ))
-              ) : (
+                )}
+              </div>
+            ))
+          ) : (
                 <p className="text-sm text-gray-500">No feedback yet.</p>
               )}
             </div>
@@ -3416,14 +3416,14 @@ const CompletedThesis = () => {
 
       {/* Thesis List */}
       {loading ? (
-        <div className="text-center py-8">
+            <div className="text-center py-8">
           <p className="text-gray-500">Loading...</p>
         </div>
       ) : filteredThesis.length === 0 ? (
         <div className="bg-white rounded-lg border border-gray-200 p-8 text-center">
-          <FaFileAlt className="mx-auto h-12 w-12 text-gray-400 mb-3" />
+              <FaFileAlt className="mx-auto h-12 w-12 text-gray-400 mb-3" />
           <p className="text-gray-500 text-sm">No completed thesis found.</p>
-        </div>
+            </div>
       ) : (
         <div className="space-y-4">
           {filteredThesis.map((thesis) => (
@@ -3439,8 +3439,8 @@ const CompletedThesis = () => {
                       <span className="px-2 py-1 bg-blue-100 text-blue-700 rounded-full text-xs font-medium">
                         Grade: {thesis.finalGrade}
                       </span>
-                    )}
-                  </div>
+          )}
+        </div>
                   
                   {thesis.abstract && (
                     <p className="text-sm text-gray-600 mb-3 line-clamp-2">{thesis.abstract}</p>
@@ -3452,7 +3452,7 @@ const CompletedThesis = () => {
                       <p className="text-gray-800">
                         {thesis.submissionDate ? new Date(thesis.submissionDate).toLocaleDateString() : 'N/A'}
                       </p>
-                    </div>
+      </div>
                     <div>
                       <span className="font-medium">Finalized Date:</span>
                       <p className="text-gray-800">
@@ -3754,14 +3754,14 @@ const DocumentsView = () => {
         setViewerOpen(true);
       } else {
         // For PDF and other types, show in an embedded viewer
-        const response = await axios.get(`/api/student/documents/${doc._id}`, {
-          headers: { Authorization: `Bearer ${token}` },
-          responseType: 'blob'
-        });
-
+      const response = await axios.get(`/api/student/documents/${doc._id}`, {
+        headers: { Authorization: `Bearer ${token}` },
+        responseType: 'blob'
+      });
+      
         const contentType = response.headers['content-type'] || mimeType || 'application/pdf';
         const blob = new Blob([response.data], { type: contentType });
-        const url = URL.createObjectURL(blob);
+      const url = URL.createObjectURL(blob);
 
         setViewerType('pdf');
         setViewerUrl(url);
@@ -3903,7 +3903,7 @@ const DocumentsView = () => {
           </div>
         ) : (
           <>
-            <div className="divide-y divide-gray-200">
+          <div className="divide-y divide-gray-200">
               {(() => {
                 const startIndex = (currentPage - 1) * itemsPerPage;
                 const endIndex = startIndex + itemsPerPage;
@@ -3919,7 +3919,7 @@ const DocumentsView = () => {
                       <span className={`px-2 py-1 rounded-full text-xs font-medium ${getCategoryColor(doc.category)}`}>
                         {doc.category}
                       </span>
-            </div>
+                    </div>
                     {doc.description && (
                       <p className="text-sm text-gray-600 mb-2">{doc.description}</p>
                     )}
@@ -3929,7 +3929,7 @@ const DocumentsView = () => {
                       <span>{new Date(doc.createdAt).toLocaleDateString()}</span>
                       <span>•</span>
                       <span>{formatFileSize(doc.fileSize)}</span>
-        </div>
+                    </div>
                   </div>
                   <div className="flex items-center space-x-2 ml-4">
                     <button
@@ -3951,7 +3951,7 @@ const DocumentsView = () => {
               </div>
                 ));
               })()}
-            </div>
+          </div>
             {filteredDocuments.length > 0 && (() => {
               const startIndex = (currentPage - 1) * itemsPerPage;
               const endIndex = Math.min(startIndex + itemsPerPage, filteredDocuments.length);

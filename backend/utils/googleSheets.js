@@ -1,5 +1,6 @@
 import { google } from "googleapis";
 import User from "../models/User.js";
+import { checkOutboundLimit } from "./outboundRateLimit.js";
 
 // Create OAuth2 Client for Google Sheets
 // Reuses Google Drive OAuth credentials and redirect URI for simplicity
@@ -37,6 +38,7 @@ export const getSheetsAuthUrl = () => {
 
 // Get authenticated Sheets client with automatic token refresh
 export const getSheetsClient = async (userId, accessToken, refreshToken) => {
+  checkOutboundLimit('gsheets', 60, 'global');
   const oauth2Client = createSheetsOAuthClient();
 
   // Set up token refresh listener to automatically update database

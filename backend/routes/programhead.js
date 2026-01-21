@@ -179,4 +179,4 @@ router.get("/documents", checkPermission("view_documents"), getAvailableDocument
 router.get("/documents/:id", checkPermission("view_documents"), viewDocument);
 router.get("/documents/:id/download", checkPermission("download_documents"), downloadDocument);
 
-export default router;
+  export default router;

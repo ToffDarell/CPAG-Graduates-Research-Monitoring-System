@@ -12,6 +12,7 @@ import fs from "fs";
 import path from "path";
 import jwt from "jsonwebtoken";
 import { uploadFileToDrive } from "../utils/googleDrive.js";
+import { rateLimitedSendMail } from "../utils/outboundRateLimit.js";
 
 // Helper function to send email notification
 const sendNotificationEmail = async (to, subject, message, html) => {
@@ -27,7 +28,7 @@ const sendNotificationEmail = async (to, subject, message, html) => {
       },
     });
 
-    await transporter.sendMail({
+    await rateLimitedSendMail(transporter, {
       from: process.env.SMTP_FROM || process.env.SMTP_USER,
       to,
       subject,
@@ -102,9 +103,13 @@ const getComplianceDriveFolderId = (formType) => {
 
 const buildDriveTokens = (user) => {
   if (!user) return null;
+  // Use decryption methods to get the actual token values
+  const accessToken = user.getDecryptedDriveAccessToken ? user.getDecryptedDriveAccessToken() : user.driveAccessToken;
+  const refreshToken = user.getDecryptedDriveRefreshToken ? user.getDecryptedDriveRefreshToken() : user.driveRefreshToken;
+  
   return {
-    access_token: user.driveAccessToken,
-    refresh_token: user.driveRefreshToken,
+    access_token: accessToken,
+    refresh_token: refreshToken,
     expiry_date: user.driveTokenExpiry ? user.driveTokenExpiry.getTime() : undefined,
   };
 };
