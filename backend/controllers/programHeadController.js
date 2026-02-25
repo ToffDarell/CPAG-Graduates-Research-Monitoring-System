@@ -2366,67 +2366,89 @@ export const submitPanelReviewByToken = async (req, res) => {
       try {
         const activeMembers = panel.members.filter(m => m.isSelected);
         const submitted = panel.reviews.filter(r => r.status === 'submitted');
-        const remaining = activeMembers.length - submitted.length;
-        const tally = { approve: 0, reject: 0, revision: 0 };
-        submitted.forEach(r => {
-          if (r.recommendation === 'approve') tally.approve++;
-          else if (r.recommendation === 'reject') tally.reject++;
-          else if (r.recommendation === 'revision') tally.revision++;
-        });
 
-        // Check if any option already has an unbeatable lead
-        let finalStatus = null;
-        for (const [key, count] of Object.entries(tally)) {
-          const others = Object.entries(tally).filter(([k]) => k !== key).map(([, v]) => v + remaining);
-          if (count > Math.max(...others)) {
-            if (key === 'approve') finalStatus = 'approved';
-            else if (key === 'reject') finalStatus = 'rejected';
-            else if (key === 'revision') finalStatus = 'for-revision';
-            break;
+        // Guard: nothing to tally if no one has submitted yet
+        if (submitted.length === 0) {
+          console.log('Panel tally skipped: no submissions yet for panel', panel._id);
+        } else {
+          const remaining = activeMembers.length - submitted.length;
+
+          // Guard: remaining cannot be negative (data inconsistency)
+          if (remaining < 0) {
+            console.error('Panel tally error: submitted count exceeds active members for panel', panel._id);
+          } else {
+            const tally = { approve: 0, reject: 0, revision: 0 };
+            submitted.forEach(r => {
+              if (r.recommendation === 'approve') tally.approve++;
+              else if (r.recommendation === 'reject') tally.reject++;
+              else if (r.recommendation === 'revision') tally.revision++;
+            });
+
+            // Check if any option already has an unbeatable lead
+            let finalStatus = null;
+            for (const [key, count] of Object.entries(tally)) {
+              const others = Object.entries(tally).filter(([k]) => k !== key).map(([, v]) => v + remaining);
+              if (count > Math.max(...others)) {
+                if (key === 'approve') finalStatus = 'approved';
+                else if (key === 'reject') finalStatus = 'rejected';
+                else if (key === 'revision') finalStatus = 'for-revision';
+                break;
+              }
+            }
+
+            // Also handle tie when all submitted
+            const allSubmitted = remaining === 0;
+            if (!finalStatus && allSubmitted) {
+              const max = Math.max(tally.approve, tally.reject, tally.revision);
+              const topChoices = ['approve', 'reject', 'revision'].filter(k => tally[k] === max && max > 0);
+              if (topChoices.length === 1) {
+                if (topChoices[0] === 'approve') finalStatus = 'approved';
+                else if (topChoices[0] === 'reject') finalStatus = 'rejected';
+                else if (topChoices[0] === 'revision') finalStatus = 'for-revision';
+              }
+            }
+
+            if (finalStatus || allSubmitted) {
+              const updatedResearch = await Research.findByIdAndUpdate(panel.research, {
+                panelRecommendationTally: tally,
+                panelDecisionDate: new Date(),
+                panelDecisionAuto: !!finalStatus,
+                panelDecision: finalStatus || 'tie',
+                ...(finalStatus ? { status: finalStatus } : {}),
+              }, { new: true });
+
+              if (!updatedResearch) {
+                console.error('Panel tally error: Research document not found for ID', panel.research, '— decision not saved');
+              } else {
+                console.log(`Panel auto-decision (token) [${finalStatus || 'tie'}] applied to research ${panel.research}`);
+              }
+            }
           }
-        }
-
-        // Also handle tie when all submitted
-        const allSubmitted = remaining === 0;
-        if (!finalStatus && allSubmitted) {
-          const max = Math.max(tally.approve, tally.reject, tally.revision);
-          const topChoices = ['approve', 'reject', 'revision'].filter(k => tally[k] === max && max > 0);
-          if (topChoices.length === 1) {
-            if (topChoices[0] === 'approve') finalStatus = 'approved';
-            else if (topChoices[0] === 'reject') finalStatus = 'rejected';
-            else if (topChoices[0] === 'revision') finalStatus = 'for-revision';
-          }
-        }
-
-        if (finalStatus || allSubmitted) {
-          await Research.findByIdAndUpdate(panel.research, {
-            panelRecommendationTally: tally,
-            panelDecisionDate: new Date(),
-            panelDecisionAuto: !!finalStatus,
-            panelDecision: finalStatus || 'tie',
-            ...(finalStatus ? { status: finalStatus } : {}),
-          });
         }
       } catch (tallyError) {
         console.error('Error aggregating panel decision (token):', tallyError);
       }
     }
 
-    // Log activity
-    await Activity.create({
-      user: panel.assignedBy,
-      action: "update",
-      entityType: "panel",
-      entityId: panel._id,
-      entityName: panel.name,
-      description: `External panelist ${invitedMember.name} submitted review`,
-      metadata: {
-        panelistEmail: invitedMember.email,
-        panelistName: invitedMember.name,
-        recommendation,
-        panelProgress: panel.progress,
-      }
-    });
+    // Log activity — wrapped in try-catch so a logging failure never breaks the response
+    try {
+      await Activity.create({
+        user: panel.assignedBy,
+        action: "update",
+        entityType: "panel",
+        entityId: panel._id,
+        entityName: panel.name,
+        description: `External panelist ${invitedMember.name} submitted review`,
+        metadata: {
+          panelistEmail: invitedMember.email,
+          panelistName: invitedMember.name,
+          recommendation,
+          panelProgress: panel.progress,
+        }
+      });
+    } catch (activityError) {
+      console.error('Error logging activity for external panel review:', activityError);
+    }
 
     const populated = await Panel.findById(panel._id)
       .populate("research", "title students");
@@ -2472,15 +2494,20 @@ export const setPanelDecision = async (req, res) => {
 
     if (!research) return res.status(404).json({ message: "Research record not found" });
 
-    await Activity.create({
-      user: req.user.id,
-      action: "update",
-      entityType: "research",
-      entityId: research._id,
-      entityName: research.title,
-      description: `Manually set panel decision to "${decision}" for: ${research.title}`,
-      metadata: { decision, reason: reason || null, panelId: id },
-    });
+    // Log activity — wrapped so a logging failure never undoes the already-written decision
+    try {
+      await Activity.create({
+        user: req.user.id,
+        action: "update",
+        entityType: "research",
+        entityId: research._id,
+        entityName: research.title || "(untitled)",
+        description: `Manually set panel decision to "${decision}" for: ${research.title || research._id}`,
+        metadata: { decision, reason: reason || null, panelId: id },
+      });
+    } catch (activityError) {
+      console.error('Error logging activity for setPanelDecision:', activityError);
+    }
 
     res.json({ message: "Panel decision set successfully", research });
   } catch (error) {

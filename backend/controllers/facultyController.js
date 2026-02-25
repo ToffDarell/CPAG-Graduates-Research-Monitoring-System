@@ -2403,48 +2403,66 @@ export const submitPanelReview = async (req, res) => {
       try {
         const activeMembers = panel.members.filter(m => m.isSelected);
         const submitted = panel.reviews.filter(r => r.status === 'submitted');
-        const remaining = activeMembers.length - submitted.length;
-        const tally = { approve: 0, reject: 0, revision: 0 };
-        submitted.forEach(r => {
-          if (r.recommendation === 'approve') tally.approve++;
-          else if (r.recommendation === 'reject') tally.reject++;
-          else if (r.recommendation === 'revision') tally.revision++;
-        });
 
-        // Check if any option already has an unbeatable lead (even if remaining all vote differently)
-        let finalStatus = null;
-        let isEarly = false;
-        for (const [key, count] of Object.entries(tally)) {
-          const others = Object.entries(tally).filter(([k]) => k !== key).map(([, v]) => v + remaining);
-          if (count > Math.max(...others)) {
-            if (key === 'approve') finalStatus = 'approved';
-            else if (key === 'reject') finalStatus = 'rejected';
-            else if (key === 'revision') finalStatus = 'for-revision';
-            isEarly = remaining > 0;
-            break;
+        // Guard: nothing to tally if no one has submitted yet
+        if (submitted.length === 0) {
+          console.log('Panel tally skipped: no submissions yet for panel', panel._id);
+        } else {
+          const remaining = activeMembers.length - submitted.length;
+
+          // Guard: remaining cannot be negative (data inconsistency)
+          if (remaining < 0) {
+            console.error('Panel tally error: submitted count exceeds active members for panel', panel._id);
+          } else {
+            const tally = { approve: 0, reject: 0, revision: 0 };
+            submitted.forEach(r => {
+              if (r.recommendation === 'approve') tally.approve++;
+              else if (r.recommendation === 'reject') tally.reject++;
+              else if (r.recommendation === 'revision') tally.revision++;
+            });
+
+            // Check if any option already has an unbeatable lead (even if remaining all vote differently)
+            let finalStatus = null;
+            let isEarly = false;
+            for (const [key, count] of Object.entries(tally)) {
+              const others = Object.entries(tally).filter(([k]) => k !== key).map(([, v]) => v + remaining);
+              if (count > Math.max(...others)) {
+                if (key === 'approve') finalStatus = 'approved';
+                else if (key === 'reject') finalStatus = 'rejected';
+                else if (key === 'revision') finalStatus = 'for-revision';
+                isEarly = remaining > 0;
+                break;
+              }
+            }
+
+            // Also check for unanimous / complete tie
+            const allSubmitted = remaining === 0;
+            if (!finalStatus && allSubmitted) {
+              const max = Math.max(tally.approve, tally.reject, tally.revision);
+              const topChoices = ['approve', 'reject', 'revision'].filter(k => tally[k] === max && max > 0);
+              if (topChoices.length === 1) {
+                if (topChoices[0] === 'approve') finalStatus = 'approved';
+                else if (topChoices[0] === 'reject') finalStatus = 'rejected';
+                else if (topChoices[0] === 'revision') finalStatus = 'for-revision';
+              }
+            }
+
+            if (finalStatus || allSubmitted) {
+              const updatedResearch = await Research.findByIdAndUpdate(panel.research, {
+                panelRecommendationTally: tally,
+                panelDecisionDate: new Date(),
+                panelDecisionAuto: !!finalStatus,
+                panelDecision: finalStatus || 'tie',
+                ...(finalStatus ? { status: finalStatus } : {}),
+              }, { new: true });
+
+              if (!updatedResearch) {
+                console.error('Panel tally error: Research document not found for ID', panel.research, '— decision not saved');
+              } else {
+                console.log(`Panel auto-decision [${finalStatus || 'tie'}] applied to research ${panel.research} (early=${isEarly})`);
+              }
+            }
           }
-        }
-
-        // Also check for unanimous / complete tie
-        const allSubmitted = remaining === 0;
-        if (!finalStatus && allSubmitted) {
-          const max = Math.max(tally.approve, tally.reject, tally.revision);
-          const topChoices = ['approve', 'reject', 'revision'].filter(k => tally[k] === max && max > 0);
-          if (topChoices.length === 1) {
-            if (topChoices[0] === 'approve') finalStatus = 'approved';
-            else if (topChoices[0] === 'reject') finalStatus = 'rejected';
-            else if (topChoices[0] === 'revision') finalStatus = 'for-revision';
-          }
-        }
-
-        if (finalStatus || allSubmitted) {
-          await Research.findByIdAndUpdate(panel.research, {
-            panelRecommendationTally: tally,
-            panelDecisionDate: new Date(),
-            panelDecisionAuto: !!finalStatus,
-            panelDecision: finalStatus || 'tie',
-            ...(finalStatus ? { status: finalStatus } : {}),
-          });
         }
       } catch (tallyError) {
         console.error('Error aggregating panel decision:', tallyError);
