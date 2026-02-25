@@ -549,7 +549,7 @@ const ProgramHeadDashboard = ({ setUser, user }) => {
       {/* Mobile Sidebar Overlay */}
       {sidebarOpen && (
         <div
-          className="fixed inset-0 bg-black bg-opacity-50 z-40 lg:hidden"
+          className="fixed inset-0 bg-black/50 z-40 lg:hidden"
           onClick={() => setSidebarOpen(false)}
         />
       )}
@@ -2664,7 +2664,7 @@ const ScheduleManagement = () => {
 
             {/* Event Details Modal */}
             {selectedEvent && (
-              <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+              <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
                 <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
                   <div className="p-5 border-b border-gray-200">
         <div className="flex items-center justify-between">
@@ -3561,6 +3561,97 @@ const ProcessMonitoring = () => {
                   )}
                 </div>
               </div>
+
+              {/* Panel Decision — shown when all panelists have submitted */}
+              {panelDetails.panel.progress === 100 && panelDetails.panel.research && (
+                <div className="border border-gray-200 rounded-lg p-4">
+                  <h4 className="text-base font-semibold text-gray-800 mb-3">Panel Decision</h4>
+
+                  {/* Recommendation Tally */}
+                  {panelDetails.panel.research.panelRecommendationTally && (
+                    <div className="flex flex-wrap gap-2 mb-3">
+                      <span className="px-2.5 py-1 bg-green-100 text-green-700 text-xs rounded-full font-medium">
+                        ✓ Approve: {panelDetails.panel.research.panelRecommendationTally.approve}
+                      </span>
+                      <span className="px-2.5 py-1 bg-red-100 text-red-700 text-xs rounded-full font-medium">
+                        ✗ Reject: {panelDetails.panel.research.panelRecommendationTally.reject}
+                      </span>
+                      <span className="px-2.5 py-1 bg-yellow-100 text-yellow-700 text-xs rounded-full font-medium">
+                        ↺ Revision: {panelDetails.panel.research.panelRecommendationTally.revision}
+                      </span>
+                    </div>
+                  )}
+
+                  {/* Current Decision */}
+                  {panelDetails.panel.research.panelDecision && (
+                    <p className="text-sm text-gray-600 mb-3">
+                      {panelDetails.panel.research.panelDecisionAuto ? '🤖 Auto-decided' : '👤 Manually set'}:{' '}
+                      <strong className={
+                        panelDetails.panel.research.panelDecision === 'approved' ? 'text-green-700' :
+                        panelDetails.panel.research.panelDecision === 'rejected' ? 'text-red-700' :
+                        panelDetails.panel.research.panelDecision === 'for-revision' ? 'text-yellow-700' :
+                        'text-orange-600'
+                      }>
+                        {panelDetails.panel.research.panelDecision === 'tie'
+                          ? 'Tie — manual decision required'
+                          : panelDetails.panel.research.panelDecision.replace(/-/g, ' ')}
+                      </strong>
+                      {panelDetails.panel.research.panelDecisionDate && (
+                        <span className="text-xs text-gray-400 ml-2">
+                          ({new Date(panelDetails.panel.research.panelDecisionDate).toLocaleDateString()})
+                        </span>
+                      )}
+                    </p>
+                  )}
+
+                  {/* Manual Override Buttons */}
+                  <div>
+                    <p className="text-xs text-gray-500 mb-2">Set / Override Final Decision:</p>
+                    <div className="flex flex-wrap gap-2">
+                      {['approved', 'rejected', 'for-revision'].map(dec => (
+                        <button
+                          key={dec}
+                          onClick={async () => {
+                            const labels = { approved: 'Approve', rejected: 'Reject', 'for-revision': 'Request Revision' };
+                            const result = await showConfirm(
+                              `${labels[dec]} Research`,
+                              `Set final panel decision to "${dec.replace(/-/g, ' ')}" for "${panelDetails.panel.research.title}"? This will update the research status.`,
+                              labels[dec],
+                              'Cancel'
+                            );
+                            if (!result.isConfirmed) return;
+                            try {
+                              const token = localStorage.getItem('token');
+                              await axios.put(
+                                `/api/programhead/panels/${panelDetails.panel._id}/decision`,
+                                { decision: dec },
+                                { headers: { Authorization: `Bearer ${token}` } }
+                              );
+                              await showSuccess('Decision Set', `Research has been set to "${dec.replace(/-/g, ' ')}".`);
+                              // Refresh panel details
+                              const res = await axios.get(
+                                `/api/programhead/panels/${panelDetails.panel._id}/details`,
+                                { headers: { Authorization: `Bearer ${token}` } }
+                              );
+                              setPanelDetails(res.data);
+                            } catch (err) {
+                              showError('Error', err.response?.data?.message || 'Failed to set decision');
+                            }
+                          }}
+                          className={`px-3 py-1.5 text-white text-xs rounded font-medium transition-colors ${
+                            dec === 'approved' ? 'bg-green-600 hover:bg-green-700' :
+                            dec === 'rejected' ? 'bg-red-600 hover:bg-red-700' :
+                            'bg-yellow-600 hover:bg-yellow-700'
+                          } ${panelDetails.panel.research.panelDecision === dec ? 'ring-2 ring-offset-1 ring-current' : ''}`}
+                        >
+                          {dec === 'approved' ? 'Approve' : dec === 'rejected' ? 'Reject' : 'For Revision'}
+                          {panelDetails.panel.research.panelDecision === dec && ' ✓'}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {/* Resources/Documents */}
               {panelDetails.panel.documents && panelDetails.panel.documents.filter(d => d.isActive).length > 0 && (
@@ -5215,6 +5306,7 @@ const ResearchRecords = () => {
   const [finalizing, setFinalizing] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(10);
+  const [researchFilter, setResearchFilter] = useState('all');
 
   // Fetch research records on component mount
   useEffect(() => {
@@ -5230,6 +5322,30 @@ const ResearchRecords = () => {
       setResearchRecords(res.data);
     } catch (error) {
       console.error('Error fetching research records:', error);
+    }
+  };
+
+  const handleShareWithDean = async (researchId) => {
+    const result = await showConfirm(
+      'Share with Dean',
+      'Are you sure you want to share this research with the Dean for approval?',
+      'Yes, Share',
+      'Cancel'
+    );
+    if (!result.isConfirmed) return;
+    setLoading(true);
+    try {
+      const token = localStorage.getItem('token');
+      await axios.post('/api/programhead/share-with-dean', { researchId }, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      fetchResearchRecords();
+      await showSuccess('Shared', 'Research has been shared with the Dean for approval.');
+    } catch (error) {
+      console.error('Error sharing with dean:', error);
+      showError('Error', error?.response?.data?.message || 'Error sharing research with Dean');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -5340,6 +5456,52 @@ const ResearchRecords = () => {
   // Filter out archived research (backend already filters, but this is defensive)
   const activeResearch = researchRecords.filter(r => r.status !== 'archived');
 
+  const statusFilters = [
+    { label: 'All', value: 'all', color: 'bg-gray-100 text-gray-700', activeColor: 'bg-gray-700 text-white' },
+    { label: 'Pending', value: 'pending', color: 'bg-yellow-100 text-yellow-700', activeColor: 'bg-yellow-500 text-white' },
+    { label: 'Shared with Dean', value: 'shared_with_dean', color: 'bg-blue-100 text-blue-700', activeColor: 'bg-blue-600 text-white' },
+    { label: 'Dean Approved', value: 'approved', color: 'bg-green-100 text-green-700', activeColor: 'bg-green-600 text-white' },
+    { label: 'Ready to Finalize', value: 'ready', color: 'bg-orange-100 text-orange-700', activeColor: 'bg-orange-500 text-white' },
+    { label: 'Rejected', value: 'rejected', color: 'bg-red-100 text-red-700', activeColor: 'bg-red-600 text-white' },
+    { label: 'Finalized', value: 'finalized', color: 'bg-purple-100 text-purple-700', activeColor: 'bg-purple-600 text-white' },
+  ];
+
+  const getStatusLabel = (research) => {
+    if (research.finalizedDate) return 'finalized';
+    if (research.progress === 100) return 'ready';
+    if (research.sharedWithDean && research.status !== 'approved' && research.status !== 'rejected') return 'shared_with_dean';
+    return research.status;
+  };
+
+  const filteredResearch = researchFilter === 'all'
+    ? activeResearch
+    : activeResearch.filter(r => getStatusLabel(r) === researchFilter);
+
+  const getStatusBadge = (research) => {
+    const label = getStatusLabel(research);
+    const map = {
+      finalized: 'bg-purple-100 text-purple-700',
+      ready: 'bg-orange-100 text-orange-700',
+      shared_with_dean: 'bg-blue-100 text-blue-700',
+      approved: 'bg-green-100 text-green-700',
+      rejected: 'bg-red-100 text-red-700',
+      completed: 'bg-teal-100 text-teal-700',
+      'in-progress': 'bg-blue-100 text-blue-700',
+      pending: 'bg-yellow-100 text-yellow-700',
+    };
+    const text = {
+      finalized: 'Finalized',
+      ready: 'Ready to Finalize',
+      shared_with_dean: 'Shared with Dean',
+      approved: 'Dean Approved',
+      rejected: 'Rejected',
+      completed: 'Completed',
+      'in-progress': 'In Progress',
+      pending: 'Pending',
+    };
+    return { cls: map[label] || 'bg-gray-100 text-gray-700', text: text[label] || label };
+  };
+
   return (
     <div className="space-y-5">
       <div className="flex justify-between items-center">
@@ -5349,23 +5511,53 @@ const ResearchRecords = () => {
         </span>
       </div>
 
+      {/* Status Filter Tabs */}
+      <div className="bg-white border border-gray-200 rounded-lg p-4">
+        <p className="text-xs text-gray-500 uppercase font-semibold mb-3">Filter by Status</p>
+        <div className="flex flex-wrap gap-2">
+          {statusFilters.map(f => (
+            <button
+              key={f.value}
+              onClick={() => { setResearchFilter(f.value); setCurrentPage(1); }}
+              className={`flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium transition-all border ${
+                researchFilter === f.value
+                  ? `${f.activeColor} border-transparent shadow-sm`
+                  : `${f.color} border-transparent hover:shadow-sm`
+              }`}
+            >
+              {f.label}
+              <span className={`text-xs px-1.5 py-0.5 rounded-full font-bold ${
+                researchFilter === f.value ? 'bg-white bg-opacity-30' : 'bg-white'
+              }`}>
+                {f.value === 'all'
+                  ? activeResearch.length
+                  : activeResearch.filter(r => getStatusLabel(r) === f.value).length}
+              </span>
+            </button>
+          ))}
+        </div>
+      </div>
+
       {/* Research Records List */}
       <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
         <div className="space-y-4 p-5">
-          {activeResearch.length === 0 ? (
+          {filteredResearch.length === 0 ? (
           <div className="bg-gray-50 rounded-lg border border-gray-200 p-8">
-            <p className="text-gray-500 text-center text-sm">No research records found.</p>
+            <p className="text-gray-500 text-center text-sm">No research records found for this filter.</p>
           </div>
         ) : (
             (() => {
               const startIndex = (currentPage - 1) * itemsPerPage;
               const endIndex = startIndex + itemsPerPage;
-              const paginatedResearch = activeResearch.slice(startIndex, endIndex);
-              const totalPages = Math.ceil(activeResearch.length / itemsPerPage);
+              const paginatedResearch = filteredResearch.slice(startIndex, endIndex);
+              const totalPages = Math.ceil(filteredResearch.length / itemsPerPage);
               
               return (
                 <>
-                  {paginatedResearch.map((research) => (
+                  {paginatedResearch.map((research) => {
+                    const badge = getStatusBadge(research);
+                    const statusKey = getStatusLabel(research);
+                    return (
             <div key={research._id} className="bg-white border border-gray-200 rounded-lg p-5 hover:shadow-md transition-shadow">
               <div className="flex items-start justify-between">
                 <div className="flex-1">
@@ -5389,22 +5581,17 @@ const ResearchRecords = () => {
                         </span>
                       </div>
                       <div className="mt-3 flex items-center gap-2 flex-wrap">
-                        <span className={`px-3 py-1 rounded-full text-xs font-medium ${
-                          research.status === 'completed' ? 'bg-green-100 text-green-700' :
-                          research.status === 'in-progress' ? 'bg-blue-100 text-blue-700' :
-                          research.status === 'pending' ? 'bg-yellow-100 text-yellow-700' :
-                          'bg-gray-100 text-gray-700'
-                        }`}>
-                          {research.status}
+                        <span className={`px-3 py-1 rounded-full text-xs font-medium ${badge.cls}`}>
+                          {badge.text}
                         </span>
-                        {research.status === 'completed' && !research.finalizedDate && (
-                          <span className="px-2 py-1 bg-orange-100 text-orange-700 rounded-full text-xs font-medium">
-                            Ready for Finalization
+                        {statusKey === 'shared_with_dean' && (
+                          <span className="px-2 py-1 bg-blue-50 text-blue-600 rounded-full text-xs">
+                            ⏳ Awaiting Dean's Decision
                           </span>
                         )}
                         {research.finalizedDate && (
-                          <span className="px-2 py-1 bg-purple-100 text-purple-700 rounded-full text-xs font-medium">
-                            Finalized
+                          <span className="px-2 py-1 bg-purple-100 text-purple-700 rounded-full text-xs">
+                            Finalized: {new Date(research.finalizedDate).toLocaleDateString()}
                           </span>
                         )}
                       </div>
@@ -5419,22 +5606,34 @@ const ResearchRecords = () => {
                     </p>
                   </div>
                   <div className="flex flex-col gap-2">
-                    {research.status === 'completed' && !research.finalizedDate && (
-                    <button 
+                    {/* Share with Dean — show if pending or rejected and not yet shared */}
+                    {(statusKey === 'pending' || statusKey === 'rejected') && (
+                      <button
+                        onClick={() => handleShareWithDean(research._id)}
+                        disabled={loading}
+                        className="px-3 py-1 bg-blue-600 text-white rounded-md text-xs font-medium hover:bg-blue-700 transition-colors disabled:opacity-50"
+                      >
+                        Share with Dean
+                      </button>
+                    )}
+                    {/* Finalize — when adviser sets progress to 100% OR Dean approves */}
+                    {(statusKey === 'ready' || statusKey === 'approved') && !research.finalizedDate && (
+                      <button
                         onClick={() => handleFinalizeResearch(research)}
                         disabled={loading || finalizing}
                         className="px-3 py-1 bg-green-600 text-white rounded-md text-xs font-medium hover:bg-green-700 transition-colors disabled:opacity-50"
-                        title="Finalize this research to make it appear in student's Completed Thesis page"
+                        title="Finalize this research"
                       >
                         Finalize
-                    </button>
+                      </button>
                     )}
+                    {/* Finalized badge */}
                     {research.finalizedDate && (
-                      <span className="px-3 py-1 bg-green-100 text-green-700 rounded-md text-xs font-medium text-center">
-                        Finalized
+                      <span className="px-3 py-1 bg-purple-100 text-purple-700 rounded-md text-xs font-medium text-center">
+                        ✓ Finalized
                       </span>
                     )}
-                    <button 
+                    <button
                       onClick={() => handleArchiveResearch(research._id)}
                       disabled={loading}
                       className="px-3 py-1 bg-gray-600 text-white rounded-md text-xs font-medium hover:bg-gray-700 transition-colors disabled:opacity-50"
@@ -5445,12 +5644,13 @@ const ResearchRecords = () => {
                 </div>
               </div>
             </div>
-                  ))}
-                  {activeResearch.length > 0 && (
+                    );
+                  })}
+                  {filteredResearch.length > 0 && (
                     <Pagination
                       currentPage={currentPage}
                       totalPages={totalPages}
-                      totalItems={activeResearch.length}
+                      totalItems={filteredResearch.length}
                       itemsPerPage={itemsPerPage}
                       onPageChange={setCurrentPage}
                       onItemsPerPageChange={(newItemsPerPage) => {
@@ -5458,7 +5658,7 @@ const ResearchRecords = () => {
                         setCurrentPage(1);
                       }}
                       startIndex={startIndex + 1}
-                      endIndex={Math.min(endIndex, activeResearch.length)}
+                      endIndex={Math.min(endIndex, filteredResearch.length)}
                     />
                   )}
                 </>
@@ -5471,43 +5671,55 @@ const ResearchRecords = () => {
       {/* Summary Statistics */}
       <div className="bg-gray-50 rounded-lg border border-gray-200 p-5">
         <h3 className="text-base font-semibold text-gray-800 mb-4">Research Records Summary</h3>
-        <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-7 gap-4">
+          <div className="bg-white rounded-lg p-4 text-center border border-gray-200">
+            <p className="text-2xl font-bold text-yellow-600">
+              {activeResearch.filter(r => getStatusLabel(r) === 'pending').length}
+            </p>
+            <p className="text-xs text-gray-600 mt-1 uppercase font-semibold">Pending</p>
+          </div>
           <div className="bg-white rounded-lg p-4 text-center border border-gray-200">
             <p className="text-2xl font-bold text-blue-600">
-              {activeResearch.filter(r => r.status === 'in-progress').length}
+              {activeResearch.filter(r => getStatusLabel(r) === 'shared_with_dean').length}
             </p>
-            <p className="text-xs text-gray-600 mt-1 uppercase font-semibold">In Progress</p>
+            <p className="text-xs text-gray-600 mt-1 uppercase font-semibold">Shared w/ Dean</p>
           </div>
           <div className="bg-white rounded-lg p-4 text-center border border-gray-200">
             <p className="text-2xl font-bold text-green-600">
+              {activeResearch.filter(r => getStatusLabel(r) === 'approved').length}
+            </p>
+            <p className="text-xs text-gray-600 mt-1 uppercase font-semibold">Dean Approved</p>
+          </div>
+          <div className="bg-white rounded-lg p-4 text-center border border-orange-200 bg-orange-50">
+            <p className="text-2xl font-bold text-orange-600">
+              {activeResearch.filter(r => getStatusLabel(r) === 'ready').length}
+            </p>
+            <p className="text-xs text-gray-600 mt-1 uppercase font-semibold">Ready to Finalize</p>
+          </div>
+          <div className="bg-white rounded-lg p-4 text-center border border-gray-200">
+            <p className="text-2xl font-bold text-red-600">
+              {activeResearch.filter(r => getStatusLabel(r) === 'rejected').length}
+            </p>
+            <p className="text-xs text-gray-600 mt-1 uppercase font-semibold">Rejected</p>
+          </div>
+          <div className="bg-white rounded-lg p-4 text-center border border-gray-200">
+            <p className="text-2xl font-bold text-purple-600">
               {activeResearch.filter(r => r.finalizedDate).length}
             </p>
             <p className="text-xs text-gray-600 mt-1 uppercase font-semibold">Finalized</p>
           </div>
           <div className="bg-white rounded-lg p-4 text-center border border-gray-200">
-            <p className="text-2xl font-bold text-orange-600">
-              {activeResearch.filter(r => r.status === 'completed' && !r.finalizedDate).length}
-            </p>
-            <p className="text-xs text-gray-600 mt-1 uppercase font-semibold">Ready to Finalize</p>
-          </div>
-          <div className="bg-white rounded-lg p-4 text-center border border-gray-200">
-            <p className="text-2xl font-bold text-yellow-600">
-              {activeResearch.filter(r => r.status === 'pending').length}
-            </p>
-            <p className="text-xs text-gray-600 mt-1 uppercase font-semibold">Pending</p>
-          </div>
-          <div className="bg-white rounded-lg p-4 text-center border border-gray-200">
             <p className="text-2xl font-bold text-gray-600">
-              {activeResearch.filter(r => r.adviser).length}
+              {activeResearch.length}
             </p>
-            <p className="text-xs text-gray-600 mt-1 uppercase font-semibold">With Adviser</p>
+            <p className="text-xs text-gray-600 mt-1 uppercase font-semibold">Total</p>
           </div>
         </div>
       </div>
 
       {/* Finalize Research Modal */}
       {showFinalizeModal && selectedResearch && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
           <div className="bg-white rounded-lg shadow-lg max-w-2xl w-full p-6 max-h-[90vh] overflow-y-auto">
             <div className="flex justify-between items-center mb-4">
               <h3 className="text-lg font-semibold text-gray-800">Finalize Research</h3>
@@ -6013,7 +6225,7 @@ const PanelRecords = () => {
 
       {/* Panel Details Modal */}
       {showDetailsModal && selectedPanel && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-lg shadow-xl max-w-4xl w-full max-h-[90vh] overflow-hidden flex flex-col">
             <div className="p-5 border-b border-gray-200">
               <div className="flex items-center justify-between">

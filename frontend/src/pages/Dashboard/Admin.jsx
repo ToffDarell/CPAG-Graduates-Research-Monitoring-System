@@ -136,12 +136,9 @@ const Admin = ({ user, setUser }) => {
     entityType: "all",
   });
 
-  // Invite Dean form state
-  const [inviteDeanForm, setInviteDeanForm] = useState({
-    name: "",
-    email: "",
-  });
-  const [invitingDean, setInvitingDean] = useState(false);
+  // Unified invite form state
+  const [inviteForm, setInviteForm] = useState({ name: "", email: "", role: "dean" });
+  const [inviting, setInviting] = useState(false);
 
   // Backup management state
   const [backups, setBackups] = useState([]);
@@ -246,49 +243,46 @@ const Admin = ({ user, setUser }) => {
     }
   };
 
-  const handleInviteDeanChange = (e) => {
-    const { name, value } = e.target;
-    setInviteDeanForm((prev) => ({ ...prev, [name]: value }));
+  const roleEndpointMap = {
+    dean: "/api/admin/invite-dean",
+    "faculty adviser": "/api/admin/invite-faculty",
+    "program head": "/api/admin/invite-program-head",
   };
 
-  const handleInviteDean = async (e) => {
+  const roleLabelMap = {
+    dean: "Dean",
+    "faculty adviser": "Faculty Adviser",
+    "program head": "Program Head",
+  };
+
+  const handleInvite = async (e) => {
     e.preventDefault();
-    if (!inviteDeanForm.name.trim() || !inviteDeanForm.email.trim()) {
+    if (!inviteForm.name.trim() || !inviteForm.email.trim()) {
       showError("Validation Error", "Please enter both name and email.");
       return;
     }
-
+    const roleLabel = roleLabelMap[inviteForm.role];
     const confirmed = await showConfirm(
-      "Invite Dean",
-      `Send an invitation to "${inviteDeanForm.name}" at ${inviteDeanForm.email}?`,
+      `Invite ${roleLabel}`,
+      `Send an invitation to "${inviteForm.name}" at ${inviteForm.email} as ${roleLabel}?`,
       "Send Invitation",
       "Cancel"
     );
     if (!confirmed.isConfirmed) return;
-
     try {
-      setInvitingDean(true);
+      setInviting(true);
       await axios.post(
-        buildApiUrl("/api/admin/invite-dean"),
-        inviteDeanForm,
-        {
-          headers: { Authorization: `Bearer ${getToken()}` },
-        }
+        buildApiUrl(roleEndpointMap[inviteForm.role]),
+        { name: inviteForm.name, email: inviteForm.email },
+        { headers: { Authorization: `Bearer ${getToken()}` } }
       );
-      await showSuccess(
-        "Invitation Sent",
-        `Dean invitation sent to ${inviteDeanForm.email}.`
-      );
-      setInviteDeanForm({ name: "", email: "" });
-      // Refresh users list so the invited dean appears (inactive until registration)
+      await showSuccess("Invitation Sent", `${roleLabel} invitation sent to ${inviteForm.email}.`);
+      setInviteForm({ name: "", email: "", role: inviteForm.role });
       await fetchUsers();
     } catch (error) {
-      showError(
-        "Error",
-        error.response?.data?.message || "Error sending dean invitation"
-      );
+      showError("Error", error.response?.data?.message || `Error sending ${roleLabel} invitation`);
     } finally {
-      setInvitingDean(false);
+      setInviting(false);
     }
   };
 
@@ -391,6 +385,17 @@ const Admin = ({ user, setUser }) => {
       ? role.permissions.filter((p) => p._id !== permissionId).map((p) => p._id)
       : [...role.permissions.map((p) => p._id), permissionId];
 
+    // Optimistic update: Update UI immediately for instant feedback
+    setRoles(prevRoles => prevRoles.map(r => {
+      if (r._id === roleId) {
+        const updatedPermissions = hasPermission
+          ? r.permissions.filter(p => p._id !== permissionId)
+          : [...r.permissions, permission];
+        return { ...r, permissions: updatedPermissions };
+      }
+      return r;
+    }));
+
     try {
       await axios.put(
         buildApiUrl(`/api/admin/roles/${roleId}`),
@@ -399,7 +404,6 @@ const Admin = ({ user, setUser }) => {
           headers: { Authorization: `Bearer ${getToken()}` },
         }
       );
-      await fetchRoles();
       
       // Show specific message about the permission change
       const message = hasPermission 
@@ -411,6 +415,8 @@ const Admin = ({ user, setUser }) => {
         message
       );
     } catch (error) {
+      // If update fails, revert the optimistic update by refetching
+      await fetchRoles();
       showError("Error", error.response?.data?.message || "Failed to update permission");
     }
   };
@@ -1308,43 +1314,44 @@ const Admin = ({ user, setUser }) => {
                         </div>
                       </div>
 
-                      {/* Permissions for this role */}
+                      {/* All permissions as toggles — ON = assigned, OFF = not assigned */}
                       <div className="mt-4">
-                        <h4 className="text-sm font-medium mb-3 text-gray-700">Permissions:</h4>
-                        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-2">
-                          {permissions.map((permission) => {
-                            const hasPermission = role.permissions?.some(
-                              (p) => p._id === permission._id
-                            );
+                        <h4 className="text-sm font-medium mb-3 text-gray-700">
+                          Permissions
+                          <span className="ml-2 px-2 py-0.5 bg-[#FDE8EA] text-[#7C1D23] text-xs font-semibold rounded-full">
+                            {role.permissions?.length || 0} / {permissions.filter(p => p.isActive).length}
+                          </span>
+                        </h4>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                          {permissions.filter(p => p.isActive).map((permission) => {
+                            const isOn = role.permissions?.some(p => p._id === permission._id);
+                            const isDisabled = role.isSystem && role.name === "admin";
                             return (
-                              <label
+                              <div
                                 key={permission._id}
-                                className={`flex items-center text-sm p-2 rounded border cursor-pointer ${
-                                  hasPermission
-                                    ? "bg-[#FDECEC] border-[#E0A6AC]"
-                                    : "bg-gray-50 border-gray-200"
+                                className={`flex items-center justify-between px-3 py-2 rounded-lg border transition-all duration-200 ${
+                                  isOn ? "bg-[#FDECEC] border-[#E0A6AC]" : "bg-gray-50 border-gray-200"
                                 }`}
                               >
-                                <input
-                                  type="checkbox"
-                                  checked={hasPermission}
-                                  onChange={() =>
-                                    handleTogglePermission(role._id, permission._id)
-                                  }
-                                  disabled={
-                                    (role.isSystem && role.name === "admin") ||
-                                    !permission.isActive
-                                  }
-                                  className="mr-2 w-4 h-4"
-                                />
-                                <span
-                                  className={
-                                    hasPermission ? "text-gray-900" : "text-gray-400"
-                                  }
-                                >
+                                <span className={`text-xs capitalize ${isOn ? "text-[#7C1D23] font-medium" : "text-gray-400"}`}>
                                   {permission.name.replace(/_/g, " ")}
                                 </span>
-                              </label>
+                                <button
+                                  type="button"
+                                  disabled={isDisabled}
+                                  onClick={() => handleTogglePermission(role._id, permission._id)}
+                                  title={isOn ? "Turn off to remove" : "Turn on to assign"}
+                                  className={`relative inline-flex h-5 w-9 flex-shrink-0 rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                                    isDisabled ? "cursor-not-allowed opacity-50" : "cursor-pointer"
+                                  } ${isOn ? "bg-[#7C1D23]" : "bg-gray-300"}`}
+                                >
+                                  <span
+                                    className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                                      isOn ? "translate-x-4" : "translate-x-0"
+                                    }`}
+                                  />
+                                </button>
+                              </div>
                             );
                           })}
                         </div>
@@ -1728,47 +1735,49 @@ const Admin = ({ user, setUser }) => {
                 <h2 className="text-2xl font-bold text-gray-900">User Management</h2>
                 <p className="text-gray-600 mt-1">Manage users and their role assignments</p>
               </div>
-              {/* Invite Dean card */}
-              <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-4 w-full lg:w-96">
+              {/* Single Invite Card */}
+              <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-4 w-full lg:w-80">
                 <h3 className="text-sm font-semibold text-gray-900 mb-2 flex items-center space-x-2">
                   <FaUserShield className="text-[#7C1D23]" />
-                  <span>Invite a Dean</span>
+                  <span>Invite a User</span>
                 </h3>
                 <p className="text-xs text-gray-500 mb-3">
-                  Send an invitation email to create a Dean account. Deans will complete their registration using a secure link.
+                  Send an invitation email to create an account. The user will complete their registration using a secure link.
                 </p>
-                <form onSubmit={handleInviteDean} className="space-y-2">
+                <form onSubmit={handleInvite} className="space-y-2">
+                  {/* Role Select */}
+                  <select
+                    value={inviteForm.role}
+                    onChange={(e) => setInviteForm(prev => ({ ...prev, role: e.target.value }))}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#7C1D23] focus:border-transparent"
+                  >
+                    <option value="dean">Dean</option>
+                    <option value="faculty adviser">Faculty Adviser</option>
+                    <option value="program head">Program Head</option>
+                  </select>
                   <input
                     type="text"
-                    name="name"
-                    value={inviteDeanForm.name}
-                    onChange={handleInviteDeanChange}
-                    placeholder="Dean's full name"
+                    value={inviteForm.name}
+                    onChange={(e) => setInviteForm(prev => ({ ...prev, name: e.target.value }))}
+                    placeholder="Full name"
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#7C1D23] focus:border-transparent"
                   />
                   <input
                     type="email"
-                    name="email"
-                    value={inviteDeanForm.email}
-                    onChange={handleInviteDeanChange}
-                    placeholder="Dean's institutional email (@buksu.edu.ph)"
+                    value={inviteForm.email}
+                    onChange={(e) => setInviteForm(prev => ({ ...prev, email: e.target.value }))}
+                    placeholder="Institutional email (@buksu.edu.ph)"
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#7C1D23] focus:border-transparent"
                   />
                   <button
                     type="submit"
-                    disabled={invitingDean}
+                    disabled={inviting}
                     className="w-full mt-1 px-3 py-2 bg-[#7C1D23] text-white rounded-lg text-sm font-medium hover:bg-[#5a1519] disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center space-x-2"
                   >
-                    {invitingDean ? (
-                      <>
-                        <span className="animate-spin h-4 w-4 border-2 border-white border-t-transparent rounded-full" />
-                        <span>Sending...</span>
-                      </>
+                    {inviting ? (
+                      <><span className="animate-spin h-4 w-4 border-2 border-white border-t-transparent rounded-full" /><span>Sending...</span></>
                     ) : (
-                      <>
-                        <FaEnvelope className="text-white" />
-                        <span>Send Invitation</span>
-                      </>
+                      <><FaEnvelope className="text-white" /><span>Send Invitation</span></>
                     )}
                   </button>
                 </form>
@@ -1937,8 +1946,8 @@ const Admin = ({ user, setUser }) => {
 
         {/* Create/Edit Role Modal */}
         {showRoleModal && (
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-            <div className="bg-white rounded-lg p-6 w-full max-w-md max-h-[90vh] overflow-y-auto">
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4 py-6" onClick={() => { setShowRoleModal(false); setEditingRole(null); }}>
+            <div className="bg-white rounded-xl shadow-xl p-6 w-full max-w-md max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
               <div className="flex justify-between items-center mb-4">
                 <h3 className="text-lg font-semibold">
                   {editingRole ? "Edit Role" : "Create New Role"}
@@ -2024,8 +2033,8 @@ const Admin = ({ user, setUser }) => {
 
         {/* Edit User Modal */}
         {showEditUserModal && editingUser && (
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-            <div className="bg-white rounded-lg p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto">
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4 py-6" onClick={closeEditUserModal}>
+            <div className="bg-white rounded-xl shadow-xl p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
               <div className="flex justify-between items-center mb-4">
                 <div>
                   <h3 className="text-lg font-semibold text-gray-900">Edit User</h3>

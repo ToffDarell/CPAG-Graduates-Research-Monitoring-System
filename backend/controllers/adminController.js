@@ -689,6 +689,198 @@ export const inviteDean = async (req, res) => {
   }
 };
 
+// Invite faculty adviser (admin only)
+export const inviteFaculty = async (req, res) => {
+  try {
+    const { email, name } = req.body;
+
+    if (!email || !name) {
+      return res.status(400).json({ message: "Name and email are required" });
+    }
+
+    const emailDomain = email.split("@")[1];
+    if (emailDomain !== "buksu.edu.ph") {
+      return res.status(400).json({
+        message: "Faculty Advisers must use @buksu.edu.ph email address",
+      });
+    }
+
+    const existingUser = await User.findOne({ email });
+    if (existingUser) {
+      return res.status(400).json({ message: "User with this email already exists" });
+    }
+
+    const crypto = await import("crypto");
+    const invitationToken = crypto.default.randomBytes(32).toString("hex");
+    const invitationExpires = Date.now() + 7 * 24 * 60 * 60 * 1000;
+
+    const newUser = new User({
+      name,
+      email,
+      role: "faculty adviser",
+      invitationToken,
+      invitationExpires,
+      isActive: false,
+      password: "temporary",
+    });
+    await newUser.save();
+
+    const invitationLink = `${
+      process.env.FRONTEND_URL || "http://localhost:5173"
+    }/register?token=${invitationToken}`;
+
+    const nodemailer = await import("nodemailer");
+    const transporter = nodemailer.default.createTransport({
+      host: process.env.SMTP_HOST,
+      port: process.env.SMTP_PORT,
+      secure: false,
+      auth: {
+        user: process.env.SMTP_USER,
+        pass: process.env.SMTP_PASS,
+      },
+    });
+
+    await rateLimitedSendMail(transporter, {
+      from: process.env.SMTP_FROM,
+      to: email,
+      subject: "Faculty Adviser Account Invitation - CPAG Masteral Research Archive and Monitoring System",
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <h2 style="color: #7C1D23;">Welcome to CPAG Masteral Research Archive and Monitoring System</h2>
+          <p>Hello <strong>${name}</strong>,</p>
+          <p>You have been invited to join as a <strong>Faculty Adviser</strong> in our system.</p>
+          <p>Please click the button below to complete your registration and set your password:</p>
+          <div style="text-align: center; margin: 30px 0;">
+            <a href="${invitationLink}" 
+               style="background-color: #7C1D23; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; display: inline-block;">
+              Complete Registration
+            </a>
+          </div>
+          <p style="color: #666; font-size: 14px;">This invitation link will expire in 7 days.</p>
+          <p style="color: #666; font-size: 14px;">If the button doesn't work, copy and paste this link into your browser:</p>
+          <p style="color: #7C1D23; font-size: 12px; word-break: break-all;">${invitationLink}</p>
+          <hr style="margin: 30px 0; border: none; border-top: 1px solid #ddd;" />
+          <p style="color: #999; font-size: 12px;">If you didn't expect this invitation, please ignore this email.</p>
+        </div>
+      `,
+    });
+
+    await Activity.create({
+      user: req.user.id,
+      action: "invite",
+      entityType: "user",
+      entityId: newUser._id,
+      entityName: newUser.name,
+      description: `Invited faculty adviser: ${name} (${email})`,
+      metadata: { email, role: "faculty adviser" },
+    });
+
+    res.json({
+      message: `Invitation sent successfully to ${email}!`,
+      user: { name, email, role: "faculty adviser" },
+    });
+  } catch (error) {
+    console.error("Error inviting faculty adviser:", error);
+    res.status(500).json({ message: "Error inviting faculty adviser" });
+  }
+};
+
+// Invite program head (admin only)
+export const inviteProgramHead = async (req, res) => {
+  try {
+    const { email, name } = req.body;
+
+    if (!email || !name) {
+      return res.status(400).json({ message: "Name and email are required" });
+    }
+
+    const emailDomain = email.split("@")[1];
+    if (emailDomain !== "buksu.edu.ph") {
+      return res.status(400).json({
+        message: "Program Heads must use @buksu.edu.ph email address",
+      });
+    }
+
+    const existingUser = await User.findOne({ email });
+    if (existingUser) {
+      return res.status(400).json({ message: "User with this email already exists" });
+    }
+
+    const crypto = await import("crypto");
+    const invitationToken = crypto.default.randomBytes(32).toString("hex");
+    const invitationExpires = Date.now() + 7 * 24 * 60 * 60 * 1000;
+
+    const newUser = new User({
+      name,
+      email,
+      role: "program head",
+      invitationToken,
+      invitationExpires,
+      isActive: false,
+      password: "temporary",
+    });
+    await newUser.save();
+
+    const invitationLink = `${
+      process.env.FRONTEND_URL || "http://localhost:5173"
+    }/register?token=${invitationToken}`;
+
+    const nodemailer = await import("nodemailer");
+    const transporter = nodemailer.default.createTransport({
+      host: process.env.SMTP_HOST,
+      port: process.env.SMTP_PORT,
+      secure: false,
+      auth: {
+        user: process.env.SMTP_USER,
+        pass: process.env.SMTP_PASS,
+      },
+    });
+
+    await rateLimitedSendMail(transporter, {
+      from: process.env.SMTP_FROM,
+      to: email,
+      subject: "Program Head Account Invitation - CPAG Masteral Research Archive and Monitoring System",
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <h2 style="color: #7C1D23;">Welcome to CPAG Masteral Research Archive and Monitoring System</h2>
+          <p>Hello <strong>${name}</strong>,</p>
+          <p>You have been invited to join as a <strong>Program Head</strong> in our system.</p>
+          <p>Please click the button below to complete your registration and set your password:</p>
+          <div style="text-align: center; margin: 30px 0;">
+            <a href="${invitationLink}" 
+               style="background-color: #7C1D23; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; display: inline-block;">
+              Complete Registration
+            </a>
+          </div>
+          <p style="color: #666; font-size: 14px;">This invitation link will expire in 7 days.</p>
+          <p style="color: #666; font-size: 14px;">If the button doesn't work, copy and paste this link into your browser:</p>
+          <p style="color: #7C1D23; font-size: 12px; word-break: break-all;">${invitationLink}</p>
+          <hr style="margin: 30px 0; border: none; border-top: 1px solid #ddd;" />
+          <p style="color: #999; font-size: 12px;">If you didn't expect this invitation, please ignore this email.</p>
+        </div>
+      `,
+    });
+
+    await Activity.create({
+      user: req.user.id,
+      action: "invite",
+      entityType: "user",
+      entityId: newUser._id,
+      entityName: newUser.name,
+      description: `Invited program head: ${name} (${email})`,
+      metadata: { email, role: "program head" },
+    });
+
+    res.json({
+      message: `Invitation sent successfully to ${email}!`,
+      user: { name, email, role: "program head" },
+    });
+  } catch (error) {
+    console.error("Error inviting program head:", error);
+    res.status(500).json({ message: "Error inviting program head" });
+  }
+};
+
 // ========== ACTIVITY LOG MANAGEMENT ==========
 
 export const getAllActivityLogs = async (req, res) => {

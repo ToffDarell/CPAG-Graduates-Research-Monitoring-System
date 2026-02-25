@@ -59,6 +59,8 @@ import {
   downloadDocument,
   viewDocument,
   updateResearchTitle,
+  finalizeResearch,
+  setPanelDecision,
 } from "../controllers/programHeadController.js";
 
 const router = express.Router();
@@ -113,6 +115,7 @@ router.put("/panels/:id/select-members", checkPermission("manage_panels"), updat
 router.put("/panels/:id/remove", checkPermission("manage_panels"), removePanel);
 router.delete("/panels/:id", checkPermission("manage_panels"), deletePanel);
 router.put("/panels/:id/status", checkPermission("manage_panels"), updatePanelStatus);
+router.put("/panels/:id/decision", checkPermission("approve_research"), setPanelDecision);
 
 // Panel documents
 router.get("/panels/:panelId/documents", checkPermission("view_documents"), getPanelDocuments);
@@ -143,6 +146,7 @@ router.post("/forms", upload.single("file"), checkPermission("upload_documents")
 
 // Research records
 router.get("/research", checkPermission("view_research"), getResearchRecords);
+router.put("/research/:id/finalize", checkPermission("approve_research"), finalizeResearch);
 
 // Faculty adviser management
 router.get("/advisers", checkPermission("view_users"), getAvailableAdvisers);

@@ -17,6 +17,8 @@ import {
   getAllActivityLogs,
   exportActivityLogsPDF,
   inviteDean,
+  inviteFaculty,
+  inviteProgramHead,
 } from "../controllers/adminController.js";
 
 const router = express.Router();
@@ -44,8 +46,10 @@ router.put("/users/:id/role", updateUserRole);
 router.put("/users/:id", updateUserProfileByAdmin);
 router.delete("/users/:id", deleteUser);
 
-// Dean invitations
+// Invitations
 router.post("/invite-dean", inviteDean);
+router.post("/invite-faculty", inviteFaculty);
+router.post("/invite-program-head", inviteProgramHead);
 
 // Activity logs
 // More specific route must come first

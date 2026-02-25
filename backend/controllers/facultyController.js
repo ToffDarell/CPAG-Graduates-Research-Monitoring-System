@@ -70,6 +70,18 @@ export const updateThesisStatus = async (req, res) => {
     if(!oldResearch) {
       return res.status(404).json({ message: "Research not found" });
     }
+
+    // Block progress update if research was rejected by panel or already finalized
+    if (oldResearch.status === "rejected" && progress !== undefined && progress !== oldResearch.progress) {
+      return res.status(403).json({ 
+        message: "Progress cannot be updated. This research has been rejected by the panel." 
+      });
+    }
+    if (oldResearch.finalizedDate && progress !== undefined && progress !== oldResearch.progress) {
+      return res.status(403).json({ 
+        message: "Progress cannot be updated. This research has already been finalized." 
+      });
+    }
     
     const research = await Research.findByIdAndUpdate(
       id,
@@ -2384,6 +2396,59 @@ export const submitPanelReview = async (req, res) => {
       console.error('Error populating panel data:', populateError);
       // If populate fails, use the saved panel without population
       populated = panel;
+    }
+
+    // Auto-aggregate panel recommendations — run on every submission, fire early if winner is already unbeatable
+    if (panel.research) {
+      try {
+        const activeMembers = panel.members.filter(m => m.isSelected);
+        const submitted = panel.reviews.filter(r => r.status === 'submitted');
+        const remaining = activeMembers.length - submitted.length;
+        const tally = { approve: 0, reject: 0, revision: 0 };
+        submitted.forEach(r => {
+          if (r.recommendation === 'approve') tally.approve++;
+          else if (r.recommendation === 'reject') tally.reject++;
+          else if (r.recommendation === 'revision') tally.revision++;
+        });
+
+        // Check if any option already has an unbeatable lead (even if remaining all vote differently)
+        let finalStatus = null;
+        let isEarly = false;
+        for (const [key, count] of Object.entries(tally)) {
+          const others = Object.entries(tally).filter(([k]) => k !== key).map(([, v]) => v + remaining);
+          if (count > Math.max(...others)) {
+            if (key === 'approve') finalStatus = 'approved';
+            else if (key === 'reject') finalStatus = 'rejected';
+            else if (key === 'revision') finalStatus = 'for-revision';
+            isEarly = remaining > 0;
+            break;
+          }
+        }
+
+        // Also check for unanimous / complete tie
+        const allSubmitted = remaining === 0;
+        if (!finalStatus && allSubmitted) {
+          const max = Math.max(tally.approve, tally.reject, tally.revision);
+          const topChoices = ['approve', 'reject', 'revision'].filter(k => tally[k] === max && max > 0);
+          if (topChoices.length === 1) {
+            if (topChoices[0] === 'approve') finalStatus = 'approved';
+            else if (topChoices[0] === 'reject') finalStatus = 'rejected';
+            else if (topChoices[0] === 'revision') finalStatus = 'for-revision';
+          }
+        }
+
+        if (finalStatus || allSubmitted) {
+          await Research.findByIdAndUpdate(panel.research, {
+            panelRecommendationTally: tally,
+            panelDecisionDate: new Date(),
+            panelDecisionAuto: !!finalStatus,
+            panelDecision: finalStatus || 'tie',
+            ...(finalStatus ? { status: finalStatus } : {}),
+          });
+        }
+      } catch (tallyError) {
+        console.error('Error aggregating panel decision:', tallyError);
+      }
     }
 
     // Log activity (wrap in try-catch to prevent activity logging from breaking the request)

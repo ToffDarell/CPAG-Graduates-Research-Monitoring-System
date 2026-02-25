@@ -4263,20 +4263,40 @@ const StudentList = ({ students, onUpdateStatus, loading }) => {
                   <label className="block text-sm font-medium text-gray-700 mb-2">
                     Progress: {selectedProgress}%
                   </label>
-                  <input
-                    type="range"
-                    min="0"
-                    max="100"
-                    step="5"
-                    value={selectedProgress}
-                    onChange={(e) => setSelectedProgress(parseInt(e.target.value))}
-                    className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-[#7C1D23]"
-                  />
-                  <div className="flex justify-between text-xs text-gray-500 mt-1">
-                    <span>0%</span>
-                    <span>50%</span>
-                    <span>100%</span>
-                  </div>
+                  {selectedStudent?.status === 'rejected' ? (
+                    <div className="w-full p-3 bg-red-50 border border-red-200 rounded-lg">
+                      <p className="text-red-600 text-xs font-medium">Progress locked — research was rejected by the panel.</p>
+                      <div className="mt-2 w-full bg-gray-200 rounded-full h-2">
+                        <div className="bg-red-400 h-2 rounded-full" style={{ width: `${selectedProgress}%` }}></div>
+                      </div>
+                      <p className="text-xs text-gray-500 mt-1">{selectedProgress}%</p>
+                    </div>
+                  ) : selectedStudent?.finalizedDate ? (
+                    <div className="w-full p-3 bg-gray-50 border border-gray-200 rounded-lg">
+                      <p className="text-gray-500 text-xs font-medium">Progress locked — research has been finalized.</p>
+                      <div className="mt-2 w-full bg-gray-200 rounded-full h-2">
+                        <div className="bg-purple-400 h-2 rounded-full" style={{ width: `${selectedProgress}%` }}></div>
+                      </div>
+                      <p className="text-xs text-gray-500 mt-1">{selectedProgress}%</p>
+                    </div>
+                  ) : (
+                    <>
+                      <input
+                        type="range"
+                        min="0"
+                        max="100"
+                        step="5"
+                        value={selectedProgress}
+                        onChange={(e) => setSelectedProgress(parseInt(e.target.value))}
+                        className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-[#7C1D23]"
+                      />
+                      <div className="flex justify-between text-xs text-gray-500 mt-1">
+                        <span>0%</span>
+                        <span>50%</span>
+                        <span>100%</span>
+                      </div>
+                    </>
+                  )}
                 </div>
               </div>
             </div>

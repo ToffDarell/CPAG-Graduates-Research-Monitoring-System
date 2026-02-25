@@ -94,6 +94,19 @@ const researchSchema = new mongoose.Schema(
       },
     ],
 
+    // Finalization fields (set by Program Head)
+    finalizedDate: { type: Date, default: null },
+    finalizedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+    finalGrade: { type: String, default: null },
+    evaluationStatus: {
+      type: String,
+      enum: ["passed", "failed", "incomplete", "pending"],
+      default: null,
+    },
+    semester: { type: String, default: null },
+    academicYear: { type: String, default: null },
+    submissionDate: { type: Date, default: null },
+
     archivedAt: Date,
     archivedBy: {
       type: mongoose.Schema.Types.ObjectId,
@@ -114,6 +127,18 @@ const researchSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
     },
+
+    // Panel Decision (auto-aggregated from panelist recommendations, overridable by Program Head)
+    panelDecision: {
+      type: String,
+      enum: ["approved", "rejected", "for-revision", "tie", null],
+      default: null,
+    },
+    panelDecisionDate: { type: Date, default: null },
+    panelDecisionAuto: { type: Boolean, default: null },
+    panelDecisionBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+    panelDecisionReason: { type: String, default: null },
+    panelRecommendationTally: { type: mongoose.Schema.Types.Mixed, default: null },
     
     createdAt: { type: Date, default: Date.now },
     updatedAt: { type: Date, default: Date.now },

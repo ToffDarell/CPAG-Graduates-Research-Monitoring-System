@@ -761,7 +761,7 @@ export const getPanelDetails = async (req, res) => {
     const { id } = req.params;
 
     const panel = await Panel.findById(id)
-      .populate("research", "title students abstract status stage progress")
+      .populate("research", "title students abstract status stage progress panelDecision panelDecisionDate panelDecisionAuto panelDecisionBy panelRecommendationTally panelDecisionReason")
       .populate("members.faculty", "name email")
       .populate("reviews.panelist", "name email")
       .populate("assignedBy", "name email");
@@ -2361,6 +2361,57 @@ export const submitPanelReviewByToken = async (req, res) => {
 
     await panel.save();
 
+    // Auto-aggregate panel recommendations — run on every submission, fire early if winner is already unbeatable
+    if (panel.research) {
+      try {
+        const activeMembers = panel.members.filter(m => m.isSelected);
+        const submitted = panel.reviews.filter(r => r.status === 'submitted');
+        const remaining = activeMembers.length - submitted.length;
+        const tally = { approve: 0, reject: 0, revision: 0 };
+        submitted.forEach(r => {
+          if (r.recommendation === 'approve') tally.approve++;
+          else if (r.recommendation === 'reject') tally.reject++;
+          else if (r.recommendation === 'revision') tally.revision++;
+        });
+
+        // Check if any option already has an unbeatable lead
+        let finalStatus = null;
+        for (const [key, count] of Object.entries(tally)) {
+          const others = Object.entries(tally).filter(([k]) => k !== key).map(([, v]) => v + remaining);
+          if (count > Math.max(...others)) {
+            if (key === 'approve') finalStatus = 'approved';
+            else if (key === 'reject') finalStatus = 'rejected';
+            else if (key === 'revision') finalStatus = 'for-revision';
+            break;
+          }
+        }
+
+        // Also handle tie when all submitted
+        const allSubmitted = remaining === 0;
+        if (!finalStatus && allSubmitted) {
+          const max = Math.max(tally.approve, tally.reject, tally.revision);
+          const topChoices = ['approve', 'reject', 'revision'].filter(k => tally[k] === max && max > 0);
+          if (topChoices.length === 1) {
+            if (topChoices[0] === 'approve') finalStatus = 'approved';
+            else if (topChoices[0] === 'reject') finalStatus = 'rejected';
+            else if (topChoices[0] === 'revision') finalStatus = 'for-revision';
+          }
+        }
+
+        if (finalStatus || allSubmitted) {
+          await Research.findByIdAndUpdate(panel.research, {
+            panelRecommendationTally: tally,
+            panelDecisionDate: new Date(),
+            panelDecisionAuto: !!finalStatus,
+            panelDecision: finalStatus || 'tie',
+            ...(finalStatus ? { status: finalStatus } : {}),
+          });
+        }
+      } catch (tallyError) {
+        console.error('Error aggregating panel decision (token):', tallyError);
+      }
+    }
+
     // Log activity
     await Activity.create({
       user: panel.assignedBy,
@@ -2391,6 +2442,52 @@ export const submitPanelReviewByToken = async (req, res) => {
   }
 };
 
+// Set or override the final panel decision for linked research (Program Head manual control)
+export const setPanelDecision = async (req, res) => {
+  try {
+    const { id } = req.params; // panelId
+    const { decision, reason } = req.body;
+
+    const validDecisions = ["approved", "rejected", "for-revision"];
+    if (!validDecisions.includes(decision)) {
+      return res.status(400).json({ message: "Invalid decision. Must be approved, rejected, or for-revision." });
+    }
+
+    const panel = await Panel.findById(id);
+    if (!panel) return res.status(404).json({ message: "Panel not found" });
+    if (!panel.research) return res.status(400).json({ message: "Panel has no linked research record" });
+
+    const research = await Research.findByIdAndUpdate(
+      panel.research,
+      {
+        panelDecision: decision,
+        panelDecisionDate: new Date(),
+        panelDecisionAuto: false,
+        panelDecisionBy: req.user.id,
+        panelDecisionReason: reason || null,
+        status: decision,
+      },
+      { new: true }
+    );
+
+    if (!research) return res.status(404).json({ message: "Research record not found" });
+
+    await Activity.create({
+      user: req.user.id,
+      action: "update",
+      entityType: "research",
+      entityId: research._id,
+      entityName: research.title,
+      description: `Manually set panel decision to "${decision}" for: ${research.title}`,
+      metadata: { decision, reason: reason || null, panelId: id },
+    });
+
+    res.json({ message: "Panel decision set successfully", research });
+  } catch (error) {
+    console.error("setPanelDecision error:", error);
+    res.status(500).json({ message: error.message });
+  }
+};
 
 // Upload document to panel
 export const uploadPanelDocument = async (req, res) => {
@@ -6695,6 +6792,104 @@ export const viewDocument = async (req, res) => {
     res.setHeader('Content-Disposition', `inline; filename="${document.filename}"`);
     const fileStream = fs.createReadStream(filePath);
     fileStream.pipe(res);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Finalize research (Program Head marks research as finalized with grade/evaluation)
+export const finalizeResearch = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { finalGrade, evaluationStatus, semester, academicYear, submissionDate } = req.body;
+
+    if (!finalGrade || !evaluationStatus) {
+      return res.status(400).json({ message: "Final Grade and Evaluation Status are required" });
+    }
+
+    const research = await Research.findById(id)
+      .populate("students", "name email")
+      .populate("adviser", "name email");
+
+    if (!research) {
+      return res.status(404).json({ message: "Research not found" });
+    }
+
+    // Update the research record
+    const updateData = {
+      finalizedDate: new Date(),
+      finalizedBy: req.user.id,
+      finalGrade,
+      evaluationStatus,
+    };
+    if (semester) updateData.semester = semester;
+    if (academicYear) updateData.academicYear = academicYear;
+    if (submissionDate) updateData.submissionDate = new Date(submissionDate);
+
+    await Research.findByIdAndUpdate(id, updateData, { new: true });
+
+    // Log activity
+    await Activity.create({
+      user: req.user.id,
+      action: "update",
+      entityType: "research",
+      entityId: research._id,
+      entityName: research.title,
+      description: `Finalized research: ${research.title} — Grade: ${finalGrade}, Status: ${evaluationStatus}`,
+      metadata: { finalGrade, evaluationStatus, semester, academicYear }
+    });
+
+    // Send email notification to students
+    try {
+      const transporter = nodemailer.createTransport({
+        host: process.env.SMTP_HOST,
+        port: process.env.SMTP_PORT,
+        secure: false,
+        auth: {
+          user: process.env.SMTP_USER,
+          pass: process.env.SMTP_PASS,
+        },
+      });
+
+      const studentEmails = (research.students || [])
+        .map(s => s?.email)
+        .filter(Boolean);
+
+      if (studentEmails.length > 0) {
+        await rateLimitedSendMail(transporter, {
+          from: process.env.SMTP_FROM,
+          to: studentEmails.join(","),
+          subject: `Research Finalized: ${research.title}`,
+          html: `
+            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+              <div style="background-color: #7C1D23; color: white; padding: 20px; border-radius: 5px 5px 0 0;">
+                <h2 style="margin: 0;">Research Finalized</h2>
+              </div>
+              <div style="background-color: #f9f9f9; padding: 20px; border: 1px solid #ddd; border-top: none;">
+                <p>Dear Student,</p>
+                <p>Your research has been officially finalized by the Program Head.</p>
+                <div style="background-color: white; padding: 15px; margin: 20px 0; border-left: 4px solid #7C1D23; border-radius: 4px;">
+                  <p style="margin: 8px 0;"><strong>Research Title:</strong> ${research.title}</p>
+                  <p style="margin: 8px 0;"><strong>Final Grade:</strong> ${finalGrade}</p>
+                  <p style="margin: 8px 0;"><strong>Evaluation Status:</strong> ${evaluationStatus.charAt(0).toUpperCase() + evaluationStatus.slice(1)}</p>
+                  ${semester ? `<p style="margin: 8px 0;"><strong>Semester:</strong> ${semester}</p>` : ''}
+                  ${academicYear ? `<p style="margin: 8px 0;"><strong>Academic Year:</strong> ${academicYear}</p>` : ''}
+                </div>
+                <p>Congratulations on completing your research!</p>
+              </div>
+              <div style="background-color: #f0f0f0; padding: 15px; border-radius: 0 0 5px 5px; border: 1px solid #ddd; border-top: none;">
+                <p style="color: #999; font-size: 12px; margin: 0;">If you have any questions, please contact the Program Head.</p>
+              </div>
+            </div>
+          `,
+        });
+      }
+    } catch (emailErr) {
+      console.error("Finalize research email error:", emailErr.message);
+      // Don't fail the request on email error
+    }
+
+    res.json({ message: "Research finalized successfully", research: { ...research.toObject(), ...updateData } });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }

@@ -71,15 +71,28 @@ if (process.env.NODE_ENV === "production") {
 
 app.use(express.json());
 
-// API rate limiter: 60 requests per minute per IP to prevent abuse, DoS, and server overload
-const apiLimiter = rateLimit({
+// Rate limiter for integrations only (reCAPTCHA, Google, SMTP)
+// Prevents abuse of third-party services — NOT applied to regular API routes
+const integrationLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 60,
   message: { message: 'Too many requests, please try again later.' },
   standardHeaders: true,
   legacyHeaders: false,
 });
-app.use('/api', apiLimiter);
+
+// Auth routes that use reCAPTCHA and SMTP (login, register, password reset, Google OAuth)
+app.use('/api/users/login', integrationLimiter);
+app.use('/api/users/register', integrationLimiter);
+app.use('/api/users/complete-registration', integrationLimiter);
+app.use('/api/users/forgot-password', integrationLimiter);
+app.use('/api/users/reset-password', integrationLimiter);
+app.use('/api/users/google', integrationLimiter);
+
+// Google integration routes
+app.use('/api/google-calendar', integrationLimiter);
+app.use('/api/google-drive', integrationLimiter);
+app.use('/api/google-sheets', integrationLimiter);
 
 //Routes
 app.use("/api/users", authRoutes)
