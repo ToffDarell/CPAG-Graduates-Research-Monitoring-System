@@ -422,27 +422,36 @@ const DeanDashboard = ({ setUser, user }) => {
   };
 
   const handleAddFaculty = async (e) => {
+    e.preventDefault(); // must be first — before any await, or the browser submits the form
     // Check permission before allowing add action
     const hasPermission = await checkPermission(
       ['manage_users'],
       'Add Faculty',
       'You will not be able to add new faculty members.'
     );
-    if (!hasPermission) {
-      e?.preventDefault();
+    if (!hasPermission) return;
+    
+    // TEMPORARY: Validate email format (allow both institutional and gmail for testing)
+    const emailPattern = /^[a-zA-Z0-9._-]+@(buksu\.edu\.ph|gmail\.com)$/i;
+    if (!emailPattern.test(newFaculty.email)) {
+      showWarning('Invalid Email', 'Please use a valid @buksu.edu.ph or @gmail.com email address (for testing).');
       return;
     }
-    e.preventDefault();
+    
     setLoading(true);
     try {
       const token = localStorage.getItem('token');
-      const res = await axios.post('/api/dean/invite-faculty', newFaculty, {
+      const endpoint = newFaculty.role === 'program head'
+        ? '/api/dean/invite-program-head'
+        : '/api/dean/invite-faculty';
+      const res = await axios.post(endpoint, newFaculty, {
         headers: { Authorization: `Bearer ${token}` }
       });
+      const roleLabel = newFaculty.role === 'program head' ? 'Program Head' : 'Faculty Adviser';
       setShowAddFacultyModal(false);
       setNewFaculty({ name: '', email: '', role: 'faculty adviser' });
       fetchFaculty();
-      await showSuccess('Invitation Sent', res.data.message || 'Invitation sent successfully! Faculty member will receive an email to complete registration.');
+      await showSuccess(`${roleLabel} Invited`, res.data.message || `${roleLabel} invited successfully! They will receive an email to complete registration.`);
     } catch (error) {
       showError('Error', error.response?.data?.message || 'Error sending invitation');
     } finally {
@@ -475,6 +484,14 @@ const DeanDashboard = ({ setUser, user }) => {
     if (!hasPermission) {
       return;
     }
+    
+    // TEMPORARY: Validate email format (allow both institutional and gmail for testing)
+    const emailPattern = /^[a-zA-Z0-9._-]+@(buksu\.edu\.ph|gmail\.com)$/i;
+    if (!emailPattern.test(editingFaculty.email)) {
+      showWarning('Invalid Email', 'Please use a valid @buksu.edu.ph or @gmail.com email address (for testing).');
+      return;
+    }
+    
     setLoading(true);
     try {
       const token = localStorage.getItem('token');
@@ -884,7 +901,9 @@ const DeanDashboard = ({ setUser, user }) => {
             {/* Modal Header */}
             <div className="bg-gradient-to-r from-[#7C1D23] to-[#5a1519] text-white p-4 rounded-t-lg">
               <div className="flex justify-between items-center">
-                <h3 className="text-lg font-bold">Add New Faculty</h3>
+                <h3 className="text-lg font-bold">
+                  {newFaculty.role === 'program head' ? 'Invite Program Head' : 'Invite Faculty Adviser'}
+                </h3>
                 <button 
                   onClick={() => setShowAddFacultyModal(false)} 
                   className="text-white hover:text-gray-200 transition-colors"
@@ -911,16 +930,16 @@ const DeanDashboard = ({ setUser, user }) => {
                   </div>
                   
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">Institutional Email</label>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Email Address</label>
                     <input
                       type="email"
                       required
                       value={editingFaculty ? editingFaculty.email : newFaculty.email}
                       onChange={(e) => setNewFaculty({...newFaculty, email: e.target.value})}
                       className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-[#7C1D23] transition-colors"
-                      placeholder="faculty@buksu.edu.ph"
+                      placeholder="faculty@buksu.edu.ph or faculty@gmail.com"
                     />
-                    <p className="text-xs text-gray-500 mt-1">An invitation email will be sent to this address</p>
+                    <p className="text-xs text-gray-500 mt-1">Use @buksu.edu.ph or @gmail.com (for testing)</p>
                   </div>
                   
                   <div>
@@ -1000,8 +1019,9 @@ const DeanDashboard = ({ setUser, user }) => {
                       value={editingFaculty.email}
                       onChange={(e) => setEditingFaculty({...editingFaculty, email: e.target.value})}
                       className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-[#7C1D23] transition-colors"
-                      placeholder="faculty@buksu.edu.ph"
+                      placeholder="faculty@buksu.edu.ph or faculty@gmail.com"
                     />
+                    <p className="text-xs text-gray-500 mt-1">Use @buksu.edu.ph or @gmail.com (for testing)</p>
                   </div>
                   
                   <div>
@@ -2236,10 +2256,17 @@ const ResearchRecords = ({ stats, research, onRefresh, driveStatus, sheetsStatus
         { headers: { Authorization: `Bearer ${token}` } }
       );
 
-      await showSuccess(
-        'Export Successful',
-        res.data.message || `Research records exported as ${exportFormat.toUpperCase()} and saved to your Google Drive Reports folder.`
-      );
+      if (res.data.hasWarning) {
+        await showWarning(
+          'Export Completed with Warning',
+          res.data.message || `Research records exported but failed to upload to Google Drive.`
+        );
+      } else {
+        await showSuccess(
+          'Export Successful',
+          res.data.message || `Research records exported as ${exportFormat.toUpperCase()} and saved to your Google Drive Reports folder.`
+        );
+      }
       setShowExportModal(false);
     } catch (error) {
       const errorMessage = error.response?.data?.message || 'Failed to export research records. Please try again.';
@@ -2457,25 +2484,43 @@ const ResearchRecords = ({ stats, research, onRefresh, driveStatus, sheetsStatus
         </div>
 
         {/* Date Range Filters */}
-        <div className="flex flex-col md:flex-row gap-4 mt-4">
+        <div className="flex flex-col md:flex-row gap-4 mt-4 items-end">
           <div className="md:w-48">
-            <label className="block text-xs font-medium text-gray-700 mb-1">Start Date</label>
+            <label className="block text-xs font-medium text-gray-700 mb-1">
+              Start Date <span className="text-gray-500 font-normal">(optional)</span>
+            </label>
             <input
               type="date"
               value={startDateFilter}
               onChange={(e) => setStartDateFilter(e.target.value)}
+              placeholder="Leave blank for all"
               className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-[#7C1D23] text-sm"
             />
           </div>
           <div className="md:w-48">
-            <label className="block text-xs font-medium text-gray-700 mb-1">End Date</label>
+            <label className="block text-xs font-medium text-gray-700 mb-1">
+              End Date <span className="text-gray-500 font-normal">(optional)</span>
+            </label>
             <input
               type="date"
               value={endDateFilter}
               onChange={(e) => setEndDateFilter(e.target.value)}
+              placeholder="Leave blank for all"
               className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-[#7C1D23] text-sm"
             />
           </div>
+          {(startDateFilter || endDateFilter) && (
+            <button
+              onClick={() => {
+                setStartDateFilter('');
+                setEndDateFilter('');
+              }}
+              className="px-4 py-2 text-sm text-gray-600 hover:text-[#7C1D23] border border-gray-300 rounded-md hover:border-[#7C1D23] transition-colors whitespace-nowrap"
+              title="Clear date filters"
+            >
+              Clear Dates
+            </button>
+          )}
         </div>
       </div>
 
@@ -2775,24 +2820,42 @@ const ResearchRecords = ({ stats, research, onRefresh, driveStatus, sheetsStatus
                     ))}
                   </select>
                 </div>
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Start Date</label>
-                    <input
-                      type="date"
-                      value={startDateFilter}
-                      onChange={(e) => setStartDateFilter(e.target.value)}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
-                    />
+                <div>
+                  <div className="flex items-end justify-between mb-1">
+                    <label className="block text-sm font-medium text-gray-700">
+                      Date Range <span className="text-gray-500 font-normal">(optional)</span>
+                    </label>
+                    {(startDateFilter || endDateFilter) && (
+                      <button
+                        onClick={() => {
+                          setStartDateFilter('');
+                          setEndDateFilter('');
+                        }}
+                        className="text-xs text-[#7C1D23] hover:underline"
+                      >
+                        Clear
+                      </button>
+                    )}
                   </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">End Date</label>
-                    <input
-                      type="date"
-                      value={endDateFilter}
-                      onChange={(e) => setEndDateFilter(e.target.value)}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
-                    />
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <input
+                        type="date"
+                        value={startDateFilter}
+                        onChange={(e) => setStartDateFilter(e.target.value)}
+                        placeholder="Start"
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
+                      />
+                    </div>
+                    <div>
+                      <input
+                        type="date"
+                        value={endDateFilter}
+                        onChange={(e) => setEndDateFilter(e.target.value)}
+                        placeholder="End"
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
+                      />
+                    </div>
                   </div>
                 </div>
               </div>
@@ -3370,10 +3433,17 @@ const MonitoringEvaluation = ({ research, driveStatus }) => {
         { headers: { Authorization: `Bearer ${token}` } }
       );
 
-      await showSuccess(
-        'Export Successful',
-        res.data.message || `Defense schedule exported as Excel and saved to your Google Drive Reports folder.`
-      );
+      if (res.data.hasWarning) {
+        await showWarning(
+          'Export Completed with Warning',
+          res.data.message || `Defense schedule exported but failed to upload to Google Drive.`
+        );
+      } else {
+        await showSuccess(
+          'Export Successful',
+          res.data.message || `Defense schedule exported as Excel and saved to your Google Drive Reports folder.`
+        );
+      }
     } catch (error) {
       console.error('Error exporting defense schedule:', error);
       const errorMessage = error.response?.data?.message || 'Failed to export defense schedule. Please try again.';
