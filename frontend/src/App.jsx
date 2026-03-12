@@ -3,6 +3,7 @@ import {
   Routes,
   Route,
   Navigate,
+  useSearchParams,
 } from "react-router-dom";
 import Navbar from "./components/Navbar";
 import Home from "./pages/Home";
@@ -23,6 +24,24 @@ import AdminDashboard from "./pages/Dashboard/Admin";
 import PanelReview from "./pages/PanelReview";
 import ViewFeedback from "./pages/ViewFeedback";
 import Settings from "./pages/Settings";
+
+// Wrapper component for /register route
+// If URL has an invitation token, always show registration regardless of login state
+function RegisterRoute({ user, setUser, getDashboardPath }) {
+  const [searchParams] = useSearchParams();
+  const hasToken = searchParams.get('token');
+
+  // Invitation link: always show the registration form
+  if (hasToken) {
+    return <Register setUser={setUser} />;
+  }
+
+  // Normal register (self-registration): redirect if already logged in
+  if (user) {
+    return <Navigate to={`/dashboard/${getDashboardPath(user.role)}`} />;
+  }
+  return <Register setUser={setUser} />;
+}
 
 function App() {
   const [user, setUser] = useState(null);
@@ -138,11 +157,7 @@ function App() {
         <Route
           path="/register"
           element={
-            user ? (
-              <Navigate to={`/dashboard/${getDashboardPath(user.role)}`} />
-            ) : (
-              <Register setUser={setUser} />
-            )
+            <RegisterRoute user={user} setUser={setUser} getDashboardPath={getDashboardPath} />
           }
         />
 
