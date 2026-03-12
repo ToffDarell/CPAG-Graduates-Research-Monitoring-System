@@ -879,9 +879,9 @@ const PanelSelection = () => {
       return;
     }
 
-    // Validate institutional email domain
-    if (!inviteForm.email.endsWith('@buksu.edu.ph')) {
-      showWarning('Validation Error', 'Panelist must use @buksu.edu.ph institutional email address');
+    // Validate institutional email domain (TEMPORARY: @gmail.com added for testing)
+    if (!inviteForm.email.endsWith('@buksu.edu.ph') && !inviteForm.email.endsWith('@gmail.com')) {
+      showWarning('Validation Error', 'Panelist must use @buksu.edu.ph institutional email or @gmail.com (for testing)');
       return;
     }
 
@@ -1229,7 +1229,7 @@ const PanelSelection = () => {
                     className="w-full px-4 py-2 rounded-md border border-gray-300 focus:border-[#7C1D23] focus:ring-2 focus:ring-[#7C1D23]/20 text-sm"
                    
                   />
-                  <p className="text-xs text-gray-500 mt-1">Must use @buksu.edu.ph email address</p>
+                  <p className="text-xs text-gray-500 mt-1">Must use @buksu.edu.ph or @gmail.com (for testing)</p>
                 </div>
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -1283,9 +1283,9 @@ const PanelSelection = () => {
                       return;
                     }
                     
-                    // Validate institutional email domain
-                    if (!inviteForm.email.endsWith('@buksu.edu.ph')) {
-                      showWarning('Validation Error', 'Panelist must use @buksu.edu.ph institutional email address');
+                    // Validate institutional email domain (TEMPORARY: @gmail.com added for testing)
+                    if (!inviteForm.email.endsWith('@buksu.edu.ph') && !inviteForm.email.endsWith('@gmail.com')) {
+                      showWarning('Validation Error', 'Panelist must use @buksu.edu.ph institutional email or @gmail.com (for testing)');
                       return;
                     }
                     
@@ -1506,9 +1506,9 @@ const PanelSelection = () => {
                             value={inviteForm.email}
                             onChange={e => setInviteForm({ ...inviteForm, email: e.target.value })}
                             className="w-full px-3 py-2 rounded-md border border-gray-300 text-sm"
-                            placeholder="john.doe@buksu.edu.ph"
+                            placeholder="john.doe@buksu.edu.ph or name@gmail.com"
                           />
-                          <p className="text-xs text-gray-500 mt-1">Must use @buksu.edu.ph</p>
+                          <p className="text-xs text-gray-500 mt-1">Must use @buksu.edu.ph or @gmail.com (for testing)</p>
                         </div>
                       </div>
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
@@ -2175,10 +2175,17 @@ const ScheduleManagement = () => {
         { headers: { Authorization: `Bearer ${token}` } }
       );
 
-      await showSuccess(
-        'Export Successful',
-        res.data.message || `Defense schedule exported as Excel and saved to your Google Drive Reports folder.`
-      );
+      if (res.data.hasWarning) {
+        await showWarning(
+          'Export Completed with Warning',
+          res.data.message || `Defense schedule exported but failed to upload to Google Drive.`
+        );
+      } else {
+        await showSuccess(
+          'Export Successful',
+          res.data.message || `Defense schedule exported as Excel and saved to your Google Drive Reports folder.`
+        );
+      }
     } catch (error) {
       console.error('Error exporting defense schedule:', error);
       const errorMessage = error.response?.data?.message || 'Failed to export defense schedule. Please try again.';
@@ -3237,20 +3244,26 @@ const ProcessMonitoring = () => {
             </select>
         </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Start Date</label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Start Date <span className="text-gray-500 font-normal">(optional)</span>
+            </label>
             <input
               type="date"
               value={filters.startDate}
               onChange={(e) => setFilters({ ...filters, startDate: e.target.value })}
+              placeholder="Leave blank for all"
               className="w-full px-3 py-2 rounded-md border border-gray-300 text-sm"
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">End Date</label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              End Date <span className="text-gray-500 font-normal">(optional)</span>
+            </label>
             <input
               type="date"
               value={filters.endDate}
               onChange={(e) => setFilters({ ...filters, endDate: e.target.value })}
+              placeholder="Leave blank for all"
               className="w-full px-3 py-2 rounded-md border border-gray-300 text-sm"
             />
           </div>
@@ -5968,10 +5981,17 @@ const PanelRecords = () => {
         { headers: { Authorization: `Bearer ${token}` } }
       );
 
-      await showSuccess(
-        'Export Successful',
-        res.data.message || `Panel records exported as PDF and saved to your Google Drive Reports folder.`
-      );
+      if (res.data.hasWarning) {
+        await showWarning(
+          'Export Completed with Warning',
+          res.data.message || `Panel records exported but failed to upload to Google Drive.`
+        );
+      } else {
+        await showSuccess(
+          'Export Successful',
+          res.data.message || `Panel records exported as PDF and saved to your Google Drive Reports folder.`
+        );
+      }
     } catch (error) {
       console.error('Error exporting panel records:', error);
       const errorMessage = error.response?.data?.message || 'Failed to export panel records. Please try again.';
@@ -6024,20 +6044,26 @@ const PanelRecords = () => {
             </select>
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Start Date</label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Start Date <span className="text-gray-500 font-normal">(optional)</span>
+            </label>
             <input
               type="date"
               value={filters.startDate}
               onChange={(e) => setFilters({ ...filters, startDate: e.target.value })}
+              placeholder="Leave blank for all"
               className="w-full px-3 py-2 rounded-md border border-gray-300 text-sm"
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">End Date</label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              End Date <span className="text-gray-500 font-normal">(optional)</span>
+            </label>
             <input
               type="date"
               value={filters.endDate}
               onChange={(e) => setFilters({ ...filters, endDate: e.target.value })}
+              placeholder="Leave blank for all"
               className="w-full px-3 py-2 rounded-md border border-gray-300 text-sm"
             />
           </div>
