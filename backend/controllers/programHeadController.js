@@ -2027,11 +2027,11 @@ export const invitePanelist = async (req, res) => {
       return res.status(400).json({ message: "Invalid email format" });
     }
 
-    // Validate institutional email domain
+    // TEMPORARY: Validate institutional email domain (allow @gmail.com for testing)
     const emailDomain = '@' + email.split('@')[1];
-    if (emailDomain !== '@buksu.edu.ph') {
+    if (emailDomain !== '@buksu.edu.ph' && emailDomain !== '@gmail.com') {
       return res.status(400).json({ 
-        message: "Panelist must use @buksu.edu.ph email address" 
+        message: "Panelist must use @buksu.edu.ph or @gmail.com email address (for testing)" 
       });
     }
 
@@ -5057,6 +5057,8 @@ export const exportPanelRecords = async (req, res) => {
     console.log("[Export Panel Records] Sending response to client...");
     
     res.json({
+      success: true,
+      hasWarning: !driveFile,
       message: responseMessage,
       format: "pdf",
       recordCount: panelData.length,
@@ -5237,14 +5239,18 @@ export const exportDefenseSchedule = async (req, res) => {
           const logoCell = worksheet.getCell(1, 1);
           logoCell.alignment = { horizontal: 'center', vertical: 'middle' };
           
-          // Center the logo: With 9 columns (0-8), center is at column 4
-          // Logo spans approximately 2 columns visually, so start at column 3.5 to center it
-          // ExcelJS supports fractional column positions for precise centering
-          const centerCol = 3.5;
+          // Center the logo by calculating the starting position
+          // For 10 columns, calculate proper centering based on pixel positioning
+          const totalCols = 10;
+          const avgColWidthPixels = 64; // Default column width in pixels
+          const totalWidthPixels = totalCols * avgColWidthPixels;
+          const logoStartPixelOffset = (totalWidthPixels - logoSize) / 2;
+          const logoStartCol = logoStartPixelOffset / avgColWidthPixels;
           
           worksheet.addImage(imageId, {
-            tl: { col: centerCol, row: 0 },
-            ext: { width: logoSize, height: logoSize }
+            tl: { col: logoStartCol, row: 0 },
+            ext: { width: logoSize, height: logoSize },
+            editAs: 'oneCell'
           });
           
           worksheet.getRow(1).height = logoSize + 15;
@@ -5655,6 +5661,8 @@ export const exportDefenseSchedule = async (req, res) => {
     console.log('========================================\n');
 
     res.json({
+      success: true,
+      hasWarning: !driveFile,
       message,
       format: "xlsx",
       recordCount: schedules.length,
@@ -6840,6 +6848,11 @@ export const finalizeResearch = async (req, res) => {
 
     if (!research) {
       return res.status(404).json({ message: "Research not found" });
+    }
+
+    // Prevent re-finalization
+    if (research.finalizedDate) {
+      return res.status(400).json({ message: "Research has already been finalized." });
     }
 
     // Update the research record
