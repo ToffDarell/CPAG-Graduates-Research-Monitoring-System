@@ -156,9 +156,9 @@ export const register = async (req, res) => {
             });
         }
 
-        // institutional email check
-        if (!email.endsWith('@buksu.edu.ph') && !email.endsWith('@student.buksu.edu.ph')) {
-            return res.status(400).json({ message: 'Institutional emails only' });
+        // TEMPORARY: institutional email check (allow @gmail.com for testing)
+        if (!email.endsWith('@buksu.edu.ph') && !email.endsWith('@student.buksu.edu.ph') && !email.endsWith('@gmail.com')) {
+            return res.status(400).json({ message: 'Use institutional email or Gmail (for testing)' });
         }
 
         // Check if email exists
@@ -169,19 +169,29 @@ export const register = async (req, res) => {
                     message: 'Please activate your account by completing the password setup. Contact your Dean or the System Administrator for assistance.' 
                 });
             }
-            return res.status(400).json({ message: 'Account is not active. Please contact your Dean or the System Administrator for assistance.' });
+            return res.status(400).json({ message: 'An account with this email already exists.' });
         } 
 
-        // Validate email domain based on role
+        // TEMPORARY: Validate email domain based on role (allow @gmail.com for testing)
         const emailDomain = email.split('@')[1];
         const isStudent = role === 'graduate student';
         
-        if (isStudent && emailDomain !== 'student.buksu.edu.ph') {
-            return res.status(400).json({ message: 'Graduate students must use @student.buksu.edu.ph email' });
+        if (isStudent && emailDomain !== 'student.buksu.edu.ph' && emailDomain !== 'gmail.com') {
+            return res.status(400).json({ message: 'Graduate students must use @student.buksu.edu.ph or @gmail.com email (for testing)' });
         }
         
-        if (!isStudent && emailDomain !== 'buksu.edu.ph') {
-            return res.status(400).json({ message: 'Faculty/Dean must use @buksu.edu.ph email' });
+        if (!isStudent && emailDomain !== 'buksu.edu.ph' && emailDomain !== 'gmail.com') {
+            return res.status(400).json({ message: 'Faculty/Dean must use @buksu.edu.ph or @gmail.com email (for testing)' });
+        }
+
+        // Validate studentId for graduate students
+        if (role === 'graduate student') {
+            if (!studentId) {
+                return res.status(400).json({ message: 'Student ID is required for graduate students.' });
+            }
+            if (!/^\d{10}$/.test(studentId)) {
+                return res.status(400).json({ message: 'Student ID must be exactly 10 digits.' });
+            }
         }
 
         // Create user object based on role
@@ -234,9 +244,9 @@ export const login = async (req, res) => {
             return res.status(400).json({ message: 'All fields are required' });
         }
 
-        // institutional email check
-        if (!email.endsWith('@buksu.edu.ph') && !email.endsWith('@student.buksu.edu.ph')) {
-            return res.status(400).json({ message: 'Institutional emails only' });
+        // TEMPORARY: institutional email check (allow @gmail.com for testing)
+        if (!email.endsWith('@buksu.edu.ph') && !email.endsWith('@student.buksu.edu.ph') && !email.endsWith('@gmail.com')) {
+            return res.status(400).json({ message: 'Use institutional email or Gmail (for testing)' });
         }
 
         const user = await User.findOne({ email });
@@ -248,6 +258,13 @@ export const login = async (req, res) => {
 
         // Check if account is active
         if (!user.isActive) {
+            if (user.password) {
+                // Account was active but deliberately deactivated by an admin
+                return res.status(401).json({ 
+                    message: 'Your account has been deactivated. Please contact the System Administrator for assistance.' 
+                });
+            }
+            // Account was invited but registration was never completed
             return res.status(401).json({ 
                 message: 'Account is not active. Please activate your account by completing the password setup. Contact the Dean for assistance.' 
             });
@@ -296,8 +313,8 @@ export const forgotPassword = async (req, res) => {
         }
 
         // Check if institutional email
-        if (!email.endsWith('@buksu.edu.ph') && !email.endsWith('@student.buksu.edu.ph')) {
-            return res.status(400).json({ message: 'Institutional emails only' });
+        if (!email.endsWith('@buksu.edu.ph') && !email.endsWith('@student.buksu.edu.ph') && !email.endsWith('@gmail.com')) {
+            return res.status(400).json({ message: 'Use institutional email or Gmail (for testing)' });
         }
 
         const user = await User.findOne({ email });
@@ -540,15 +557,16 @@ export const updateProfile = async (req, res) => {
                 normalizedEmail
             });
             
-            if (isStudent && emailDomain !== 'student.buksu.edu.ph') {
+            // TEMPORARY: allow @gmail.com for testing
+            if (isStudent && emailDomain !== 'student.buksu.edu.ph' && emailDomain !== 'gmail.com') {
                 return res.status(400).json({ 
-                    message: 'Graduate students must use @student.buksu.edu.ph email address.' 
+                    message: 'Graduate students must use @student.buksu.edu.ph or @gmail.com email (for testing).' 
                 });
             }
             
-            if (!isStudent && emailDomain !== 'buksu.edu.ph') {
+            if (!isStudent && emailDomain !== 'buksu.edu.ph' && emailDomain !== 'gmail.com') {
                 return res.status(400).json({ 
-                    message: 'Faculty, Dean, and Program Head must use @buksu.edu.ph email address.' 
+                    message: 'Faculty, Dean, and Program Head must use @buksu.edu.ph or @gmail.com email (for testing).' 
                 });
             }
 
@@ -785,12 +803,13 @@ export const googleAuth = async (req, res) => {
         const email = payload.email;
         const name = payload.name || email.split('@')[0];
 
-        // Email domain validation
+        // TEMPORARY: Email domain validation (allow @gmail.com for testing)
         const isStudentEmail = email.endsWith('@student.buksu.edu.ph');
         const isFacultyEmail = email.endsWith('@buksu.edu.ph');
+        const isGmailEmail = email.endsWith('@gmail.com');
 
-        if (!isStudentEmail && !isFacultyEmail) {
-            return res.status(400).json({ message: 'Institutional emails only' });
+        if (!isStudentEmail && !isFacultyEmail && !isGmailEmail) {
+            return res.status(400).json({ message: 'Use institutional email or Gmail (for testing)' });
         }
 
         // Rest of the authentication process
@@ -840,6 +859,12 @@ export const googleAuth = async (req, res) => {
         
         // Validate studentId is required for graduate students
         if (role === 'graduate student') {
+            if (!studentId) {
+                return res.status(400).json({ message: 'Student ID is required for graduate students.' });
+            }
+            if (!/^\d{10}$/.test(studentId)) {
+                return res.status(400).json({ message: 'Student ID must be exactly 10 digits.' });
+            }
             userData.studentId = studentId;
         }
 
