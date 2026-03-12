@@ -12,10 +12,10 @@ const userSchema = new mongoose.Schema(
       type: String,
       required: true,
       unique: true,
-      // Institutional email only (faculty OR student)
+      // TEMPORARY: Allow institutional email OR gmail (for testing)
       match: [
-        /@(buksu\.edu\.ph|student\.buksu\.edu\.ph)$/,
-        "Invalid institutional email address",
+        /@(buksu\.edu\.ph|student\.buksu\.edu\.ph|gmail\.com)$/,
+        "Invalid email address. Use @buksu.edu.ph, @student.buksu.edu.ph, or @gmail.com (for testing)",
       ],
     },
     password: {
