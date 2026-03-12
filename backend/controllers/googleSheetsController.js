@@ -428,47 +428,81 @@ export const createResearchDashboard = async (req, res) => {
       }
     }
 
-    // Convert logo to base64 for direct embedding (no Drive upload needed)
-    let logoBase64 = null;
+    // Upload logo to Google Drive for use in Sheets IMAGE() formula
     if (logoPath) {
       try {
-        const logoBuffer = fs.readFileSync(logoPath);
+        const sheetsOAuthClient = createSheetsOAuthClient();
+        sheetsOAuthClient.setCredentials({
+          access_token: user.sheetsAccessToken,
+          refresh_token: user.sheetsRefreshToken,
+        });
+        const drive = google.drive({ version: 'v3', auth: sheetsOAuthClient });
         const logoExt = path.extname(logoPath).slice(1).toLowerCase();
         const mimeType = logoExt === 'png' ? 'image/png' : 'image/jpeg';
-        logoBase64 = `data:${mimeType};base64,${logoBuffer.toString('base64')}`;
-        console.log('Logo converted to base64 for embedding');
-      } catch (logoError) {
-        console.log('Could not read logo file:', logoError.message);
+        const driveRes = await drive.files.create({
+          requestBody: {
+            name: `buksu-logo-temp.${logoExt}`,
+            mimeType,
+          },
+          media: {
+            mimeType,
+            body: fs.createReadStream(logoPath),
+          },
+          fields: 'id,webContentLink',
+        });
+        const fileId = driveRes.data.id;
+        // Make logo viewable by anyone with the link
+        await drive.permissions.create({
+          fileId,
+          requestBody: { role: 'reader', type: 'anyone' },
+        });
+        logoUrl = `https://drive.google.com/uc?export=view&id=${fileId}`;
+        console.log('Logo uploaded to Drive for Sheets:', logoUrl);
+      } catch (logoUploadError) {
+        console.log('Could not upload logo to Drive:', logoUploadError.message);
       }
     }
 
-    // Start building the sheet structure.
-    // To stay under Google Sheets write quotas and avoid #VALUE! errors,
-    // we SKIP inserting the logo image here and just start with an empty top row.
-    let currentRow = 1;
+    // Start building the sheet structure with logo + merged header rows
+    let currentRow = 0; // 0-indexed
 
-    // Blue divider line above university name (matching image) – no merge to reduce write calls
-    const blueDividerRow = currentRow;
-    await formatCells(spreadsheetId, sheetId, blueDividerRow, blueDividerRow + 1, 0, maxColumns, {
-      backgroundColor: { red: 0.12, green: 0.25, blue: 0.69 } // Blue color
-    }, user._id, user.sheetsAccessToken, user.sheetsRefreshToken);
-    await sheets.spreadsheets.batchUpdate({
-      spreadsheetId,
-      requestBody: {
-        requests: [{
-          updateDimensionProperties: {
-            range: { sheetId, dimension: "ROWS", startIndex: blueDividerRow, endIndex: blueDividerRow + 1 },
-            properties: { pixelSize: 2 },
-            fields: "pixelSize"
-          }
-        }]
-      }
-    });
+    // Logo row
+    if (logoUrl) {
+      await writeToSheet(
+        spreadsheetId,
+        `Sheet1!A1`,
+        [[`=IMAGE("${logoUrl}", 4, 90, 90)`]],
+        user._id,
+        user.sheetsAccessToken,
+        user.sheetsRefreshToken
+      );
+      await mergeCells(spreadsheetId, sheetId, 0, 1, 0, maxColumns, user._id, user.sheetsAccessToken, user.sheetsRefreshToken);
+      await formatCells(spreadsheetId, sheetId, 0, 1, 0, maxColumns, {
+        horizontalAlignment: "CENTER",
+        verticalAlignment: "MIDDLE",
+        backgroundColor: { red: 1, green: 1, blue: 1 }
+      }, user._id, user.sheetsAccessToken, user.sheetsRefreshToken);
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId,
+        requestBody: {
+          requests: [{
+            updateDimensionProperties: {
+              range: { sheetId, dimension: "ROWS", startIndex: 0, endIndex: 1 },
+              properties: { pixelSize: 100 },
+              fields: "pixelSize"
+            }
+          }]
+        }
+      });
+      currentRow = 1;
+    } else {
+      currentRow = 0;
+    }
 
     // University Header - matching image exactly
-    const headerStartRow = blueDividerRow + 1;
+    const headerStartRow = currentRow;
     
-    // University Name (use first cell only to avoid merge)
+    // University Name - merged across all columns
     await writeToSheet(
       spreadsheetId,
       `Sheet1!A${headerStartRow + 1}`,
@@ -477,11 +511,12 @@ export const createResearchDashboard = async (req, res) => {
       user.sheetsAccessToken,
       user.sheetsRefreshToken
     );
+    await mergeCells(spreadsheetId, sheetId, headerStartRow, headerStartRow + 1, 0, maxColumns, user._id, user.sheetsAccessToken, user.sheetsRefreshToken);
     await formatCells(spreadsheetId, sheetId, headerStartRow, headerStartRow + 1, 0, maxColumns, {
       textFormat: { bold: true, fontSize: 20, foregroundColor: { red: 0.49, green: 0.11, blue: 0.14 } },
       horizontalAlignment: "CENTER",
       verticalAlignment: "MIDDLE",
-      backgroundColor: { red: 1, green: 1, blue: 1 } // White background (matching image)
+      backgroundColor: { red: 1, green: 1, blue: 1 }
     }, user._id, user.sheetsAccessToken, user.sheetsRefreshToken);
     await sheets.spreadsheets.batchUpdate({
       spreadsheetId,
@@ -489,14 +524,14 @@ export const createResearchDashboard = async (req, res) => {
         requests: [{
           updateDimensionProperties: {
             range: { sheetId, dimension: "ROWS", startIndex: headerStartRow, endIndex: headerStartRow + 1 },
-            properties: { pixelSize: 25 },
+            properties: { pixelSize: 30 },
             fields: "pixelSize"
           }
         }]
       }
     });
 
-    // Location
+    // Location - merged across all columns
     const locationRow = headerStartRow + 1;
     await writeToSheet(
       spreadsheetId,
@@ -506,11 +541,12 @@ export const createResearchDashboard = async (req, res) => {
       user.sheetsAccessToken,
       user.sheetsRefreshToken
     );
+    await mergeCells(spreadsheetId, sheetId, locationRow, locationRow + 1, 0, maxColumns, user._id, user.sheetsAccessToken, user.sheetsRefreshToken);
     await formatCells(spreadsheetId, sheetId, locationRow, locationRow + 1, 0, maxColumns, {
       textFormat: { fontSize: 11, foregroundColor: { red: 0.22, green: 0.25, blue: 0.32 } },
       horizontalAlignment: "CENTER",
       verticalAlignment: "MIDDLE",
-      backgroundColor: { red: 1, green: 1, blue: 1 } // White background
+      backgroundColor: { red: 1, green: 1, blue: 1 }
     }, user._id, user.sheetsAccessToken, user.sheetsRefreshToken);
     await sheets.spreadsheets.batchUpdate({
       spreadsheetId,
@@ -525,7 +561,7 @@ export const createResearchDashboard = async (req, res) => {
       }
     });
 
-    // Contact (blue, underlined - matching image)
+    // Contact (blue - matching image) - merged across all columns
     const contactRow = locationRow + 1;
     await writeToSheet(
       spreadsheetId,
@@ -535,12 +571,12 @@ export const createResearchDashboard = async (req, res) => {
       user.sheetsAccessToken,
       user.sheetsRefreshToken
     );
-    // Note: Google Sheets API doesn't support underline directly, but we'll use blue color
+    await mergeCells(spreadsheetId, sheetId, contactRow, contactRow + 1, 0, maxColumns, user._id, user.sheetsAccessToken, user.sheetsRefreshToken);
     await formatCells(spreadsheetId, sheetId, contactRow, contactRow + 1, 0, maxColumns, {
       textFormat: { fontSize: 10, foregroundColor: { red: 0.12, green: 0.25, blue: 0.69 } },
       horizontalAlignment: "CENTER",
       verticalAlignment: "MIDDLE",
-      backgroundColor: { red: 1, green: 1, blue: 1 } // White background
+      backgroundColor: { red: 1, green: 1, blue: 1 }
     }, user._id, user.sheetsAccessToken, user.sheetsRefreshToken);
     await sheets.spreadsheets.batchUpdate({
       spreadsheetId,
@@ -555,7 +591,7 @@ export const createResearchDashboard = async (req, res) => {
       }
     });
 
-    // College Name
+    // College Name - merged across all columns
     const collegeRow = contactRow + 1;
     await writeToSheet(
       spreadsheetId,
@@ -565,11 +601,12 @@ export const createResearchDashboard = async (req, res) => {
       user.sheetsAccessToken,
       user.sheetsRefreshToken
     );
+    await mergeCells(spreadsheetId, sheetId, collegeRow, collegeRow + 1, 0, maxColumns, user._id, user.sheetsAccessToken, user.sheetsRefreshToken);
     await formatCells(spreadsheetId, sheetId, collegeRow, collegeRow + 1, 0, maxColumns, {
       textFormat: { fontSize: 13, foregroundColor: { red: 0.22, green: 0.25, blue: 0.32 } },
       horizontalAlignment: "CENTER",
       verticalAlignment: "MIDDLE",
-      backgroundColor: { red: 1, green: 1, blue: 1 } // White background
+      backgroundColor: { red: 1, green: 1, blue: 1 }
     }, user._id, user.sheetsAccessToken, user.sheetsRefreshToken);
     await sheets.spreadsheets.batchUpdate({
       spreadsheetId,
@@ -584,10 +621,11 @@ export const createResearchDashboard = async (req, res) => {
       }
     });
 
-    // Thick dark red divider line (matching Excel - 3 pixels) – no merge needed
+    // Thick dark red divider line (matching Excel - 3 pixels) - merged
     const dividerRow = collegeRow + 1;
+    await mergeCells(spreadsheetId, sheetId, dividerRow, dividerRow + 1, 0, maxColumns, user._id, user.sheetsAccessToken, user.sheetsRefreshToken);
     await formatCells(spreadsheetId, sheetId, dividerRow, dividerRow + 1, 0, maxColumns, {
-      backgroundColor: { red: 0.49, green: 0.11, blue: 0.14 } // #7C1D23 (matching Excel)
+      backgroundColor: { red: 0.49, green: 0.11, blue: 0.14 }
     }, user._id, user.sheetsAccessToken, user.sheetsRefreshToken);
     await sheets.spreadsheets.batchUpdate({
       spreadsheetId,
@@ -595,14 +633,14 @@ export const createResearchDashboard = async (req, res) => {
         requests: [{
           updateDimensionProperties: {
             range: { sheetId, dimension: "ROWS", startIndex: dividerRow, endIndex: dividerRow + 1 },
-            properties: { pixelSize: 3 }, // Matching Excel (3 pixels)
+            properties: { pixelSize: 3 },
             fields: "pixelSize"
           }
         }]
       }
     });
 
-    // Report Title
+    // Report Title - merged across all columns
     const reportTitleRow = dividerRow + 1;
     await writeToSheet(
       spreadsheetId,
@@ -612,8 +650,9 @@ export const createResearchDashboard = async (req, res) => {
       user.sheetsAccessToken,
       user.sheetsRefreshToken
     );
+    await mergeCells(spreadsheetId, sheetId, reportTitleRow, reportTitleRow + 1, 0, maxColumns, user._id, user.sheetsAccessToken, user.sheetsRefreshToken);
     await formatCells(spreadsheetId, sheetId, reportTitleRow, reportTitleRow + 1, 0, maxColumns, {
-      textFormat: { bold: true, fontSize: 16, foregroundColor: { red: 0.07, green: 0.09, blue: 0.15 } }, // #111827 (matching Excel)
+      textFormat: { bold: true, fontSize: 16, foregroundColor: { red: 0.07, green: 0.09, blue: 0.15 } },
       horizontalAlignment: "CENTER",
       verticalAlignment: "MIDDLE"
     }, user._id, user.sheetsAccessToken, user.sheetsRefreshToken);
@@ -623,14 +662,14 @@ export const createResearchDashboard = async (req, res) => {
         requests: [{
           updateDimensionProperties: {
             range: { sheetId, dimension: "ROWS", startIndex: reportTitleRow, endIndex: reportTitleRow + 1 },
-            properties: { pixelSize: 24 }, // Matching Excel (24 pixels)
+            properties: { pixelSize: 30 },
             fields: "pixelSize"
           }
         }]
       }
     });
 
-    // Report Details Box - matching Excel format (center-aligned, gray background)
+    // Report Details Box - merged across all columns
     const detailsRow = reportTitleRow + 1;
     const dateGenerated = formatDateValue(new Date(), true);
     const detailsText = `Generated by: ${generatedBy || "Dean"} | Date Generated: ${dateGenerated} | Total Records: ${rows.length}`;
@@ -643,10 +682,11 @@ export const createResearchDashboard = async (req, res) => {
       user.sheetsAccessToken,
       user.sheetsRefreshToken
     );
+    await mergeCells(spreadsheetId, sheetId, detailsRow, detailsRow + 1, 0, maxColumns, user._id, user.sheetsAccessToken, user.sheetsRefreshToken);
     await formatCells(spreadsheetId, sheetId, detailsRow, detailsRow + 1, 0, maxColumns, {
-      backgroundColor: { red: 0.95, green: 0.96, blue: 0.98 }, // #F3F4F6 (matching Excel)
-      textFormat: { fontSize: 11, foregroundColor: { red: 0.42, green: 0.45, blue: 0.50 } }, // #6B7280 (matching Excel)
-      horizontalAlignment: "CENTER", // Center-aligned (matching Excel)
+      backgroundColor: { red: 0.95, green: 0.96, blue: 0.98 },
+      textFormat: { fontSize: 11, foregroundColor: { red: 0.42, green: 0.45, blue: 0.50 } },
+      horizontalAlignment: "CENTER",
       verticalAlignment: "MIDDLE"
     }, user._id, user.sheetsAccessToken, user.sheetsRefreshToken);
     await sheets.spreadsheets.batchUpdate({
@@ -694,6 +734,7 @@ export const createResearchDashboard = async (req, res) => {
         user.sheetsAccessToken,
         user.sheetsRefreshToken
       );
+      await mergeCells(spreadsheetId, sheetId, filterRow, filterRow + 1, 0, maxColumns, user._id, user.sheetsAccessToken, user.sheetsRefreshToken);
       await formatCells(spreadsheetId, sheetId, filterRow, filterRow + 1, 0, maxColumns, {
         backgroundColor: { red: 0.95, green: 0.96, blue: 0.98 }, // #F3F4F6 (matching Excel)
         textFormat: { fontSize: 11, italic: true, foregroundColor: { red: 0.61, green: 0.64, blue: 0.69 } }, // #9CA3AF italic (matching Excel)
@@ -1016,7 +1057,7 @@ export const createResearchDashboard = async (req, res) => {
       });
     }
 
-    // Add footer rows - matching Excel format (simplified, no merges)
+    // Add footer rows - matching Excel format
     const footerStartRow = currentRow + dataRows.length + 1;
     await writeToSheet(
       spreadsheetId,
@@ -1026,6 +1067,7 @@ export const createResearchDashboard = async (req, res) => {
       user.sheetsAccessToken,
       user.sheetsRefreshToken
     );
+    await mergeCells(spreadsheetId, sheetId, footerStartRow, footerStartRow + 1, 0, maxColumns, user._id, user.sheetsAccessToken, user.sheetsRefreshToken);
     await formatCells(spreadsheetId, sheetId, footerStartRow, footerStartRow + 1, 0, maxColumns, {
       backgroundColor: { red: 1, green: 1, blue: 1 },
       textFormat: { fontSize: 11, foregroundColor: { red: 0.42, green: 0.45, blue: 0.50 } }, // #6B7280 (matching Excel)
@@ -1055,6 +1097,7 @@ export const createResearchDashboard = async (req, res) => {
       user.sheetsAccessToken,
       user.sheetsRefreshToken
     );
+    await mergeCells(spreadsheetId, sheetId, footerRow2, footerRow2 + 1, 0, maxColumns, user._id, user.sheetsAccessToken, user.sheetsRefreshToken);
     await formatCells(spreadsheetId, sheetId, footerRow2, footerRow2 + 1, 0, maxColumns, {
       backgroundColor: { red: 1, green: 1, blue: 1 },
       textFormat: { fontSize: 11, foregroundColor: { red: 0.61, green: 0.64, blue: 0.69 } }, // #9CA3AF (matching Excel)
