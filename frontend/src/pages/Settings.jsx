@@ -276,19 +276,19 @@ const Settings = ({ user, setUser, embedded = false, onClose }) => {
       const emailDomain = trimmedEmail.split("@")[1];
       const isStudent = user.role === "graduate student";
 
-      if (isStudent && emailDomain !== "student.buksu.edu.ph") {
+      if (isStudent && emailDomain !== "student.buksu.edu.ph" && emailDomain !== "gmail.com") {
         setProfileMessage({
           type: "error",
-          text: "Graduate students must use @student.buksu.edu.ph email address.",
+          text: "Graduate students must use @student.buksu.edu.ph or @gmail.com email (for testing).",
         });
         setProfileSaving(false);
         return;
       }
 
-      if (!isStudent && emailDomain !== "buksu.edu.ph") {
+      if (!isStudent && emailDomain !== "buksu.edu.ph" && emailDomain !== "gmail.com") {
         setProfileMessage({
           type: "error",
-          text: "Faculty, Dean, and Program Head must use @buksu.edu.ph email address.",
+          text: "Faculty, Dean, and Program Head must use @buksu.edu.ph or @gmail.com email (for testing).",
         });
         setProfileSaving(false);
         return;
@@ -685,7 +685,7 @@ const Settings = ({ user, setUser, embedded = false, onClose }) => {
           <div>
             <h2 className="text-lg font-semibold text-gray-900">Account details</h2>
             <p className="text-sm text-gray-500">
-              Update your name and institutional email address.
+              Update your name and institutional email address. Faculty, Dean, and Program Head may use @buksu.edu.ph or @gmail.com (for testing).
             </p>
           </div>
         </div>
