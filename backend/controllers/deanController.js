@@ -972,17 +972,20 @@ const generateExcelBuffer = async (rows, { selectedFields, generatedBy, filtersS
             console.log('Error merging logo cells:', mergeError);
           }
           
-          // Center the logo horizontally over the selected columns.
-          // ExcelJS uses 0-based column indices; for N columns (0..N-1),
-          // the visual center is at (N - 1) / 2. Using that directly keeps
-          // the logo centered regardless of how many fields are selected.
+          // Center the logo by calculating the starting position
+          // Column width in Excel is approximately 64 pixels per default column width unit
+          // We need to position the logo so its center aligns with the page center
           const totalCols = selectedFields.length;
-          const centerCol = (totalCols - 1) / 2;
+          const avgColWidthPixels = 64; // Default column width in pixels
+          const totalWidthPixels = totalCols * avgColWidthPixels;
+          const logoStartPixelOffset = (totalWidthPixels - logoSize) / 2;
+          const logoStartCol = logoStartPixelOffset / avgColWidthPixels;
           
-          // Add logo centered in row 1 (anchored at the horizontal center column)
+          // Add logo centered in row 1
           worksheet.addImage(imageId, {
-            tl: { col: centerCol, row: 0 },
-            ext: { width: logoSize, height: logoSize }
+            tl: { col: logoStartCol, row: 0 },
+            ext: { width: logoSize, height: logoSize },
+            editAs: 'oneCell'
           });
           
           worksheet.getRow(1).height = logoSize + 15; // Make row tall enough for logo
@@ -1936,6 +1939,8 @@ export const exportResearchRecords = async (req, res) => {
     );
 
     res.json({
+      success: true,
+      hasWarning: !driveFile,
       message: driveFile
         ? `Research records exported as ${normalizedFormat.toUpperCase()} and saved to your Google Drive Reports folder.`
         : driveUploadError?.name === "OutboundRateLimitError" || driveUploadError?.message?.includes("rate limit")
@@ -3055,12 +3060,12 @@ export const inviteFaculty = async (req, res) => {
   const { email, name, role } = req.body;
 
   try {
-    // Validate institutional email domain
+    // TEMPORARY: Validate institutional email domain (allow @gmail.com for testing)
     const emailDomain = '@' + email.split('@')[1];
     
-    if (emailDomain !== '@buksu.edu.ph') {
+    if (emailDomain !== '@buksu.edu.ph' && emailDomain !== '@gmail.com') {
       return res.status(400).json({ 
-        message: "Faculty must use @buksu.edu.ph email address" 
+        message: "Faculty must use @buksu.edu.ph or @gmail.com email address (for testing)" 
       });
     }
 
@@ -3148,6 +3153,107 @@ export const inviteFaculty = async (req, res) => {
   } catch (error) {
     console.error("Invitation error:", error);
     res.status(400).json({ message: error.message || "Error sending invitation" });
+  }
+};
+
+// Invite program head (dean can invite program heads within their college)
+export const inviteProgramHead = async (req, res) => {
+  const { email, name } = req.body;
+
+  try {
+    if (!email || !name) {
+      return res.status(400).json({ message: "Name and email are required" });
+    }
+
+    // TEMPORARY: Validate institutional email domain (allow @gmail.com for testing)
+    const emailDomain = '@' + email.split('@')[1];
+    if (emailDomain !== '@buksu.edu.ph' && emailDomain !== '@gmail.com') {
+      return res.status(400).json({
+        message: "Program Heads must use @buksu.edu.ph or @gmail.com email address (for testing)",
+      });
+    }
+
+    // Check if user already exists
+    const existingUser = await User.findOne({ email });
+    if (existingUser) {
+      return res.status(400).json({ message: "User with this email already exists" });
+    }
+
+    // Generate invitation token
+    const crypto = await import('crypto');
+    const invitationToken = crypto.default.randomBytes(32).toString('hex');
+    const invitationExpires = Date.now() + 7 * 24 * 60 * 60 * 1000; // 7 days
+
+    // Create user with invitation token (no password yet)
+    const newUser = new User({
+      name,
+      email,
+      role: 'program head',
+      invitationToken,
+      invitationExpires,
+      isActive: false,
+      password: 'temporary',
+    });
+    await newUser.save();
+
+    const invitationLink = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/register?token=${invitationToken}`;
+
+    const nodemailer = await import('nodemailer');
+    const transporter = nodemailer.default.createTransport({
+      host: process.env.SMTP_HOST,
+      port: process.env.SMTP_PORT,
+      secure: false,
+      auth: {
+        user: process.env.SMTP_USER,
+        pass: process.env.SMTP_PASS,
+      },
+    });
+
+    const emailResult = await rateLimitedSendMail(transporter, {
+      from: process.env.SMTP_FROM,
+      to: email,
+      subject: "Program Head Invitation - CPAG Masteral Research Archive and Monitoring System",
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <h2 style="color: #7C1D23;">Welcome to CPAG Masteral Research Archive and Monitoring System</h2>
+          <p>Hello <strong>${name}</strong>,</p>
+          <p>You have been invited to join as a <strong>Program Head</strong> in our system.</p>
+          <p>Please click the button below to complete your registration and set your password:</p>
+          <div style="text-align: center; margin: 30px 0;">
+            <a href="${invitationLink}"
+               style="background-color: #7C1D23; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; display: inline-block;">
+              Complete Registration
+            </a>
+          </div>
+          <p style="color: #666; font-size: 14px;">This invitation link will expire in 7 days.</p>
+          <p style="color: #666; font-size: 14px;">If the button doesn't work, copy and paste this link into your browser:</p>
+          <p style="color: #7C1D23; font-size: 12px; word-break: break-all;">${invitationLink}</p>
+          <hr style="margin: 30px 0; border: none; border-top: 1px solid #ddd;" />
+          <p style="color: #999; font-size: 12px;">If you didn't expect this invitation, please ignore this email.</p>
+        </div>
+      `,
+    });
+
+    console.log(`Program Head invitation sent successfully:`, emailResult.messageId);
+
+    await logActivity(
+      req.user.id,
+      'invite',
+      'user',
+      newUser._id,
+      name,
+      `Invited program head: ${name} (${email})`,
+      { email, role: 'program head' },
+      req
+    );
+
+    res.json({
+      message: `Invitation sent successfully to ${email}!`,
+      user: { name, email, role: 'program head' },
+    });
+  } catch (error) {
+    console.error("Invite program head error:", error);
+    res.status(500).json({ message: error.message || "Error sending invitation" });
   }
 };
 
@@ -3363,14 +3469,18 @@ export const exportDefenseSchedule = async (req, res) => {
           const logoCell = worksheet.getCell(1, 1);
           logoCell.alignment = { horizontal: 'center', vertical: 'middle' };
           
-          // Center the logo: With 9 columns (0-8), center is at column 4
-          // Logo spans approximately 2 columns visually, so start at column 3.5 to center it
-          // ExcelJS supports fractional column positions for precise centering
-          const centerCol = 3.5;
+          // Center the logo by calculating the starting position
+          // For 10 columns, calculate proper centering based on pixel positioning
+          const totalCols = 10;
+          const avgColWidthPixels = 64; // Default column width in pixels
+          const totalWidthPixels = totalCols * avgColWidthPixels;
+          const logoStartPixelOffset = (totalWidthPixels - logoSize) / 2;
+          const logoStartCol = logoStartPixelOffset / avgColWidthPixels;
           
           worksheet.addImage(imageId, {
-            tl: { col: centerCol, row: 0 },
-            ext: { width: logoSize, height: logoSize }
+            tl: { col: logoStartCol, row: 0 },
+            ext: { width: logoSize, height: logoSize },
+            editAs: 'oneCell'
           });
           
           worksheet.getRow(1).height = logoSize + 15;
@@ -3683,6 +3793,8 @@ export const exportDefenseSchedule = async (req, res) => {
     }
 
     res.json({
+      success: true,
+      hasWarning: !driveFile,
       message: driveFile
         ? `Defense schedule exported as XLSX and saved to your Google Drive Reports folder.`
         : driveUploadError?.name === "OutboundRateLimitError" || driveUploadError?.message?.includes("rate limit")
