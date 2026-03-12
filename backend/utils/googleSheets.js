@@ -2,6 +2,31 @@ import { google } from "googleapis";
 import User from "../models/User.js";
 import { checkOutboundLimit } from "./outboundRateLimit.js";
 
+// Retry helper for API calls with exponential backoff
+const retryWithBackoff = async (fn, maxRetries = 3, baseDelay = 1000) => {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      const isRetryable = 
+        error.code === 'ECONNRESET' || 
+        error.code === 'ETIMEDOUT' ||
+        error.code === 'ENOTFOUND' ||
+        error.message?.includes('ECONNRESET') ||
+        error.message?.includes('rateLimitExceeded') ||
+        (error.response?.status >= 500 && error.response?.status < 600);
+      
+      if (!isRetryable || attempt === maxRetries) {
+        throw error;
+      }
+      
+      const delay = baseDelay * Math.pow(2, attempt - 1);
+      console.log(`[Retry] Attempt ${attempt}/${maxRetries} failed, retrying in ${delay}ms...`);
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+};
+
 // Create OAuth2 Client for Google Sheets
 // Reuses Google Drive OAuth credentials and redirect URI for simplicity
 export const createSheetsOAuthClient = () => {
@@ -157,13 +182,15 @@ export const writeToSheet = async (
   try {
     const sheets = await getSheetsClient(userId, accessToken, refreshToken);
 
-    const response = await sheets.spreadsheets.values.update({
-      spreadsheetId: spreadsheetId,
-      range: range,
-      valueInputOption: "USER_ENTERED",
-      requestBody: {
-        values: values,
-      },
+    const response = await retryWithBackoff(async () => {
+      return await sheets.spreadsheets.values.update({
+        spreadsheetId: spreadsheetId,
+        range: range,
+        valueInputOption: "USER_ENTERED",
+        requestBody: {
+          values: values,
+        },
+      });
     });
 
     return response.data;
@@ -294,11 +321,13 @@ export const formatCells = async (
       },
     ];
 
-    const response = await sheets.spreadsheets.batchUpdate({
-      spreadsheetId: spreadsheetId,
-      requestBody: {
-        requests: requests,
-      },
+    const response = await retryWithBackoff(async () => {
+      return await sheets.spreadsheets.batchUpdate({
+        spreadsheetId: spreadsheetId,
+        requestBody: {
+          requests: requests,
+        },
+      });
     });
 
     return response.data;
@@ -488,11 +517,13 @@ export const mergeCells = async (
       },
     ];
 
-    const response = await sheets.spreadsheets.batchUpdate({
-      spreadsheetId: spreadsheetId,
-      requestBody: {
-        requests: requests,
-      },
+    const response = await retryWithBackoff(async () => {
+      return await sheets.spreadsheets.batchUpdate({
+        spreadsheetId: spreadsheetId,
+        requestBody: {
+          requests: requests,
+        },
+      });
     });
 
     return response.data;
