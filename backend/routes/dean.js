@@ -42,6 +42,7 @@ import {
   bulkShareResearch,
   exportResearchRecords,
   exportDefenseSchedule,
+  inviteProgramHead,
     } from "../controllers/deanController.js";
 
 
@@ -148,6 +149,9 @@ router.post("/logout", logout);
 
 // Invite faculty
 router.post("/invite-faculty", checkPermission("invite_users"), inviteFaculty);
+
+// Invite program head
+router.post("/invite-program-head", checkPermission("invite_users"), inviteProgramHead);
 
 // Send email
 router.post("/send-email", sendEmail);
