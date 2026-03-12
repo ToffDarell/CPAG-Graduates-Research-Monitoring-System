@@ -466,14 +466,14 @@ export const updateUserProfileByAdmin = async (req, res) => {
 
       const emailDomain = normalizedEmail.split("@")[1];
       const isStudent = user.role === "graduate student";
-      if (isStudent && emailDomain !== "student.buksu.edu.ph") {
+      if (isStudent && emailDomain !== "student.buksu.edu.ph" && emailDomain !== "gmail.com") {
         return res.status(400).json({
-          message: "Graduate students must use @student.buksu.edu.ph email address.",
+          message: "Graduate students must use @student.buksu.edu.ph or @gmail.com email address (for testing).",
         });
       }
-      if (!isStudent && emailDomain !== "buksu.edu.ph") {
+      if (!isStudent && emailDomain !== "buksu.edu.ph" && emailDomain !== "gmail.com") {
         return res.status(400).json({
-          message: "Faculty, Dean, and Program Head must use @buksu.edu.ph email address.",
+          message: "Faculty, Dean, and Program Head must use @buksu.edu.ph or @gmail.com email address (for testing).",
         });
       }
 
@@ -593,11 +593,11 @@ export const inviteDean = async (req, res) => {
       return res.status(400).json({ message: "Name and email are required" });
     }
 
-    // Enforce @buksu.edu.ph for deans
+    // TEMPORARY: Enforce @buksu.edu.ph or @gmail.com for deans (for testing)
     const emailDomain = email.split("@")[1];
-    if (emailDomain !== "buksu.edu.ph") {
+    if (emailDomain !== "buksu.edu.ph" && emailDomain !== "gmail.com") {
       return res.status(400).json({
-        message: "Deans must use @buksu.edu.ph email address",
+        message: "Deans must use @buksu.edu.ph or @gmail.com email address (for testing)",
       });
     }
 
@@ -698,10 +698,11 @@ export const inviteFaculty = async (req, res) => {
       return res.status(400).json({ message: "Name and email are required" });
     }
 
+    // TEMPORARY: Email domain validation (for testing)
     const emailDomain = email.split("@")[1];
-    if (emailDomain !== "buksu.edu.ph") {
+    if (emailDomain !== "buksu.edu.ph" && emailDomain !== "gmail.com") {
       return res.status(400).json({
-        message: "Faculty Advisers must use @buksu.edu.ph email address",
+        message: "Faculty Advisers must use @buksu.edu.ph or @gmail.com email address (for testing)",
       });
     }
 
@@ -794,10 +795,11 @@ export const inviteProgramHead = async (req, res) => {
       return res.status(400).json({ message: "Name and email are required" });
     }
 
+    // TEMPORARY: Email domain validation (for testing)
     const emailDomain = email.split("@")[1];
-    if (emailDomain !== "buksu.edu.ph") {
+    if (emailDomain !== "buksu.edu.ph" && emailDomain !== "gmail.com") {
       return res.status(400).json({
-        message: "Program Heads must use @buksu.edu.ph email address",
+        message: "Program Heads must use @buksu.edu.ph or @gmail.com email address (for testing)",
       });
     }
 
