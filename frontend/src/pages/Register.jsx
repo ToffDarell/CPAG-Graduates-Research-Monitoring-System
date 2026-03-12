@@ -12,11 +12,13 @@ const Register = ({ setUser }) => {
     studentId: "", // Add studentId field
     email: "",
     password: "",
+    confirmPassword: "",
     role: ""   // added role
   });
   const [error, setError] = useState("");
   const [recaptchaToken, setRecaptchaToken] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [isInvitation, setIsInvitation] = useState(false);
   const [invitationToken, setInvitationToken] = useState("");
@@ -58,9 +60,10 @@ const Register = ({ setUser }) => {
         setInvitationToken(token);
         setInvitationData(res.data.user);
         setFormData({
-          name: res.data.user.name,  // Changed from username to name
+          name: res.data.user.name,
           email: res.data.user.email,
           password: "",
+          confirmPassword: "",
           role: res.data.user.role
         });
       }
@@ -81,6 +84,13 @@ const Register = ({ setUser }) => {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    
+    // Validate password confirmation
+    if (formData.password !== formData.confirmPassword) {
+      setError("Passwords do not match");
+      return;
+    }
+    
     setIsLoading(true);
     
     try {
@@ -96,18 +106,18 @@ const Register = ({ setUser }) => {
         navigate("/");
       } else {
         // Regular registration flow
-        // Email domain validation based on role
+        // TEMPORARY: Email domain validation based on role (allow @gmail.com for testing)
         const isStudent = formData.role === "graduate student";
         const emailDomain = formData.email.split('@')[1];
         
-        if (isStudent && emailDomain !== "student.buksu.edu.ph") {
-          setError("Graduate students must use @student.buksu.edu.ph email");
+        if (isStudent && emailDomain !== "student.buksu.edu.ph" && emailDomain !== "gmail.com") {
+          setError("Graduate students must use @student.buksu.edu.ph or @gmail.com email (for testing)");
           setIsLoading(false);
           return;
         }
         
-        if (!isStudent && emailDomain !== "buksu.edu.ph") {
-          setError("Faculty/Dean must use @buksu.edu.ph email");
+        if (!isStudent && emailDomain !== "buksu.edu.ph" && emailDomain !== "gmail.com") {
+          setError("Faculty/Dean must use @buksu.edu.ph or @gmail.com email (for testing)");
           setIsLoading(false);
           return;
         }
@@ -300,7 +310,7 @@ const Register = ({ setUser }) => {
           {/* Email field */}
           <div className="mb-4">
             <label className="block text-gray-600 text-sm font-medium mb-1">
-              Institutional Email
+              Email Address
             </label>
             <input
               className={`w-full p-3 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23]/30 outline-none focus:border-[#7C1D23] ${isInvitation ? 'bg-gray-100 cursor-not-allowed' : ''}`}
@@ -308,13 +318,15 @@ const Register = ({ setUser }) => {
               name="email"
               value={formData.email}
               onChange={handleChange}
-              placeholder="Enter your institutional email"
+              placeholder="your.email@student.buksu.edu.ph or your.email@gmail.com"
               autoComplete="off"
               disabled={isInvitation}
               required
             />
-            {isInvitation && (
+            {isInvitation ? (
               <p className="text-xs text-gray-500 mt-1">This email was pre-filled from your invitation</p>
+            ) : (
+              <p className="text-xs text-gray-500 mt-1">Use @student.buksu.edu.ph or @gmail.com (for testing)</p>
             )}
           </div>
 
@@ -332,6 +344,7 @@ const Register = ({ setUser }) => {
                 onChange={handleChange}
                 placeholder="Enter your password"
                 required
+                minLength="6"
               />
               <span
                 className="absolute inset-y-0 right-0 flex items-center pr-3 cursor-pointer"
@@ -344,6 +357,40 @@ const Register = ({ setUser }) => {
                 )}
               </span>
             </div>
+            <p className="text-xs text-gray-500 mt-1">At least 6 characters</p>
+          </div>
+
+          {/* Confirm Password field */}
+          <div className="mb-4">
+            <label className="block text-gray-600 text-sm font-medium mb-1">
+              Confirm Password
+            </label>
+            <div className="relative">
+              <input
+                className={`w-full p-3 border rounded-md focus:ring-2 focus:ring-[#7C1D23]/30 outline-none focus:border-[#7C1D23] ${formData.confirmPassword ? (formData.password !== formData.confirmPassword ? 'border-red-500' : 'border-green-500') : 'border-gray-300'}`}
+                type={showConfirmPassword ? "text" : "password"}
+                name="confirmPassword"
+                value={formData.confirmPassword}
+                onChange={handleChange}
+                placeholder="Confirm your password"
+                required
+              />
+              <span
+                className="absolute inset-y-0 right-0 flex items-center pr-3 cursor-pointer"
+                onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+              >
+                {showConfirmPassword ? (
+                  <FaEyeSlash className="h-5 w-5 text-gray-400" />
+                ) : (
+                  <FaEye className="h-5 w-5 text-gray-400" />
+                )}
+              </span>
+            </div>
+            {formData.confirmPassword && (
+              formData.password !== formData.confirmPassword
+                ? <p className="text-xs text-red-500 mt-1">Passwords do not match</p>
+                : <p className="text-xs text-green-500 mt-1">Passwords match</p>
+            )}
           </div>
 
           {/* ReCAPTCHA */}
