@@ -261,6 +261,14 @@ const Admin = ({ user, setUser }) => {
       showError("Validation Error", "Please enter both name and email.");
       return;
     }
+    
+    // TEMPORARY: Validate email format (allow both institutional and gmail for testing)
+    const emailPattern = /^[a-zA-Z0-9._-]+@(buksu\.edu\.ph|gmail\.com)$/i;
+    if (!emailPattern.test(inviteForm.email)) {
+      showError('Invalid Email', 'Please use a valid @buksu.edu.ph or @gmail.com email address (for testing).');
+      return;
+    }
+    
     const roleLabel = roleLabelMap[inviteForm.role];
     const confirmed = await showConfirm(
       `Invite ${roleLabel}`,
@@ -523,11 +531,11 @@ const Admin = ({ user, setUser }) => {
     }
     const emailDomain = email.split("@")[1];
     const isStudent = role === "graduate student";
-    if (isStudent && emailDomain !== "student.buksu.edu.ph") {
-      return "Graduate students must use @student.buksu.edu.ph email address.";
+    if (isStudent && emailDomain !== "student.buksu.edu.ph" && emailDomain !== "gmail.com") {
+      return "Graduate students must use @student.buksu.edu.ph or @gmail.com email address (for testing).";
     }
-    if (!isStudent && emailDomain !== "buksu.edu.ph") {
-      return "Faculty, Dean, and Program Head must use @buksu.edu.ph email address.";
+    if (!isStudent && emailDomain !== "buksu.edu.ph" && emailDomain !== "gmail.com") {
+      return "Faculty, Dean, and Program Head must use @buksu.edu.ph or @gmail.com email address (for testing).";
     }
     return null;
   };
@@ -1766,7 +1774,7 @@ const Admin = ({ user, setUser }) => {
                     type="email"
                     value={inviteForm.email}
                     onChange={(e) => setInviteForm(prev => ({ ...prev, email: e.target.value }))}
-                    placeholder="Institutional email (@buksu.edu.ph)"
+                    placeholder="Email (@buksu.edu.ph or @gmail.com for testing)"
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#7C1D23] focus:border-transparent"
                   />
                   <button
@@ -2082,8 +2090,8 @@ const Admin = ({ user, setUser }) => {
                   />
                   <p className="text-xs text-gray-500 mt-1">
                     {editingUser.role === "graduate student"
-                      ? "Graduate students must use @student.buksu.edu.ph email addresses."
-                      : "Faculty, Dean, and Program Head accounts must use @buksu.edu.ph email addresses."}
+                      ? "Graduate students must use @student.buksu.edu.ph or @gmail.com email addresses (for testing)."
+                      : "Faculty, Dean, and Program Head accounts must use @buksu.edu.ph or @gmail.com email addresses (for testing)."}
                   </p>
                 </div>
 
