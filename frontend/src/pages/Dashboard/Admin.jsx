@@ -683,16 +683,21 @@ const Admin = ({ user, setUser }) => {
   };
 
   // Backup management functions
-  const fetchBackups = async () => {
+  const fetchBackups = async ({ silent = false } = {}) => {
     setBackupLoading(true);
     try {
       const res = await axios.get(buildApiUrl("/api/backup/list"), {
         headers: { Authorization: `Bearer ${getToken()}` },
       });
-      setBackups(res.data.backups || []);
+      const backupItems = res.data.backups || [];
+      setBackups(backupItems);
+      return backupItems;
     } catch (error) {
       console.error("Error fetching backups:", error);
-      showError("Error", error.response?.data?.message || "Failed to load backups");
+      if (!silent) {
+        showError("Error", error.response?.data?.message || "Failed to load backups");
+      }
+      return null;
     } finally {
       setBackupLoading(false);
     }
@@ -708,6 +713,12 @@ const Admin = ({ user, setUser }) => {
     if (!result.isConfirmed) return;
 
     setCreatingBackup(true);
+    const initialBackupCount = backups.length;
+    const existingMetadataNames = new Set(
+      backups
+        .filter((backup) => backup.type === "metadata")
+        .map((backup) => backup.name)
+    );
     try {
       const createRes = await axios.post(buildApiUrl("/api/backup/create"), {}, {
         headers: { Authorization: `Bearer ${getToken()}` },
@@ -731,12 +742,44 @@ const Admin = ({ user, setUser }) => {
           "Backup Created",
           "Backup was created successfully, but auto-download failed. Use the Download button in the backups list."
         );
+      } else if (createRes.data?.hasWarning) {
+        const warningText = Array.isArray(createRes.data?.warningMessages) && createRes.data.warningMessages.length > 0
+          ? createRes.data.warningMessages.join("\n")
+          : "Backup was created with a warning. Please verify the backup entries below.";
+        await showWarning("Backup Created with Warning", warningText);
       } else {
         await showSuccess("Success", "Backup created and downloaded successfully!");
       }
       await fetchBackups();
     } catch (error) {
-      showError("Error", error.response?.data?.message || "Failed to create backup");
+      const refreshedBackups = await fetchBackups({ silent: true });
+      const backupAppeared = Array.isArray(refreshedBackups) && refreshedBackups.length > initialBackupCount;
+
+      if (backupAppeared) {
+        const metadataBackups = (refreshedBackups || []).filter((backup) => backup.type === "metadata");
+        const newlyCreatedMetadata = metadataBackups.find((backup) => !existingMetadataNames.has(backup.name));
+        const latestMetadata = newlyCreatedMetadata || metadataBackups[0];
+
+        if (latestMetadata?.name) {
+          try {
+            await downloadFullBackupByMetadataFile(latestMetadata.name);
+            await showSuccess("Success", "Backup created and downloaded successfully!");
+          } catch (downloadError) {
+            console.error("Backup exists but fallback download failed:", downloadError);
+            await showWarning(
+              "Backup Created",
+              "Backup was created successfully, but auto-download failed. Use the Download button in the backups list."
+            );
+          }
+        } else {
+          await showSuccess(
+            "Success",
+            "Backup created successfully. You can find it in the backups list below."
+          );
+        }
+      } else {
+        showError("Error", error.response?.data?.message || "Failed to create backup");
+      }
     } finally {
       setCreatingBackup(false);
     }
@@ -756,6 +799,30 @@ const Admin = ({ user, setUser }) => {
     const downloadFileName = fileNameMatch?.[1] || `full-backup-${Date.now()}.zip`;
 
     const blob = new Blob([downloadRes.data], { type: "application/zip" });
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.setAttribute("download", downloadFileName);
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.URL.revokeObjectURL(url);
+  };
+
+  const downloadBackupByName = async (backupName) => {
+    const downloadRes = await axios.get(
+      buildApiUrl(`/api/backup/download?backupName=${encodeURIComponent(backupName)}`),
+      {
+        headers: { Authorization: `Bearer ${getToken()}` },
+        responseType: "blob",
+      }
+    );
+
+    const contentDisposition = downloadRes.headers?.["content-disposition"] || "";
+    const fileNameMatch = contentDisposition.match(/filename=\"?([^\";]+)\"?/i);
+    const downloadFileName = fileNameMatch?.[1] || backupName;
+
+    const blob = new Blob([downloadRes.data]);
     const url = window.URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
@@ -2333,23 +2400,23 @@ const Admin = ({ user, setUser }) => {
                             )}
                           </td>
                           <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-700">
-                            {backup.type === "metadata" ? (
-                              <button
-                                onClick={async () => {
-                                  try {
+                            <button
+                              onClick={async () => {
+                                try {
+                                  if (backup.type === "metadata") {
                                     await downloadFullBackupByMetadataFile(backup.name);
-                                    await showSuccess("Downloaded", "Backup downloaded successfully.");
-                                  } catch (error) {
-                                    showError("Error", error.response?.data?.message || "Failed to download backup");
+                                  } else {
+                                    await downloadBackupByName(backup.name);
                                   }
-                                }}
-                                className="px-3 py-1 bg-blue-600 text-white rounded-md text-xs font-medium hover:bg-blue-700 transition-colors"
-                              >
-                                Download
-                              </button>
-                            ) : (
-                              <span className="text-xs text-gray-400">—</span>
-                            )}
+                                  await showSuccess("Downloaded", "Backup downloaded successfully.");
+                                } catch (error) {
+                                  showError("Error", error.response?.data?.message || "Failed to download backup");
+                                }
+                              }}
+                              className="px-3 py-1 bg-blue-600 text-white rounded-md text-xs font-medium hover:bg-blue-700 transition-colors"
+                            >
+                              Download
+                            </button>
                           </td>
                         </tr>
                       ))}

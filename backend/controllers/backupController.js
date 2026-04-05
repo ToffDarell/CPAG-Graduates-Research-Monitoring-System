@@ -16,6 +16,10 @@ import { fileURLToPath } from "url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const BACKUP_DIR = path.join(__dirname, "..", "..", "backups");
+const isManagedBackupEntry = (entryName = "") =>
+  entryName.startsWith("backup-metadata-") ||
+  entryName.startsWith("db-backup-") ||
+  entryName.startsWith("uploads-backup-");
 
 /**
  * Create full backup (database + uploads)
@@ -31,12 +35,20 @@ export const createBackup = async (req, res) => {
       entityType: "settings",
       entityName: "Full Backup",
       description: `Created full backup: ${backupResult.timestamp}`,
-      metadata: { backupTimestamp: backupResult.timestamp }
+      metadata: {
+        backupTimestamp: backupResult.timestamp,
+        hasWarning: Boolean(backupResult.hasWarning),
+        warningMessages: backupResult.warningMessages || []
+      }
     }).catch(err => console.error("Error logging backup activity:", err));
 
     res.json({
       success: true,
-      message: "Backup created successfully",
+      message: backupResult.hasWarning
+        ? "Backup created with warnings"
+        : "Backup created successfully",
+      hasWarning: Boolean(backupResult.hasWarning),
+      warningMessages: backupResult.warningMessages || [],
       backup: backupResult
     });
   } catch (error) {
@@ -248,82 +260,121 @@ export const deleteAllManagedBackups = async (req, res) => {
  */
 export const downloadBackup = async (req, res) => {
   try {
-    const { metadataFile } = req.query;
+    const { metadataFile, backupName } = req.query;
 
-    if (!metadataFile) {
+    // Legacy/full-backup path: package using metadata record.
+    if (metadataFile) {
+      const safeMetadataFile = path.basename(metadataFile);
+      if (!safeMetadataFile.startsWith("backup-metadata-") || !safeMetadataFile.endsWith(".json")) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid metadata file"
+        });
+      }
+
+      const metadataPath = path.join(BACKUP_DIR, safeMetadataFile);
+      const metadataContent = await fs.readFile(metadataPath, "utf-8");
+      const metadata = JSON.parse(metadataContent);
+
+      const timestamp = safeMetadataFile
+        .replace("backup-metadata-", "")
+        .replace(".json", "");
+      const downloadName = `full-backup-${timestamp}.zip`;
+
+      res.setHeader("Content-Type", "application/zip");
+      res.setHeader("Content-Disposition", `attachment; filename=\"${downloadName}\"`);
+
+      const archive = archiver("zip", { zlib: { level: 9 } });
+
+      archive.on("error", (err) => {
+        console.error("Backup download archive error:", err);
+        if (!res.headersSent) {
+          res.status(500).json({ success: false, message: "Failed to build backup archive" });
+        } else {
+          res.end();
+        }
+      });
+
+      archive.pipe(res);
+
+      // Always include metadata file
+      archive.file(metadataPath, { name: `metadata/${safeMetadataFile}` });
+
+      // Include database backup path if present
+      const databasePath = metadata?.backups?.database?.path;
+      if (databasePath) {
+        try {
+          const dbStat = await fs.stat(databasePath);
+          if (dbStat.isDirectory()) {
+            archive.directory(databasePath, `database/${path.basename(databasePath)}`);
+          } else {
+            archive.file(databasePath, { name: `database/${path.basename(databasePath)}` });
+          }
+        } catch (error) {
+          console.warn("Database backup path missing during download:", databasePath);
+        }
+      }
+
+      // Include uploads backup path if present
+      const uploadsPath = metadata?.backups?.uploads?.path;
+      if (uploadsPath) {
+        try {
+          const uploadsStat = await fs.stat(uploadsPath);
+          if (uploadsStat.isDirectory()) {
+            archive.directory(uploadsPath, `uploads/${path.basename(uploadsPath)}`);
+          } else {
+            archive.file(uploadsPath, { name: `uploads/${path.basename(uploadsPath)}` });
+          }
+        } catch (error) {
+          console.warn("Uploads backup path missing during download:", uploadsPath);
+        }
+      }
+
+      await archive.finalize();
+      return;
+    }
+
+    // Direct file/folder backup download path (uploads/database entry rows).
+    if (!backupName) {
       return res.status(400).json({
         success: false,
-        message: "metadataFile is required"
+        message: "metadataFile or backupName is required"
       });
     }
 
-    const safeMetadataFile = path.basename(metadataFile);
-    if (!safeMetadataFile.startsWith("backup-metadata-") || !safeMetadataFile.endsWith(".json")) {
+    const safeBackupName = path.basename(backupName);
+    if (!isManagedBackupEntry(safeBackupName)) {
       return res.status(400).json({
         success: false,
-        message: "Invalid metadata file"
+        message: "Invalid backup name"
       });
     }
 
-    const metadataPath = path.join(BACKUP_DIR, safeMetadataFile);
-    const metadataContent = await fs.readFile(metadataPath, "utf-8");
-    const metadata = JSON.parse(metadataContent);
+    const targetPath = path.join(BACKUP_DIR, safeBackupName);
+    const targetStat = await fs.stat(targetPath);
 
-    const timestamp = safeMetadataFile
-      .replace("backup-metadata-", "")
-      .replace(".json", "");
-    const downloadName = `full-backup-${timestamp}.zip`;
+    if (targetStat.isDirectory()) {
+      const downloadName = `${safeBackupName}.zip`;
+      res.setHeader("Content-Type", "application/zip");
+      res.setHeader("Content-Disposition", `attachment; filename=\"${downloadName}\"`);
 
-    res.setHeader("Content-Type", "application/zip");
-    res.setHeader("Content-Disposition", `attachment; filename=\"${downloadName}\"`);
-
-    const archive = archiver("zip", { zlib: { level: 9 } });
-
-    archive.on("error", (err) => {
-      console.error("Backup download archive error:", err);
-      if (!res.headersSent) {
-        res.status(500).json({ success: false, message: "Failed to build backup archive" });
-      } else {
-        res.end();
-      }
-    });
-
-    archive.pipe(res);
-
-    // Always include metadata file
-    archive.file(metadataPath, { name: `metadata/${safeMetadataFile}` });
-
-    // Include database backup path if present
-    const databasePath = metadata?.backups?.database?.path;
-    if (databasePath) {
-      try {
-        const dbStat = await fs.stat(databasePath);
-        if (dbStat.isDirectory()) {
-          archive.directory(databasePath, `database/${path.basename(databasePath)}`);
+      const archive = archiver("zip", { zlib: { level: 9 } });
+      archive.on("error", (err) => {
+        console.error("Direct backup download archive error:", err);
+        if (!res.headersSent) {
+          res.status(500).json({ success: false, message: "Failed to build backup archive" });
         } else {
-          archive.file(databasePath, { name: `database/${path.basename(databasePath)}` });
+          res.end();
         }
-      } catch (error) {
-        console.warn("Database backup path missing during download:", databasePath);
-      }
+      });
+
+      archive.pipe(res);
+      archive.directory(targetPath, safeBackupName);
+      await archive.finalize();
+      return;
     }
 
-    // Include uploads backup path if present
-    const uploadsPath = metadata?.backups?.uploads?.path;
-    if (uploadsPath) {
-      try {
-        const uploadsStat = await fs.stat(uploadsPath);
-        if (uploadsStat.isDirectory()) {
-          archive.directory(uploadsPath, `uploads/${path.basename(uploadsPath)}`);
-        } else {
-          archive.file(uploadsPath, { name: `uploads/${path.basename(uploadsPath)}` });
-        }
-      } catch (error) {
-        console.warn("Uploads backup path missing during download:", uploadsPath);
-      }
-    }
-
-    await archive.finalize();
+    res.download(targetPath, safeBackupName);
   } catch (error) {
     console.error("Download backup error:", error);
     if (!res.headersSent) {

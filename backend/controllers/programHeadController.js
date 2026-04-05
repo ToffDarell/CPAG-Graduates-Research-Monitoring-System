@@ -8808,11 +8808,42 @@ export const viewDocument = async (req, res) => {
 export const finalizeResearch = async (req, res) => {
   try {
     const { id } = req.params;
-    const { finalGrade, evaluationStatus, semester, academicYear, submissionDate } = req.body;
+    const { finalGrade, semester, academicYear, submissionDate } = req.body;
 
-    if (!finalGrade || !evaluationStatus) {
-      return res.status(400).json({ message: "Final Grade and Evaluation Status are required" });
+    const formatGrade = (value) => {
+      const normalized = String(value).trim().replace(',', '.');
+      const numeric = Number(normalized);
+      if (Number.isNaN(numeric)) {
+        return null;
+      }
+
+      // University scale uses quarter-point intervals from 1.00 to 5.00.
+      const isWithinRange = numeric >= 1 && numeric <= 5;
+      const quarterStep = numeric * 4;
+      const isQuarterStep = Math.abs(quarterStep - Math.round(quarterStep)) < 1e-9;
+      if (!isWithinRange || !isQuarterStep) {
+        return null;
+      }
+
+      return numeric.toFixed(2);
+    };
+
+    const normalizeStatusFromGrade = (gradeValue) => {
+      const numeric = Number(gradeValue);
+      return numeric <= 3 ? "passed" : "failed";
+    };
+
+    if (!finalGrade) {
+      return res.status(400).json({ message: "Final Grade is required" });
     }
+
+    const normalizedFinalGrade = formatGrade(finalGrade);
+    if (!normalizedFinalGrade) {
+      return res.status(400).json({
+        message: "Invalid final grade. Use values from 1.00 to 5.00 in 0.25 intervals.",
+      });
+    }
+    const evaluationStatus = normalizeStatusFromGrade(normalizedFinalGrade);
 
     const research = await Research.findById(id)
       .populate("students", "name email")
@@ -8836,7 +8867,7 @@ export const finalizeResearch = async (req, res) => {
     const updateData = {
       finalizedDate: new Date(),
       finalizedBy: req.user.id,
-      finalGrade,
+      finalGrade: normalizedFinalGrade,
       evaluationStatus,
     };
     if (semester) updateData.semester = semester;
@@ -8852,8 +8883,8 @@ export const finalizeResearch = async (req, res) => {
       entityType: "research",
       entityId: research._id,
       entityName: research.title,
-      description: `Finalized research: ${research.title} — Grade: ${finalGrade}, Status: ${evaluationStatus}`,
-      metadata: { finalGrade, evaluationStatus, semester, academicYear }
+      description: `Finalized research: ${research.title} — Grade: ${normalizedFinalGrade}, Status: ${evaluationStatus}`,
+      metadata: { finalGrade: normalizedFinalGrade, evaluationStatus, semester, academicYear }
     });
 
     // Send email notification to students
@@ -8887,7 +8918,7 @@ export const finalizeResearch = async (req, res) => {
                 <p>Your research has been officially finalized by the Program Head.</p>
                 <div style="background-color: white; padding: 15px; margin: 20px 0; border-left: 4px solid #7C1D23; border-radius: 4px;">
                   <p style="margin: 8px 0;"><strong>Research Title:</strong> ${research.title}</p>
-                  <p style="margin: 8px 0;"><strong>Final Grade:</strong> ${finalGrade}</p>
+                  <p style="margin: 8px 0;"><strong>Final Grade:</strong> ${normalizedFinalGrade}</p>
                   <p style="margin: 8px 0;"><strong>Evaluation Status:</strong> ${evaluationStatus.charAt(0).toUpperCase() + evaluationStatus.slice(1)}</p>
                   ${semester ? `<p style="margin: 8px 0;"><strong>Semester:</strong> ${semester}</p>` : ''}
                   ${academicYear ? `<p style="margin: 8px 0;"><strong>Academic Year:</strong> ${academicYear}</p>` : ''}

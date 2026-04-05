@@ -5442,10 +5442,23 @@ const ResearchRecords = () => {
     academicYear: '',
     submissionDate: ''
   });
+  const universityGradeOptions = Array.from({ length: 17 }, (_, index) => (1 + index * 0.25).toFixed(2));
   const [finalizing, setFinalizing] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(10);
   const [researchFilter, setResearchFilter] = useState('all');
+
+  const normalizeGradeValue = (gradeValue) => {
+    if (!gradeValue && gradeValue !== 0) return '';
+    const numeric = Number(String(gradeValue).replace(',', '.'));
+    return Number.isNaN(numeric) ? '' : numeric.toFixed(2);
+  };
+
+  const getEvaluationStatusFromGrade = (gradeValue) => {
+    const numeric = Number(gradeValue);
+    if (Number.isNaN(numeric)) return '';
+    return numeric <= 3 ? 'passed' : 'failed';
+  };
 
   // Fetch research records on component mount
   useEffect(() => {
@@ -5515,11 +5528,13 @@ const ResearchRecords = () => {
   };
 
   const handleFinalizeResearch = (research) => {
+    const normalizedGrade = normalizeGradeValue(research.finalGrade || '');
+    const derivedStatus = getEvaluationStatusFromGrade(normalizedGrade);
     setSelectedResearch(research);
     // Pre-fill form with existing data if available
     setFinalizeForm({
-      finalGrade: research.finalGrade || '',
-      evaluationStatus: research.evaluationStatus || 'passed',
+      finalGrade: normalizedGrade,
+      evaluationStatus: research.evaluationStatus || derivedStatus || '',
       semester: research.semester || '',
       academicYear: research.academicYear || '',
       submissionDate: research.submissionDate ? new Date(research.submissionDate).toISOString().split('T')[0] : ''
@@ -5529,18 +5544,21 @@ const ResearchRecords = () => {
 
   const handleFinalizeSubmit = async (e) => {
     e.preventDefault();
-    
-    if (!finalizeForm.finalGrade || !finalizeForm.evaluationStatus) {
-      showWarning('Validation Error', 'Please fill in Final Grade and Evaluation Status');
+
+    const normalizedFinalGrade = normalizeGradeValue(finalizeForm.finalGrade);
+    if (!normalizedFinalGrade || !universityGradeOptions.includes(normalizedFinalGrade)) {
+      showWarning('Validation Error', 'Please select a valid final grade from the university scale.');
       return;
     }
+
+    const derivedEvaluationStatus = getEvaluationStatusFromGrade(normalizedFinalGrade);
 
     setFinalizing(true);
     try {
       const token = localStorage.getItem('token');
       const payload = {
-        finalGrade: finalizeForm.finalGrade,
-        evaluationStatus: finalizeForm.evaluationStatus,
+        finalGrade: normalizedFinalGrade,
+        evaluationStatus: derivedEvaluationStatus,
       };
       
       // Add optional fields if provided
@@ -5814,6 +5832,24 @@ const ResearchRecords = () => {
                             Finalized: {new Date(research.finalizedDate).toLocaleDateString()}
                           </span>
                         )}
+                        {research.finalGrade && (
+                          <span className="px-2 py-1 bg-gray-100 text-gray-700 rounded-full text-xs">
+                            Grade: {normalizeGradeValue(research.finalGrade)}
+                          </span>
+                        )}
+                        {research.evaluationStatus && (
+                          <span
+                            className={`px-2 py-1 rounded-full text-xs font-medium ${
+                              research.evaluationStatus === 'passed'
+                                ? 'bg-green-100 text-green-700'
+                                : research.evaluationStatus === 'failed'
+                                  ? 'bg-red-100 text-red-700'
+                                  : 'bg-gray-100 text-gray-700'
+                            }`}
+                          >
+                            {research.evaluationStatus === 'passed' ? 'Passed' : research.evaluationStatus === 'failed' ? 'Failed' : research.evaluationStatus}
+                          </span>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -5981,34 +6017,46 @@ const ResearchRecords = () => {
                 <label className="block text-sm font-medium text-gray-700 mb-1">
                   Final Grade <span className="text-red-500">*</span>
                 </label>
-                <input
-                  type="text"
+                <select
                   value={finalizeForm.finalGrade}
-                  onChange={(e) => setFinalizeForm({ ...finalizeForm, finalGrade: e.target.value })}
-                  placeholder="e.g., A, B+, Pass, Fail"
+                  onChange={(e) => {
+                    const selectedGrade = e.target.value;
+                    setFinalizeForm({
+                      ...finalizeForm,
+                      finalGrade: selectedGrade,
+                      evaluationStatus: getEvaluationStatusFromGrade(selectedGrade),
+                    });
+                  }}
                   className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-[#7C1D23]"
                   required
-                />
+                >
+                  <option value="">Select Final Grade</option>
+                  {universityGradeOptions.map((grade) => (
+                    <option key={grade} value={grade}>
+                      {grade}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-xs text-gray-500 mt-1">University scale: 1.00-3.00 = Passed, 3.25-5.00 = Failed</p>
               </div>
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Evaluation Status <span className="text-red-500">*</span>
+                  Evaluation Status (Auto)
                 </label>
-                <select
-                  value={finalizeForm.evaluationStatus}
-                  onChange={(e) => setFinalizeForm({ ...finalizeForm, evaluationStatus: e.target.value })}
+                <input
+                  type="text"
+                  value={
+                    finalizeForm.evaluationStatus === 'passed'
+                      ? 'Passed'
+                      : finalizeForm.evaluationStatus === 'failed'
+                        ? 'Failed'
+                        : ''
+                  }
+                  readOnly
                   className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-[#7C1D23]"
-                  required
-                >
-                  <option value="">Select Status</option>
-                  <option value="passed">Passed</option>
-                  <option value="failed">Failed</option>
-                  <option value="approved">Approved</option>
-                  <option value="rejected">Rejected</option>
-                  <option value="in-review">In Review</option>
-                  <option value="pending">Pending</option>
-                </select>
+                  placeholder="Select a grade first"
+                />
               </div>
 
               <div className="grid grid-cols-2 gap-4">

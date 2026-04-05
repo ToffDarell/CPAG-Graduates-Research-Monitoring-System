@@ -197,7 +197,8 @@ export const createFullBackup = async () => {
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
     const backupMetadata = {
       timestamp: new Date().toISOString(),
-      backups: {}
+      backups: {},
+      warnings: []
     };
 
     // Backup database
@@ -209,25 +210,37 @@ export const createFullBackup = async () => {
     };
 
     // Backup uploads
-    const uploadsBackup = await createUploadsBackup();
-    if (!uploadsBackup.skipped) {
-      backupMetadata.backups.uploads = {
-        path: uploadsBackup.backupPath,
-        fileName: uploadsBackup.backupFileName,
-        size: uploadsBackup.size
-      };
+    try {
+      const uploadsBackup = await createUploadsBackup();
+      if (!uploadsBackup.skipped) {
+        backupMetadata.backups.uploads = {
+          path: uploadsBackup.backupPath,
+          fileName: uploadsBackup.backupFileName,
+          size: uploadsBackup.size
+        };
+      }
+    } catch (uploadsError) {
+      backupMetadata.warnings.push(`Uploads backup failed: ${uploadsError.message}`);
+      console.error("Uploads backup failed during full backup:", uploadsError);
     }
 
     // Save metadata
     const metadataPath = path.join(BACKUP_DIR, `backup-metadata-${timestamp}.json`);
     await fs.writeFile(metadataPath, JSON.stringify(backupMetadata, null, 2));
 
-    console.log("Full backup completed successfully");
+    if (backupMetadata.warnings.length > 0) {
+      console.log("Full backup completed with warnings");
+    } else {
+      console.log("Full backup completed successfully");
+    }
+
     return {
       success: true,
       timestamp,
       metadata: backupMetadata,
-      metadataPath
+      metadataPath,
+      hasWarning: backupMetadata.warnings.length > 0,
+      warningMessages: backupMetadata.warnings
     };
   } catch (error) {
     console.error("Error creating full backup:", error);

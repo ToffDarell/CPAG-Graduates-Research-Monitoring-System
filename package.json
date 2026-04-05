@@ -4,7 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "server": "nodemon backend/server.js",
+    "server": "nodemon --watch backend --ext js,mjs,json --ignore backups/** --ignore uploads/** backend/server.js",
     "client": "cd frontend && npm run dev",
     "dev": "concurrently \"npm run server\" \"npm run client\"",
     "seed:rbac": "node backend/scripts/seedRBAC.js",
