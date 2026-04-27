@@ -13,6 +13,8 @@ import { renderAsync } from 'docx-preview';
 import { buildApiUrl, buildDirectApiUrl } from "../../utils/api";
 
 const localizer = momentLocalizer(moment);
+const sanitizePanelistFullName = (value = "") => value.replace(/\d+/g, "");
+const hasNumberInName = (value = "") => /\d/.test(value);
 
 // Helper function to handle permission errors
 const handlePermissionError = (error, defaultMessage = 'Operation failed') => {
@@ -869,7 +871,12 @@ const PanelSelection = () => {
 
   const handleInvitePanelist = async (panelId) => {
     if (!inviteForm.name || !inviteForm.email || !inviteForm.role) {
-      showWarning('Validation Error', 'Please fill in all required fields: Name, Email, and Role');
+      showWarning('Validation Error', 'Please fill in all required fields: Full Name, Email, and Role');
+      return;
+    }
+
+    if (hasNumberInName(inviteForm.name) || !inviteForm.name.trim()) {
+      showWarning('Validation Error', 'Full Name must not contain numbers.');
       return;
     }
 
@@ -892,7 +899,7 @@ const PanelSelection = () => {
       const headers = { Authorization: `Bearer ${token}` };
       const res = await axios.post('/api/programhead/panels/invite', {
         panelId,
-        name: inviteForm.name,
+        name: inviteForm.name.trim(),
         email: inviteForm.email,
         role: inviteForm.role,
         reviewDeadline: inviteForm.reviewDeadline || undefined,
@@ -1212,14 +1219,15 @@ const PanelSelection = () => {
               <p className="text-sm text-blue-800 font-medium">Invite external panelist via email (no account required)</p>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Name <span className="text-red-500">*</span></label>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Full Name <span className="text-red-500">*</span></label>
                   <input
                     type="text"
                     value={inviteForm.name}
-                    onChange={e => setInviteForm({ ...inviteForm, name: e.target.value })}
+                    onChange={e => setInviteForm({ ...inviteForm, name: sanitizePanelistFullName(e.target.value) })}
                     className="w-full px-4 py-2 rounded-md border border-gray-300 focus:border-[#7C1D23] focus:ring-2 focus:ring-[#7C1D23]/20 text-sm"
-                    
+                    placeholder="e.g., Dr. John Doe"
                   />
+                  
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Institutional Email <span className="text-red-500">*</span></label>
@@ -1273,7 +1281,12 @@ const PanelSelection = () => {
                   onClick={() => {
                     // Validate before adding
                     if (!inviteForm.name || !inviteForm.email || !inviteForm.role) {
-                      showWarning('Validation Error', 'Please fill in all required fields: Name, Email, and Role');
+                      showWarning('Validation Error', 'Please fill in all required fields: Full Name, Email, and Role');
+                      return;
+                    }
+
+                    if (hasNumberInName(inviteForm.name) || !inviteForm.name.trim()) {
+                      showWarning('Validation Error', 'Full Name must not contain numbers.');
                       return;
                     }
                     
@@ -1297,7 +1310,7 @@ const PanelSelection = () => {
                     }
                     
                     // This will be handled after panel creation - store invite data for now
-                    const inviteData = { ...inviteForm, isExternal: true };
+                    const inviteData = { ...inviteForm, name: inviteForm.name.trim(), isExternal: true };
                     setSelectedMembers(prev => [...prev, inviteData]);
                     setInviteForm({ name: '', email: '', role: 'member', reviewDeadline: '' });
                     setInviteMode(false);
@@ -1491,14 +1504,15 @@ const PanelSelection = () => {
                     <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 space-y-3">
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
                         <div>
-                          <label className="block text-xs font-medium text-gray-700 mb-1">Name <span className="text-red-500">*</span></label>
+                          <label className="block text-xs font-medium text-gray-700 mb-1">Full Name <span className="text-red-500">*</span></label>
                           <input
                             type="text"
                             value={inviteForm.name}
-                            onChange={e => setInviteForm({ ...inviteForm, name: e.target.value })}
+                            onChange={e => setInviteForm({ ...inviteForm, name: sanitizePanelistFullName(e.target.value) })}
                             className="w-full px-3 py-2 rounded-md border border-gray-300 text-sm"
                             placeholder="Dr. John Doe"
                           />
+                          <p className="text-xs text-gray-500 mt-1">Numbers are not allowed in the full name.</p>
                         </div>
                         <div>
                           <label className="block text-xs font-medium text-gray-700 mb-1">Email <span className="text-red-500">*</span></label>
@@ -1879,7 +1893,7 @@ const ScheduleManagement = () => {
   const handleFinalizeConsultation = async (scheduleId) => {
     const result = await showConfirm(
       'Finalize Consultation Schedule',
-      'Are you sure you want to finalize this consultation schedule? All participants will be notified via email.',
+      'Please review this consultation schedule before finalizing it. If you continue, the schedule will be locked and all participants will receive an email notification.',
       'Yes, Finalize',
       'Cancel'
     );
@@ -1988,24 +2002,24 @@ const ScheduleManagement = () => {
     });
 
     // Create detailed confirmation message
-    let confirmMessage = `Create and finalize panel schedule?\n\n`;
+    let confirmMessage = `Please review the panel schedule details below.\n\n`;
     if (panel) {
       confirmMessage += `Panel: ${panel.name}\n`;
-      confirmMessage += `Research: ${panel.research?.title || 'N/A'}\n`;
+      confirmMessage += `Research Title: ${panel.research?.title || 'N/A'}\n`;
     }
-    confirmMessage += `Date & Time: ${formattedDate}\n`;
+    confirmMessage += `Scheduled Date & Time: ${formattedDate}\n`;
     confirmMessage += `Duration: ${scheduleForm.duration} minutes\n`;
     confirmMessage += `Location: ${scheduleForm.location}\n\n`;
-    confirmMessage += `All participants (panelists, students, and adviser) will be notified via email.`;
+    confirmMessage += `If you continue, this schedule will be finalized and email notifications will be sent to the panelists, students, and adviser.`;
     
     if (conflicts && conflicts.hasConflicts) {
       confirmMessage += `\n\n⚠️ Conflicts detected! Proceed anyway?`;
     }
 
     const result = await showConfirm(
-      'Create & Finalize Panel Schedule',
+      'Confirm Panel Schedule',
       confirmMessage,
-      'Yes, Create Schedule',
+      'Yes, Finalize Schedule',
       'Cancel'
     );
     if (!result.isConfirmed) return;
@@ -2050,10 +2064,10 @@ const ScheduleManagement = () => {
       return;
     }
 
-    const confirmMessage = `Update this schedule?\n\n${
+    const confirmMessage = `Please review the schedule update before saving.\n\n${
       editForm.sendNotifications 
-        ? 'All participants will be notified via email about the changes.' 
-        : 'No email notifications will be sent.'
+        ? 'If you continue, all participants will be notified by email about the changes.' 
+        : 'If you continue, the schedule will be updated without sending email notifications.'
     }`;
 
     const result = await showConfirm(
@@ -2334,7 +2348,7 @@ const ScheduleManagement = () => {
         {activeTab === "panels" && (
           <div className="p-5">
             <div className="flex justify-between items-center mb-4">
-              <h3 className="text-lg font-semibold text-gray-800">Panels Without Schedules</h3>
+              <h3 className="text-lg font-semibold text-gray-800">Defense Without Schedules</h3>
               <button
                 onClick={() => {
                   setShowCreateModal(true);
@@ -2345,7 +2359,7 @@ const ScheduleManagement = () => {
                 className="flex items-center px-4 py-2 bg-[#7C1D23] text-white rounded-md hover:bg-[#5a1519] transition-colors text-sm font-medium"
               >
                 <FaCalendarAlt className="mr-2" />
-                Create Panel Schedule
+                Create Defense Schedule
               </button>
             </div>
 
@@ -2779,7 +2793,7 @@ const ScheduleManagement = () => {
             <div className="p-5 border-b border-gray-200">
               <div className="flex items-center justify-between">
                 <h3 className="text-lg font-semibold text-gray-900">
-                  {selectedPanel ? 'Create Panel Schedule' : 'Create Panel Schedule'}
+                  {selectedPanel ? 'Create Defense Schedule' : 'Create Defense Schedule'}
                 </h3>
                 <button
                   onClick={() => {
@@ -2798,7 +2812,7 @@ const ScheduleManagement = () => {
             <div className="p-5 space-y-4">
               {selectedPanel && (
                 <div className="bg-gray-50 rounded-lg p-4 mb-4">
-                  <p className="text-sm font-medium text-gray-700 mb-1">Selected Panel:</p>
+                  <p className="text-sm font-medium text-gray-700 mb-1">Selected Defense:</p>
                   <p className="text-base font-semibold text-gray-900">
                     {panelsWithoutSchedule.find(p => p._id === selectedPanel)?.name || 'N/A'}
                   </p>

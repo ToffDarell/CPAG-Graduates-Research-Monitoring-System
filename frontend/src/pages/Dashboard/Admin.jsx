@@ -68,7 +68,7 @@ const ACTIVITY_ENTITY_TYPES = [
   "progress-dashboard",
 ];
 
-const VALID_ADMIN_TABS = ["dashboard", "roles", "permissions", "users", "activity", "backup"];
+const VALID_ADMIN_TABS = ["dashboard", "roles", "users", "activity", "backup"];
 
 const Admin = ({ user, setUser }) => {
   const navigate = useNavigate();
@@ -101,6 +101,7 @@ const Admin = ({ user, setUser }) => {
   // Search and filter states
   const [searchTerm, setSearchTerm] = useState("");
   const [userFilter, setUserFilter] = useState("all");
+  const [userRoleFilter, setUserRoleFilter] = useState("all");
   const [roleFilter, setRoleFilter] = useState("all");
 
   // Stats
@@ -909,20 +910,16 @@ const Admin = ({ user, setUser }) => {
     return Math.round(bytes / Math.pow(1024, i) * 100) / 100 + " " + sizes[i];
   };
 
-  const permissionsByModule = permissions.reduce((acc, perm) => {
-    if (!acc[perm.module]) acc[perm.module] = [];
-    acc[perm.module].push(perm);
-    return acc;
-  }, {});
-
   // Filter functions
   const filteredUsers = users.filter(user => {
     const matchesSearch = user.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
                          user.email.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesFilter = userFilter === "all" || 
-                         (userFilter === "active" && user.isActive) ||
-                         (userFilter === "inactive" && !user.isActive);
-    return matchesSearch && matchesFilter;
+    const normalizedRole = (user.role || "").toLowerCase().trim();
+    const matchesStatusFilter = userFilter === "all" || 
+                               (userFilter === "active" && user.isActive) ||
+                               (userFilter === "inactive" && !user.isActive);
+    const matchesRoleFilter = userRoleFilter === "all" || normalizedRole === userRoleFilter;
+    return matchesSearch && matchesStatusFilter && matchesRoleFilter;
   });
 
   const filteredRoles = roles.filter(role => {
@@ -1182,17 +1179,6 @@ const Admin = ({ user, setUser }) => {
             >
               <FaShieldAlt />
               <span>Roles</span>
-            </button>
-            <button
-              onClick={() => setActiveTab("permissions")}
-              className={`py-3 px-6 rounded-lg font-medium text-sm flex items-center space-x-3 transition-all duration-200 ${
-                activeTab === "permissions"
-                  ? "bg-gradient-to-r from-[#7C1D23] to-[#5a1519] text-white shadow-md"
-                  : "text-gray-600 hover:text-gray-900 hover:bg-gray-100"
-              }`}
-            >
-              <FaKey />
-              <span>Permissions</span>
             </button>
             <button
               onClick={() => setActiveTab("users")}
@@ -1504,72 +1490,7 @@ const Admin = ({ user, setUser }) => {
           </div>
         )}
 
-        {/* Permissions Tab */}
-        {activeTab === "permissions" && (
-          <div>
-            <div className="mb-6">
-              <h2 className="text-2xl font-bold text-gray-900">System Permissions</h2>
-              <p className="text-gray-600 mt-1">Overview of all permissions organized by module</p>
-            </div>
-            
-            <div className="grid gap-6">
-              {Object.entries(permissionsByModule).map(([module, perms]) => (
-                <div key={module} className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-                  <div className="bg-gradient-to-r from-[#FDE8EA] to-[#F8F1EC] px-6 py-4 border-b border-gray-200">
-                    <div className="flex items-center space-x-3">
-                      <div className="bg-gradient-to-r from-[#7C1D23] to-[#5a1519] p-2 rounded-lg">
-                        <FaKey className="text-white text-lg" />
-                      </div>
-                      <h3 className="font-semibold text-xl capitalize bg-gradient-to-r from-[#7C1D23] to-[#5a1519] bg-clip-text text-transparent">
-                        {module} Module
-                      </h3>
-                      <span className="bg-[#FDE8EA] text-[#7C1D23] px-2 py-1 rounded-full text-sm font-medium">
-                        {perms.length} permissions
-                      </span>
-                    </div>
-                  </div>
-                  
-                  <div className="p-6">
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                      {perms.map((perm) => (
-                        <div
-                          key={perm._id}
-                          className="bg-gray-50 border border-gray-200 rounded-lg p-4 hover:bg-gray-100 transition-colors duration-200"
-                        >
-                          <div className="flex items-start justify-between mb-2">
-                            <div className="flex items-center space-x-2">
-                              <div className={`w-3 h-3 rounded-full ${perm.isActive ? 'bg-green-500' : 'bg-gray-400'}`}></div>
-                              <h4 className="font-medium text-gray-900 text-sm">
-                                {perm.name.replace(/_/g, " ").replace(/\b\w/g, l => l.toUpperCase())}
-                              </h4>
-                            </div>
-                            <span
-                              className={`px-2 py-1 text-xs font-medium rounded-full border ${
-                                perm.isActive
-                                  ? "bg-green-100 text-green-800 border-green-200"
-                                  : "bg-gray-100 text-gray-600 border-gray-200"
-                              }`}
-                            >
-                              {perm.isActive ? "Active" : "Inactive"}
-                            </span>
-                          </div>
-                          {perm.description && (
-                            <p className="text-xs text-gray-600 leading-relaxed">{perm.description}</p>
-                          )}
-                          <div className="mt-3 pt-2 border-t border-gray-200">
-                            <p className="text-xs text-gray-500">
-                              Permission ID: <span className="font-mono">{perm.name}</span>
-                            </p>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
+        {/* Permissions Tab Removed */}
 
         {/* Activity Tab */}
         {activeTab === "activity" && (
@@ -1948,6 +1869,20 @@ const Admin = ({ user, setUser }) => {
                     <option value="all">All Users</option>
                     <option value="active">Active Only</option>
                     <option value="inactive">Inactive Only</option>
+                  </select>
+                </div>
+                <div className="lg:w-56">
+                  <select
+                    value={userRoleFilter}
+                    onChange={(e) => setUserRoleFilter(e.target.value)}
+                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#7C1D23] focus:border-transparent"
+                  >
+                    <option value="all">All Roles</option>
+                    <option value="admin">Admin</option>
+                    <option value="dean">Dean</option>
+                    <option value="program head">Program Head</option>
+                    <option value="faculty adviser">Faculty Adviser</option>
+                    <option value="graduate student">Graduate Student</option>
                   </select>
                 </div>
               </div>

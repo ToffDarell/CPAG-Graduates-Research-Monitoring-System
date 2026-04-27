@@ -449,6 +449,12 @@ export const updateUserProfileByAdmin = async (req, res) => {
       if (!trimmedName) {
         return res.status(400).json({ message: "Name cannot be empty." });
       }
+
+      const nameRegex = /^[a-zA-ZñÑ\s]+$/;
+      if (!nameRegex.test(trimmedName)) {
+        return res.status(400).json({ message: "Full Name should only contain letters and spaces." });
+      }
+
       updateData.name = trimmedName;
       updatedFields.push("name");
     }
@@ -593,6 +599,11 @@ export const inviteDean = async (req, res) => {
       return res.status(400).json({ message: "Name and email are required" });
     }
 
+    const nameRegex = /^[a-zA-ZñÑ\s]+$/;
+    if (!nameRegex.test(name.trim())) {
+      return res.status(400).json({ message: "Full Name should only contain letters and spaces." });
+    }
+
     // TEMPORARY: Enforce @buksu.edu.ph or @gmail.com for deans (for testing)
     const emailDomain = email.split("@")[1];
     if (emailDomain !== "buksu.edu.ph" && emailDomain !== "gmail.com") {
@@ -698,6 +709,11 @@ export const inviteFaculty = async (req, res) => {
       return res.status(400).json({ message: "Name and email are required" });
     }
 
+    const nameRegex = /^[a-zA-ZñÑ\s]+$/;
+    if (!nameRegex.test(name.trim())) {
+      return res.status(400).json({ message: "Full Name should only contain letters and spaces." });
+    }
+
     // TEMPORARY: Email domain validation (for testing)
     const emailDomain = email.split("@")[1];
     if (emailDomain !== "buksu.edu.ph" && emailDomain !== "gmail.com") {
@@ -793,6 +809,11 @@ export const inviteProgramHead = async (req, res) => {
 
     if (!email || !name) {
       return res.status(400).json({ message: "Name and email are required" });
+    }
+
+    const nameRegex = /^[a-zA-ZñÑ\s]+$/;
+    if (!nameRegex.test(name.trim())) {
+      return res.status(400).json({ message: "Full Name should only contain letters and spaces." });
     }
 
     // TEMPORARY: Email domain validation (for testing)

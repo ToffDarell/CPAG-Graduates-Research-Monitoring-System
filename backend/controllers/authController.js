@@ -148,6 +148,15 @@ export const register = async (req, res) => {
             return res.status(400).json({ message: 'All fields (name, email, password, role) are required' });
         }
 
+        if (password.length < 8 || !/[!@#$%^&*(),.?":{}|<>]/.test(password)) {
+            return res.status(400).json({ message: 'Password must be at least 8 characters long and contain at least one symbol.' });
+        }
+
+        const nameRegex = /^[a-zA-ZñÑ\s]+$/;
+        if (!nameRegex.test(name.trim())) {
+            return res.status(400).json({ message: 'Full Name should only contain letters and spaces.' });
+        }
+
         // Restrict direct registration to only students
         const allowedRoles = ['graduate student'];
         if (!allowedRoles.includes(role)) {
@@ -398,8 +407,8 @@ export const resetPassword = async (req, res) => {
     const { password } = req.body;
 
     try {
-        if (!password || password.length < 6) {
-            return res.status(400).json({ message: 'Password must be at least 6 characters' });
+        if (!password || password.length < 8 || !/[!@#$%^&*(),.?":{}|<>]/.test(password)) {
+            return res.status(400).json({ message: 'Password must be at least 8 characters long and contain at least one symbol.' });
         }
 
         // Hash the token from URL to compare with stored hash
@@ -539,6 +548,12 @@ export const updateProfile = async (req, res) => {
             if (!trimmedName || trimmedName.length === 0) {
                 return res.status(400).json({ message: 'Name cannot be empty.' });
             }
+
+            const nameRegex = /^[a-zA-ZñÑ\s]+$/;
+            if (!nameRegex.test(trimmedName)) {
+                return res.status(400).json({ message: 'Full Name should only contain letters and spaces.' });
+            }
+
             updateData.name = trimmedName;
         }
 
@@ -732,8 +747,8 @@ export const changePassword = async (req, res) => {
         return res.status(400).json({ message: 'Current password, new password, and verification code are required.' });
     }
 
-    if (newPassword.length < 6) {
-        return res.status(400).json({ message: 'New password must be at least 6 characters.' });
+    if (newPassword.length < 8 || !/[!@#$%^&*(),.?":{}|<>]/.test(newPassword)) {
+        return res.status(400).json({ message: 'Password must be at least 8 characters long and contain at least one symbol.' });
     }
 
     try {

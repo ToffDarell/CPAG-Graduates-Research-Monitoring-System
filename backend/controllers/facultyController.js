@@ -1580,9 +1580,7 @@ export const updateConsultationStatus = async (req, res) => {
   try {
     const { scheduleId, action, participantId, rejectionReason } = req.body; // action: "approve" or "decline"
 
-    const schedule = await Schedule.findById(scheduleId)
-      .populate("participants.user", "name email")
-      .populate("research", "title");
+    const schedule = await Schedule.findById(scheduleId).populate("research", "title");
 
     if (!schedule) {
       return res.status(404).json({ message: "Schedule not found" });
@@ -1590,7 +1588,7 @@ export const updateConsultationStatus = async (req, res) => {
 
     // Verify the requester is the adviser
     const adviserParticipant = schedule.participants.find(
-      p => p.user._id.toString() === req.user.id && p.role === "adviser"
+      p => p.user && p.user.toString() === req.user.id && p.role === "adviser"
     );
 
     if (!adviserParticipant) {
@@ -1599,19 +1597,23 @@ export const updateConsultationStatus = async (req, res) => {
 
     // Find the student participant
     const studentParticipant = schedule.participants.find(
-      p => p.user._id.toString() === participantId && p.role === "student"
+      p => p.user && p.user.toString() === participantId && p.role === "student"
     );
 
     if (!studentParticipant) {
       return res.status(404).json({ message: "Student participant not found" });
     }
 
+    // Fetch user details for emails
+    const studentUser = await User.findById(studentParticipant.user).select("name email");
+    const adviser = await User.findById(req.user.id);
+
     if (action === "approve") {
       studentParticipant.status = "confirmed";
       schedule.status = "confirmed";
       
       // Sync to Google Calendar if adviser has calendar connected
-      const adviser = await User.findById(req.user.id);
+      
       let calendarEvent = null;
       
       if (adviser?.calendarConnected && adviser?.googleAccessToken && adviser?.googleRefreshToken) {
@@ -1620,8 +1622,8 @@ export const updateConsultationStatus = async (req, res) => {
           
           // Collect attendee emails
           const attendeeEmails = [];
-          if (studentParticipant.user?.email) {
-            attendeeEmails.push(studentParticipant.user.email);
+          if (studentUser && studentUser.email) {
+            attendeeEmails.push(studentUser.email);
           }
           if (adviser.email) {
             attendeeEmails.push(adviser.email);
@@ -1633,7 +1635,7 @@ export const updateConsultationStatus = async (req, res) => {
           calendarEvent = await createConsultationEvent(
             {
               title: schedule.title,
-              description: schedule.description || `Consultation with ${studentParticipant.user.name}`,
+              description: schedule.description || `Consultation with ${studentUser.name}`,
               datetime: schedule.datetime,
               duration: schedule.duration || 60,
               location: schedule.location,
@@ -1690,10 +1692,10 @@ export const updateConsultationStatus = async (req, res) => {
         entityType: "schedule",
         entityId: schedule._id,
         entityName: schedule.title,
-        description: `Approved consultation request from ${studentParticipant.user.name}${calendarEvent ? ' (synced to Google Calendar)' : ''}`,
+        description: `Approved consultation request from ${studentUser.name}${calendarEvent ? ' (synced to Google Calendar)' : ''}`,
         metadata: {
-          studentId: studentParticipant.user._id,
-          studentName: studentParticipant.user.name,
+          studentId: studentUser._id,
+          studentName: studentUser.name,
           datetime: schedule.datetime,
           location: schedule.location,
           calendarSynced: schedule.calendarSynced,
@@ -1702,13 +1704,14 @@ export const updateConsultationStatus = async (req, res) => {
       });
 
       // Save schedule first to ensure calendar sync data is persisted
+      schedule.markModified('participants');
       await schedule.save();
       
       // Fetch updated schedule with calendar info
       const scheduleWithCalendar = await Schedule.findById(scheduleId);
 
       // Send email notification to student about approval
-      if (studentParticipant.user && studentParticipant.user.email) {
+      if (studentUser && studentUser.email) {
         const adviserName = req.user.name || "Your Adviser";
         const formattedDate = new Date(schedule.datetime).toLocaleString('en-US', {
           weekday: 'long',
@@ -1720,13 +1723,13 @@ export const updateConsultationStatus = async (req, res) => {
         });
 
         await sendNotificationEmail(
-          studentParticipant.user.email,
+          studentUser.email,
           `Consultation Request Approved: ${schedule.title}`,
           `Your consultation request has been approved by ${adviserName}.`,
           `
             <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
               <h2 style="color: #7C1D23;">Consultation Request Approved</h2>
-              <p>Hello ${studentParticipant.user.name},</p>
+              <p>Hello ${studentUser.name},</p>
               <p>Great news! Your consultation request has been <strong style="color: #22c55e;">approved</strong> by ${adviserName}.</p>
               <div style="background-color: #f0fdf4; padding: 15px; margin: 20px 0; border-left: 4px solid #22c55e; border-radius: 4px;">
                 <p style="margin: 8px 0;"><strong style="color: #333;">Consultation Title:</strong> ${schedule.title}</p>
@@ -1760,17 +1763,17 @@ export const updateConsultationStatus = async (req, res) => {
         entityType: "schedule",
         entityId: schedule._id,
         entityName: schedule.title,
-        description: `Declined consultation request from ${studentParticipant.user.name}${rejectionReason ? ` - Reason: ${rejectionReason}` : ''}`,
+        description: `Declined consultation request from ${studentUser.name}${rejectionReason ? ` - Reason: ${rejectionReason}` : ''}`,
         metadata: {
-          studentId: studentParticipant.user._id,
-          studentName: studentParticipant.user.name,
+          studentId: studentUser._id,
+          studentName: studentUser.name,
           datetime: schedule.datetime,
           rejectionReason: rejectionReason || null
         }
       });
 
       // Send email notification to student about decline
-      if (studentParticipant.user && studentParticipant.user.email) {
+      if (studentUser && studentUser.email) {
         const adviserName = req.user.name || "Your Adviser";
         const formattedDate = new Date(schedule.datetime).toLocaleString('en-US', {
           weekday: 'long',
@@ -1792,13 +1795,13 @@ export const updateConsultationStatus = async (req, res) => {
           : '';
 
         await sendNotificationEmail(
-          studentParticipant.user.email,
+          studentUser.email,
           `Consultation Request Declined: ${schedule.title}`,
           `Your consultation request for ${formattedDate} has been declined by ${adviserName}.${schedule.rejectionReason ? ` Reason: ${schedule.rejectionReason}` : ''}`,
           `
             <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
               <h2 style="color: #7C1D23;">Consultation Request Declined</h2>
-              <p>Hello ${studentParticipant.user.name},</p>
+              <p>Hello ${studentUser.name},</p>
               <p>Your consultation request has been <strong style="color: #dc2626;">declined</strong> by ${adviserName}.</p>
               <div style="background-color: #fef2f2; padding: 15px; margin: 20px 0; border-left: 4px solid #dc2626; border-radius: 4px;">
                 <p style="margin: 8px 0;"><strong style="color: #333;">Consultation Title:</strong> ${schedule.title}</p>
@@ -1818,6 +1821,7 @@ export const updateConsultationStatus = async (req, res) => {
 
     // Save schedule (if not already saved in approve action)
     if (action !== "approve") {
+      schedule.markModified('participants');
       await schedule.save();
     }
 

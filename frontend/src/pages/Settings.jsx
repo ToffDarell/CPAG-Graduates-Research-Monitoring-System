@@ -825,7 +825,9 @@ const Settings = ({ user, setUser, embedded = false, onClose }) => {
                   setPasswordForm((prev) => ({ ...prev, newPassword: e.target.value }))
                 }
                 className="w-full border border-gray-300 rounded-md px-3 py-2 pr-10 focus:ring-[#7C1D23] focus:border-[#7C1D23]"
-                minLength={6}
+                minLength={8}
+                pattern=".*[^a-zA-Z0-9_].*"
+                title="Password must contain at least one symbol"
                 required
               />
               <button
@@ -836,6 +838,7 @@ const Settings = ({ user, setUser, embedded = false, onClose }) => {
                 {showNewPassword ? <FaEyeSlash /> : <FaEye />}
               </button>
             </div>
+            <p className="text-xs text-gray-500 mt-1">Must be at least 8 characters long and contain at least one symbol (e.g., !@#$%^&*).</p>
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">

@@ -3060,6 +3060,15 @@ export const sendEmail = async (req, res) => {
 export const inviteFaculty = async (req, res) => {
   const { email, name, role } = req.body;
 
+  if (!email || !name) {
+    return res.status(400).json({ message: "Name and email are required" });
+  }
+
+  const nameRegex = /^[a-zA-ZñÑ\s]+$/;
+  if (!nameRegex.test(name.trim())) {
+    return res.status(400).json({ message: "Full Name should only contain letters and spaces." });
+  }
+
   try {
     // TEMPORARY: Validate institutional email domain (allow @gmail.com for testing)
     const emailDomain = '@' + email.split('@')[1];
@@ -3164,6 +3173,11 @@ export const inviteProgramHead = async (req, res) => {
   try {
     if (!email || !name) {
       return res.status(400).json({ message: "Name and email are required" });
+    }
+
+    const nameRegex = /^[a-zA-ZñÑ\s]+$/;
+    if (!nameRegex.test(name.trim())) {
+      return res.status(400).json({ message: "Full Name should only contain letters and spaces." });
     }
 
     // TEMPORARY: Validate institutional email domain (allow @gmail.com for testing)

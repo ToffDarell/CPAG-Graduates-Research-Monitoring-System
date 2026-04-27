@@ -917,7 +917,7 @@ const DeanDashboard = ({ setUser, user }) => {
                       value={newFaculty.name}
                       onChange={(e) => setNewFaculty({...newFaculty, name: e.target.value})}
                       className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-[#7C1D23] transition-colors"
-                      placeholder="Enter faculty name"
+                      placeholder="Enter Faculty Adviser Full Name"
                     />
                   </div>
                   
