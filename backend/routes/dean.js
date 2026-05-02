@@ -8,6 +8,8 @@ import {
   getFaculty,
   deleteFaculty,
   getResearchRecords,
+  viewResearchDocument,
+  downloadResearchDocument,
   getAnalytics,
   archiveResearch,
   getMonitoringData,
@@ -106,6 +108,8 @@ router.put("/faculty/:id/toggle-status", checkPermission("activate_users"), togg
 
 // Research records and analytics     
 router.get("/research", getResearchRecords);
+router.get("/research/:researchId/view/:documentId", viewResearchDocument);
+router.get("/research/:researchId/download/:documentId", downloadResearchDocument);
 router.post("/research/export", exportResearchRecords);
 router.post("/defense-schedule/export", exportDefenseSchedule);
 router.post("/research/bulk-archive", bulkArchiveResearch);

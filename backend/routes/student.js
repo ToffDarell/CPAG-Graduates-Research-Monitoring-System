@@ -7,6 +7,7 @@ import { checkPermission as checkRolePermission } from "../middleware/permission
 import { 
   login,
   getAvailableDocuments, 
+  getMyPanelDocuments,
   downloadDocument, 
   viewDocument,
   uploadComplianceForm,
@@ -33,8 +34,14 @@ import {
   requestConsultation,
   createCustomConsultationRequest,
   getCompletedThesis,
-  getPanelFeedback
+  getPanelFeedback,
+  downloadResearchDocument,
+  viewResearchDocument
 } from "../controllers/studentController.js";
+import {
+  downloadPanelDocument,
+  viewPanelDocument,
+} from "../controllers/programHeadController.js";
 
 const router = express.Router();
 
@@ -127,8 +134,13 @@ router.post("/logout", async (req, res) => {
 
 // Document routes
 router.get("/documents", getAvailableDocuments);
+router.get("/panel-documents", getMyPanelDocuments);
 router.get("/documents/:id", viewDocument);
 router.get("/documents/:id/download", downloadDocument);
+router.get("/panels/:panelId/documents/:documentId", viewPanelDocument);
+router.get("/panels/:panelId/documents/:documentId/download", downloadPanelDocument);
+router.get("/research/:researchId/documents/:docId", viewResearchDocument);
+router.get("/research/:researchId/documents/:docId/download", downloadResearchDocument);
 
 // Completed thesis routes
 router.get("/completed-thesis", getCompletedThesis);

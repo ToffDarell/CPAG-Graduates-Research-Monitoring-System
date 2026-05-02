@@ -2240,23 +2240,11 @@ export const getMyPanels = async (req, res) => {
 export const submitPanelReview = async (req, res) => {
   try {
     const { panelId } = req.params; // Get panelId from URL parameter
-    const { comments, recommendation } = req.body; // Get comments and recommendation from body
+    const { comments, recommendation, grade } = req.body; // Get comments, recommendation and grade from body
     const userId = req.user.id.toString();
 
     if (!comments || !comments.trim()) {
       return res.status(400).json({ message: "Comments are required" });
-    }
-
-    if (!recommendation) {
-      return res.status(400).json({ message: "Recommendation is required" });
-    }
-
-    // Validate recommendation enum values
-    const validRecommendations = ["approve", "reject", "revision", "pending"];
-    if (!validRecommendations.includes(recommendation)) {
-      return res.status(400).json({ 
-        message: `Invalid recommendation. Must be one of: ${validRecommendations.join(", ")}` 
-      });
     }
 
     if (!panelId) {
@@ -2268,6 +2256,39 @@ export const submitPanelReview = async (req, res) => {
     if (!panel) {
       return res.status(404).json({ message: "Panel not found" });
     }
+
+    const isGradedPanelType = (type) => ["oral_defense", "final_defense"].includes(type);
+    const normalizePanelGrade = (grade) => {
+      const g = parseFloat(grade);
+      return !isNaN(g) && g >= 1.0 && g <= 5.0 && (g * 100) % 25 === 0 ? g : null;
+    };
+
+    const gradedPanel = isGradedPanelType(panel.type);
+    let normalizedGrade = null;
+    let normalizedRecommendation = null;
+
+    if (gradedPanel) {
+      normalizedGrade = normalizePanelGrade(grade);
+      if (!normalizedGrade) {
+        return res.status(400).json({
+          message: "A valid panel grade is required. Use values from 1.00 to 5.00 in 0.25 intervals.",
+        });
+      }
+    }
+
+    if (!recommendation || recommendation === "pending") {
+      return res.status(400).json({ message: "Result is required" });
+    }
+
+    // Validate recommendation enum values
+    const validRecommendations = ["approve", "reject", "revision"];
+    if (!validRecommendations.includes(recommendation)) {
+      return res.status(400).json({ 
+        message: `Invalid result. Must be one of: ${validRecommendations.join(", ")}` 
+      });
+    }
+
+    normalizedRecommendation = recommendation;
 
     // Verify user is an active panelist
     const myMember = panel.members.find(m => {
@@ -2289,7 +2310,8 @@ export const submitPanelReview = async (req, res) => {
     const reviewData = {
       panelist: req.user.id,
       comments: comments?.trim() || '',
-      recommendation: recommendation,
+      recommendation: normalizedRecommendation,
+      grade: normalizedGrade,
       status: 'submitted',
       submittedAt: new Date(),
       dueDate: panel.reviewDeadline || null,
@@ -2527,6 +2549,139 @@ export const getAvailableDocuments = async (req, res) => {
   }
 };
 
+export const uploadDocument = async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ message: "No file uploaded" });
+    }
+
+    const title = req.body.title?.trim();
+    const description = req.body.description?.trim() || "";
+    const category = req.body.category || "other";
+
+    if (!title) {
+      return res.status(400).json({ message: "Document title is required" });
+    }
+
+    const allowedMimes = [
+      "application/pdf",
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      "application/msword",
+    ];
+
+    if (!allowedMimes.includes(req.file.mimetype)) {
+      return res.status(400).json({ message: "Only PDF and DOCX files are allowed" });
+    }
+
+    const document = new Document({
+      title,
+      description,
+      category,
+      filename: req.file.originalname,
+      filepath: req.file.path,
+      fileSize: req.file.size,
+      mimeType: req.file.mimetype,
+      uploadedBy: req.user.id,
+      accessibleTo: ["dean", "program head", "faculty adviser", "graduate student"],
+      storageLocation: "local",
+    });
+
+    await document.save();
+
+    await Activity.create({
+      user: req.user.id,
+      action: "upload",
+      entityType: "document",
+      entityId: document._id,
+      entityName: document.title,
+      description: `Uploaded document: ${document.title}`,
+      metadata: {
+        category: document.category,
+        fileSize: document.fileSize,
+        accessibleTo: document.accessibleTo,
+      },
+    }).catch((err) => console.error("Error logging document upload:", err));
+
+    await document.populate("uploadedBy", "name email");
+
+    // Send email notification to adviser's linked students
+    try {
+      const adviserResearch = await Research.find({
+        adviser: req.user.id,
+        status: { $ne: "archived" },
+      }).populate("students", "name email");
+
+      const studentEmails = [];
+      adviserResearch.forEach((research) => {
+        (research.students || []).forEach((student) => {
+          if (student.email && !studentEmails.includes(student.email)) {
+            studentEmails.push(student.email);
+          }
+        });
+      });
+
+      if (studentEmails.length > 0) {
+        const nodemailerModule = await import('nodemailer');
+        const transporter = nodemailerModule.default.createTransport({
+          host: process.env.SMTP_HOST,
+          port: process.env.SMTP_PORT,
+          secure: false,
+          auth: {
+            user: process.env.SMTP_USER,
+            pass: process.env.SMTP_PASS,
+          },
+        });
+
+        const adviserName = document.uploadedBy?.name || "Your Faculty Adviser";
+        const frontendUrl = process.env.FRONTEND_URL || "http://localhost:5173";
+        const documentsUrl = `${frontendUrl}/dashboard/graduate?tab=documents`;
+
+        for (const studentEmail of studentEmails) {
+          await transporter.sendMail({
+            from: process.env.SMTP_FROM,
+            to: studentEmail,
+            subject: `New Document Uploaded: ${title}`,
+            html: `
+              <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+                <div style="background-color: #7C1D23; color: white; padding: 20px; border-radius: 5px 5px 0 0;">
+                  <h2 style="margin: 0; font-size: 22px;">New Document Available</h2>
+                </div>
+                <div style="background-color: #f9f9f9; padding: 20px; border: 1px solid #ddd; border-top: none;">
+                  <p>Your faculty adviser <strong>${adviserName}</strong> has uploaded a new document for you:</p>
+                  <div style="background-color: white; padding: 15px; margin: 15px 0; border-left: 4px solid #7C1D23; border-radius: 4px;">
+                    <p style="margin: 6px 0;"><strong>Document:</strong> ${title}</p>
+                    ${description ? `<p style="margin: 6px 0;"><strong>Description:</strong> ${description}</p>` : ''}
+                    <p style="margin: 6px 0;"><strong>File:</strong> ${req.file.originalname}</p>
+                  </div>
+                  <div style="text-align: center; margin: 25px 0;">
+                    <a href="${documentsUrl}" style="background-color: #7C1D23; color: white; padding: 12px 28px; text-decoration: none; border-radius: 5px; display: inline-block; font-weight: bold;">
+                      View in Dashboard
+                    </a>
+                  </div>
+                  <p style="color: #666; font-size: 13px;">Log in to your Graduate Dashboard and go to the <strong>Documents</strong> tab to view and download this file.</p>
+                </div>
+                <div style="background-color: #f0f0f0; padding: 12px; border-radius: 0 0 5px 5px; border: 1px solid #ddd; border-top: none;">
+                  <p style="color: #999; font-size: 12px; margin: 0;">This is an automated notification from the CPAG Graduate Research System.</p>
+                </div>
+              </div>
+            `,
+          }).catch((emailErr) => {
+            console.error(`Failed to send document notification to ${studentEmail}:`, emailErr.message);
+          });
+        }
+        console.log(`Document notification sent to ${studentEmails.length} student(s).`);
+      }
+    } catch (notifyErr) {
+      console.error("Error sending document notification emails:", notifyErr);
+    }
+
+    res.json({ message: "Document uploaded successfully", document });
+  } catch (error) {
+    console.error("Faculty document upload error:", error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
 // Download document
 export const downloadDocument = async (req, res) => {
   try {
@@ -2632,6 +2787,140 @@ export const viewDocument = async (req, res) => {
     const fileStream = fs.createReadStream(filePath);
     fileStream.pipe(res);
   } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+export const viewResearchDocument = async (req, res) => {
+  try {
+    const { researchId, docId: documentId } = req.params;
+    const research = await Research.findOne({ _id: researchId, status: { $ne: "archived" } });
+
+    if (!research) {
+      return res.status(404).json({ message: "Research not found" });
+    }
+
+    const document = research.forms.id(documentId);
+    if (!document) {
+      return res.status(404).json({ message: "Research document not found" });
+    }
+
+    let mimeType = document.driveMimeType || "application/pdf";
+    if (!mimeType || mimeType === "application/octet-stream") {
+      const ext = path.extname(document.filename || "").toLowerCase();
+      const mimeTypes = {
+        ".pdf": "application/pdf",
+        ".doc": "application/msword",
+        ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      };
+      mimeType = mimeTypes[ext] || "application/pdf";
+    }
+
+    const filePath = path.isAbsolute(document.filepath)
+      ? document.filepath
+      : path.join(process.cwd(), document.filepath || "");
+
+    if (!document.filepath || !fs.existsSync(filePath)) {
+      return res.status(404).json({ message: "Research document file not found on server" });
+    }
+
+    await Activity.create({
+      user: req.user.id,
+      action: "view",
+      entityType: "research",
+      entityId: research._id,
+      entityName: research.title,
+      description: `Viewed research document: ${document.filename}`,
+      metadata: {
+        researchId: research._id,
+        documentId,
+        documentType: document.type,
+        filename: document.filename,
+      },
+    }).catch(() => {});
+
+    res.setHeader("Content-Type", mimeType);
+    res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(document.filename || "research-document")}"`);
+    fs.createReadStream(filePath).pipe(res);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+export const downloadResearchDocument = async (req, res) => {
+  try {
+    const { researchId, docId: documentId } = req.params;
+    const research = await Research.findOne({ _id: researchId, status: { $ne: "archived" } });
+
+    if (!research) {
+      return res.status(404).json({ message: "Research not found" });
+    }
+
+    const document = research.forms.id(documentId);
+    if (!document) {
+      return res.status(404).json({ message: "Research document not found" });
+    }
+
+    const filePath = path.isAbsolute(document.filepath)
+      ? document.filepath
+      : path.join(process.cwd(), document.filepath || "");
+
+    if (!document.filepath || !fs.existsSync(filePath)) {
+      return res.status(404).json({ message: "Research document file not found on server" });
+    }
+
+    await Activity.create({
+      user: req.user.id,
+      action: "download",
+      entityType: "research",
+      entityId: research._id,
+      entityName: research.title,
+      description: `Downloaded research document: ${document.filename}`,
+      metadata: {
+        researchId: research._id,
+        documentId,
+        documentType: document.type,
+        filename: document.filename,
+      },
+    }).catch(() => {});
+
+    res.download(filePath, document.filename || "research-document");
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+export const getMyPanelDocuments = async (req, res) => {
+  try {
+    const panels = await Panel.find({
+      $or: [
+        { "members.faculty": req.user.id },
+        { "members.faculty": req.user.id.toString() }
+      ]
+    })
+      .populate("research", "title")
+      .populate("documents.uploadedBy", "name email")
+      .select("name type research documents")
+      .sort({ updatedAt: -1, createdAt: -1 });
+
+    const panelDocuments = panels.flatMap((panel) =>
+      (panel.documents || [])
+        .filter((doc) => doc.isActive)
+        .map((doc) => ({
+          ...doc.toObject(),
+          sourceType: "panel",
+          panelId: panel._id,
+          panelName: panel.name,
+          panelType: panel.type,
+          researchTitle: panel.research?.title || "",
+          category: doc.category || "panel",
+          createdAt: doc.uploadedAt || panel.updatedAt || panel.createdAt,
+        }))
+    );
+
+    res.json(panelDocuments);
+  } catch (error) {
+    console.error("Error fetching faculty panel documents:", error);
     res.status(500).json({ message: error.message });
   }
 };

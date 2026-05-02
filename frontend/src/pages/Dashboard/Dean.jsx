@@ -1555,7 +1555,7 @@ const ResearchDetailsModal = ({ research, isOpen, onClose }) => {
   );
 };
 
-const ResearchRecordDetailsModal = ({ research, isOpen, onClose, onDownload }) => {
+const ResearchRecordDetailsModal = ({ research, isOpen, onClose, onDownload, onView }) => {
   const [feedback, setFeedback] = useState([]);
   const [loading, setLoading] = useState(false);
   const [remarks, setRemarks] = useState('');
@@ -1763,13 +1763,21 @@ const ResearchRecordDetailsModal = ({ research, isOpen, onClose, onDownload }) =
                           </p>
                         </div>
                       </div>
-                      <button
-                        onClick={() => onDownload(research._id, form._id)}
-                        className="flex items-center space-x-2 px-3 py-1.5 bg-[#7C1D23] text-white rounded-md hover:bg-[#5a1519] transition-colors text-sm"
-                      >
-                        <FaDownload className="h-3 w-3" />
-                        <span>Download</span>
-                      </button>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => onView(research._id, form._id)}
+                          className="px-3 py-1.5 border border-gray-300 text-gray-700 rounded-md hover:bg-gray-100 transition-colors text-sm"
+                        >
+                          View
+                        </button>
+                        <button
+                          onClick={() => onDownload(research._id, form._id)}
+                          className="flex items-center space-x-2 px-3 py-1.5 bg-[#7C1D23] text-white rounded-md hover:bg-[#5a1519] transition-colors text-sm"
+                        >
+                          <FaDownload className="h-3 w-3" />
+                          <span>Download</span>
+                        </button>
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -2121,6 +2129,25 @@ const ResearchRecords = ({ stats, research, onRefresh, driveStatus, sheetsStatus
     } catch (error) {
       console.error('Error downloading document:', error);
       showError('Error', error.response?.data?.message || 'Error downloading document');
+    }
+  };
+
+  const handleViewDocument = async (researchId, documentId) => {
+    try {
+      const token = localStorage.getItem('token');
+      const response = await axios.get(`/api/dean/research/${researchId}/view/${documentId}`, {
+        headers: { Authorization: `Bearer ${token}` },
+        responseType: 'blob'
+      });
+
+      const contentType = response.headers['content-type'] || 'application/pdf';
+      const blob = new Blob([response.data], { type: contentType });
+      const url = window.URL.createObjectURL(blob);
+      window.open(url, '_blank', 'noopener,noreferrer');
+      setTimeout(() => window.URL.revokeObjectURL(url), 60000);
+    } catch (error) {
+      console.error('Error viewing document:', error);
+      showError('Error', error.response?.data?.message || 'Error viewing document');
     }
   };
 
@@ -2720,6 +2747,7 @@ const ResearchRecords = ({ stats, research, onRefresh, driveStatus, sheetsStatus
             setSelectedResearch(null);
           }}
           onDownload={handleDownloadDocument}
+          onView={handleViewDocument}
         />
       )}
 
@@ -3379,6 +3407,7 @@ const ArchiveProjects = ({ research, onRefresh }) => {
             setSelectedResearch(null);
           }}
           onDownload={handleDownloadDocument}
+          onView={handleViewDocument}
         />
       )}
     </div>

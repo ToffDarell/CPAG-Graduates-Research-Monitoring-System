@@ -16,7 +16,7 @@ const researchSchema = new mongoose.Schema(
     },
     stage: { 
       type: String, 
-      enum: ["proposal", "chapter1", "chapter2", "chapter3", "defense", "final"],
+      enum: ["proposal", "preliminary", "chapter1", "chapter2", "chapter3", "chapter4", "chapter5", "defense", "final"],
       default: "proposal" 
     },
     progress: {
@@ -51,7 +51,7 @@ const researchSchema = new mongoose.Schema(
         filepath: String,
         type: {
           type: String,
-          enum: ["proposal", "chapter1", "chapter2", "chapter3", "compliance", "other"],
+          enum: ["proposal", "preliminary", "chapter1", "chapter2", "chapter3", "chapter4", "chapter5", "completed_research", "compliance", "other"],
           default: "other",
         },
         partName: { 

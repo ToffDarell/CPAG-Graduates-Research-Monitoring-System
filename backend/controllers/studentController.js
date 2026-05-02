@@ -56,6 +56,40 @@ const getChapterDriveFolderId = (chapterType) => {
   );
 };
 
+const DRAFT_CHAPTER_TYPES = ["preliminary", "chapter1", "chapter2", "chapter3", "chapter4", "chapter5"];
+const STUDENT_UPLOAD_TYPES = [...DRAFT_CHAPTER_TYPES, "completed_research"];
+const ADVISER_STAGE_PROGRESS_ORDER = [...DRAFT_CHAPTER_TYPES];
+
+const CHAPTER_LABELS = {
+  preliminary: "Preliminary Pages",
+  chapter1: "Chapter 1 - Introduction",
+  chapter2: "Chapter 2 - Literature Review",
+  chapter3: "Chapter 3 - Methodology",
+  chapter4: "Chapter 4 - Results and Discussion",
+  chapter5: "Chapter 5 - Summary, Conclusions, and Recommendations",
+  completed_research: "Completed Research",
+};
+
+const CHAPTER_PROGRESS = {
+  preliminary: 10,
+  chapter1: 25,
+  chapter2: 40,
+  chapter3: 55,
+  chapter4: 70,
+  chapter5: 85,
+  completed_research: 100,
+};
+
+const getSubmissionLabel = (type) => CHAPTER_LABELS[type] || type?.replace(/_/g, " ") || "Document";
+
+const buildStudentResearchQuery = (studentId) => ({
+  students: studentId,
+  status: { $ne: "archived" },
+});
+
+const applyStudentResearchSort = (query) =>
+  query.sort({ finalizedDate: 1, progress: -1, updatedAt: -1, createdAt: -1 });
+
 // ========== Login ==========
 export const login = async (req, res) => {
   try {
@@ -860,6 +894,10 @@ export const uploadChapter = async (req, res) => {
     if (!researchId) {
       return res.status(400).json({ message: "Research ID is required" });
     }
+
+    if (!STUDENT_UPLOAD_TYPES.includes(chapterType)) {
+      return res.status(400).json({ message: "Invalid upload type." });
+    }
     
     const research = await Research.findById(researchId)
       .populate("adviser", "name email")
@@ -936,7 +974,7 @@ export const uploadChapter = async (req, res) => {
     research.forms.push({
       filename: req.file.originalname,
       filepath: req.file.path,
-      type: chapterType, // "chapter1", "chapter2", "chapter3"
+      type: chapterType,
       partName: normalizedPartName, // null for full chapter, string for specific part
       version: nextVersion,
       status: "pending",
@@ -951,14 +989,8 @@ export const uploadChapter = async (req, res) => {
     });
 
     // Update progress based on chapter
-    const chapterProgress = {
-      chapter1: 25,
-      chapter2: 50,
-      chapter3: 75,
-    };
-
-    if (chapterProgress[chapterType]) {
-      research.progress = Math.max(research.progress, chapterProgress[chapterType]);
+    if (CHAPTER_PROGRESS[chapterType]) {
+      research.progress = Math.max(research.progress, CHAPTER_PROGRESS[chapterType]);
     }
 
     await research.save();
@@ -990,7 +1022,7 @@ export const uploadChapter = async (req, res) => {
     // Send notification to adviser
     if (research.adviser && research.adviser.email) {
       const studentName = req.user.name || "Student";
-      const chapterLabel = chapterType === "chapter1" ? "Chapter 1" : chapterType === "chapter2" ? "Chapter 2" : "Chapter 3";
+      const chapterLabel = getSubmissionLabel(chapterType);
       const partLabel = normalizedPartName ? ` - ${normalizedPartName} (v${nextVersion})` : '';
       await sendNotificationEmail(
         research.adviser.email,
@@ -998,10 +1030,10 @@ export const uploadChapter = async (req, res) => {
         `${studentName} has uploaded a new ${chapterLabel}${partLabel}${chapterTitle ? `: ${chapterTitle}` : ''} for research: ${research.title}. Please review it.`,
         `
           <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-            <h2 style="color: #7C1D23;">New Chapter Uploaded</h2>
+            <h2 style="color: #7C1D23;">New Submission Uploaded</h2>
             <p>Hello ${research.adviser.name},</p>
             <p><strong>${studentName}</strong> has uploaded a new <strong>${chapterLabel}${partLabel}</strong>${chapterTitle ? `: ${chapterTitle}` : ''} for research: <strong>${research.title}</strong>.</p>
-            <p>Please review the chapter in the system.</p>
+            <p>Please review the submission in the system.</p>
             <hr style="margin: 30px 0; border: none; border-top: 1px solid #ddd;" />
             <p style="color: #999; font-size: 12px;">This is an automated notification from the Masteral Archive and Monitoring System.</p>
           </div>
@@ -1289,6 +1321,10 @@ export const uploadChapterFromDrive = async (req, res) => {
       return res.status(400).json({ message: "Chapter type is required" });
     }
 
+    if (!STUDENT_UPLOAD_TYPES.includes(chapterType)) {
+      return res.status(400).json({ message: "Invalid upload type." });
+    }
+
     const studentUser = await User.findById(req.user.id);
     if (!studentUser || !studentUser.driveAccessToken) {
       return res.status(400).json({
@@ -1449,7 +1485,7 @@ export const uploadChapterFromDrive = async (req, res) => {
     const newForm = {
       filename: metadata.name,
       filepath: filepath,
-      type: chapterType, // "chapter1", "chapter2", "chapter3"
+      type: chapterType,
       partName: normalizedPartName, // null for full chapter, string for specific part
       version: nextVersion,
       status: "pending",
@@ -1464,13 +1500,8 @@ export const uploadChapterFromDrive = async (req, res) => {
     };
 
     // Calculate progress update
-    const chapterProgress = {
-      chapter1: 25,
-      chapter2: 50,
-      chapter3: 75,
-    };
-    const newProgress = chapterProgress[chapterType] 
-      ? Math.max(research.progress || 0, chapterProgress[chapterType])
+    const newProgress = CHAPTER_PROGRESS[chapterType] 
+      ? Math.max(research.progress || 0, CHAPTER_PROGRESS[chapterType])
       : research.progress || 0;
 
     // Use findByIdAndUpdate with $push for atomic operation
@@ -1593,7 +1624,7 @@ export const uploadChapterFromDrive = async (req, res) => {
     try {
       if (research.adviser && research.adviser.email) {
         const studentName = req.user.name || "Student";
-        const chapterLabel = chapterType === "chapter1" ? "Chapter 1" : chapterType === "chapter2" ? "Chapter 2" : "Chapter 3";
+        const chapterLabel = getSubmissionLabel(chapterType);
         const partLabel = normalizedPartName ? ` - ${normalizedPartName} (v${nextVersion})` : '';
         await sendNotificationEmail(
           research.adviser.email,
@@ -1601,11 +1632,11 @@ export const uploadChapterFromDrive = async (req, res) => {
           `${studentName} has uploaded a new ${chapterLabel}${partLabel}${chapterTitle ? `: ${chapterTitle}` : ''} from Google Drive for research: ${research.title}. Please review it.`,
           `
             <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-              <h2 style="color: #7C1D23;">New Chapter Uploaded</h2>
+              <h2 style="color: #7C1D23;">New Submission Uploaded</h2>
               <p>Hello ${research.adviser.name},</p>
               <p><strong>${studentName}</strong> has uploaded a new <strong>${chapterLabel}${partLabel}</strong>${chapterTitle ? `: ${chapterTitle}` : ''} from Google Drive for research: <strong>${research.title}</strong>.</p>
               <p>Source: Google Drive</p>
-              <p>Please review the chapter in the system.</p>
+              <p>Please review the submission in the system.</p>
               <hr style="margin: 30px 0; border: none; border-top: 1px solid #ddd;" />
               <p style="color: #999; font-size: 12px;">This is an automated notification from the Masteral Archive and Monitoring System.</p>
             </div>
@@ -1621,7 +1652,7 @@ export const uploadChapterFromDrive = async (req, res) => {
     try {
       const student = await User.findById(req.user.id);
       if (student && student.email) {
-        const chapterLabel = chapterType === "chapter1" ? "Chapter 1" : chapterType === "chapter2" ? "Chapter 2" : "Chapter 3";
+        const chapterLabel = getSubmissionLabel(chapterType);
         const partLabel = normalizedPartName ? ` - ${normalizedPartName} (v${nextVersion})` : '';
         await sendNotificationEmail(
           student.email,
@@ -1629,7 +1660,7 @@ export const uploadChapterFromDrive = async (req, res) => {
           `Your ${chapterLabel}${partLabel}${chapterTitle ? `: ${chapterTitle}` : ''} has been uploaded successfully from Google Drive and is pending review.`,
           `
             <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-              <h2 style="color: #7C1D23;">Chapter Uploaded</h2>
+            <h2 style="color: #7C1D23;">Submission Uploaded</h2>
               <p>Hello ${student.name},</p>
               <p>Your <strong>${chapterLabel}${partLabel}</strong>${chapterTitle ? `: ${chapterTitle}` : ''} has been uploaded successfully from Google Drive and is pending review.</p>
               <p>Your adviser will review it and provide feedback.</p>
@@ -1681,7 +1712,11 @@ export const getChapterSubmissions = async (req, res) => {
     } = req.query;
 
     // Find research for the student
-    const research = await Research.findOne({ students: req.user.id })
+    const research = await Research.findOne({
+      students: req.user.id,
+      status: { $ne: "archived" },
+    })
+      .sort({ updatedAt: -1 })
       .populate("adviser", "name email")
       .populate("students", "name email");
 
@@ -1751,8 +1786,8 @@ export const getChapterSubmissions = async (req, res) => {
       return true;
     };
 
-    // Group forms by chapter type (chapter1, chapter2, chapter3)
-    const chapterTypes = ["chapter1", "chapter2", "chapter3"];
+    // Group forms by draft submission type shown in Research Chapters
+    const chapterTypes = DRAFT_CHAPTER_TYPES;
     const chapters = chapterTypes.map((chapterType) => {
       // Filter forms for this chapter type
       let chapterForms = research.forms
@@ -1869,9 +1904,13 @@ export const getChapterSubmissions = async (req, res) => {
 export const getProgressOverview = async (req, res) => {
   try {
     // Find research for the student
-    const research = await Research.findOne({ students: req.user.id })
+    const research = await applyStudentResearchSort(
+      Research.find(buildStudentResearchQuery(req.user.id))
+    )
       .populate("adviser", "name email")
-      .populate("students", "name email");
+      .populate("students", "name email")
+      .limit(1)
+      .then((results) => results[0] || null);
 
     if (!research) {
       return res.json({
@@ -1889,74 +1928,78 @@ export const getProgressOverview = async (req, res) => {
     // Ensure forms array exists and is an array
     const forms = Array.isArray(research.forms) ? research.forms : [];
 
-    // Calculate progress based on chapter submissions
-    const chapterTypes = ["chapter1", "chapter2", "chapter3"];
-    const chapterProgress = {
-      chapter1: 25,
-      chapter2: 50,
-      chapter3: 75,
-    };
+    // Calculate progress based on adviser-updated research stage
+    const milestoneTypes = [...DRAFT_CHAPTER_TYPES, "completed_research"];
+    const currentStage = research.stage || null;
+    const currentStageIndex = ADVISER_STAGE_PROGRESS_ORDER.indexOf(currentStage);
 
-    // Check which chapters have approved submissions
-    const approvedChapters = chapterTypes.filter((chapterType) => {
+    // Create milestones based on chapters and the final completed manuscript
+    const milestones = milestoneTypes.map((chapterType) => {
       const chapterForms = forms.filter((form) => form && form.type === chapterType);
-      return chapterForms.some((form) => form && form.status === "approved");
-    });
-
-    // Calculate percentage
-    const completedChapters = approvedChapters.length;
-    let percentage = research.progress || 0;
-    if (completedChapters > 0 && approvedChapters.length > 0) {
-      const lastApprovedChapter = approvedChapters[approvedChapters.length - 1];
-      if (lastApprovedChapter && chapterProgress[lastApprovedChapter]) {
-        percentage = Math.max(percentage, chapterProgress[lastApprovedChapter]);
-      }
-    }
-
-    // Create milestones based on chapters
-    const milestones = chapterTypes.map((chapterType, index) => {
-      const chapterForms = forms.filter((form) => form && form.type === chapterType);
-      const hasApproved = chapterForms.some((form) => form.status === "approved");
       const hasSubmission = chapterForms.length > 0;
+      const latestForm = hasSubmission
+        ? [...chapterForms].sort((a, b) => new Date(b.uploadedAt || 0) - new Date(a.uploadedAt || 0))[0]
+        : null;
       
       let status = "not-started";
-      if (hasApproved) {
-        status = "completed";
-      } else if (hasSubmission) {
-        status = "in-progress";
+      const isCompletedResearch = chapterType === "completed_research";
+
+      if (isCompletedResearch) {
+        if (research.status === "completed") {
+          status = "completed";
+        } else if (currentStage === "final") {
+          status = "in-progress";
+        }
+      } else {
+        const milestoneStageIndex = ADVISER_STAGE_PROGRESS_ORDER.indexOf(chapterType);
+        if (currentStageIndex >= 0 && milestoneStageIndex >= 0) {
+          if (milestoneStageIndex < currentStageIndex) {
+            status = "completed";
+          } else if (milestoneStageIndex === currentStageIndex) {
+            status = "in-progress";
+          } else {
+            status = "not-started";
+          }
+        } else if (currentStage === "defense" || currentStage === "final") {
+          status = "completed";
+        } else if (!currentStage && hasSubmission) {
+          status = "in-progress";
+        }
       }
 
-      const chapterLabels = {
-        chapter1: "Chapter 1 - Introduction",
-        chapter2: "Chapter 2 - Literature Review",
-        chapter3: "Chapter 3 - Methodology",
-      };
-
-      // Find the approved form for completedAt timestamp
-      let completedAt = null;
-      if (hasApproved) {
-        const approvedForm = chapterForms.find((f) => f.status === "approved");
-        completedAt = approvedForm?.uploadedAt ? new Date(approvedForm.uploadedAt) : null;
-      }
-      
-      // Get the latest submission for startedAt timestamp
-      let startedAt = null;
-      if (hasSubmission && chapterForms.length > 0) {
-        const latestForm = chapterForms[chapterForms.length - 1];
-        startedAt = latestForm?.uploadedAt ? new Date(latestForm.uploadedAt) : null;
-      }
+      const completedAt = null;
+      const startedAt = latestForm?.uploadedAt ? new Date(latestForm.uploadedAt) : null;
+      const submissionLink = isCompletedResearch
+        ? "/dashboard/graduate?tab=documents"
+        : "/dashboard/graduate?tab=chapters";
 
       return {
         id: chapterType,
-        title: chapterLabels[chapterType],
-        description: `Submit and get approval for ${chapterLabels[chapterType]}`,
+        title: CHAPTER_LABELS[chapterType],
+        description: isCompletedResearch
+          ? "Upload and get approval for your final completed research manuscript"
+          : `Submit and get approval for ${CHAPTER_LABELS[chapterType]}`,
         status,
-        type: "chapter",
+        type: isCompletedResearch ? "final-document" : "chapter",
         dueDate: null,
         completedAt: completedAt,
         startedAt: startedAt,
+        submissionLink,
       };
     });
+
+    const completedCount = milestones.filter((milestone) => milestone.status === "completed").length;
+    let percentage = research.progress || 0;
+    if (currentStageIndex >= 0) {
+      const stageKey = ADVISER_STAGE_PROGRESS_ORDER[currentStageIndex];
+      if (stageKey && CHAPTER_PROGRESS[stageKey]) {
+        percentage = Math.max(percentage, CHAPTER_PROGRESS[stageKey]);
+      }
+    } else if (currentStage === "defense") {
+      percentage = Math.max(percentage, 95);
+    } else if (currentStage === "final" || research.status === "completed") {
+      percentage = Math.max(percentage, 100);
+    }
 
     // Get upcoming deadlines (empty for now, can be extended)
     const upcomingDeadlines = [];
@@ -1981,7 +2024,7 @@ export const getProgressOverview = async (req, res) => {
         description: "Viewed thesis progress tracking dashboard",
         metadata: {
           milestoneCount: milestones.length,
-          completedCount: approvedChapters.length,
+          completedCount,
           percentage,
         },
         ipAddress: req.ip || req.connection?.remoteAddress,
@@ -1995,7 +2038,7 @@ export const getProgressOverview = async (req, res) => {
     res.json({
       hasResearch: true,
       percentage,
-      completedCount: approvedChapters.length,
+      completedCount,
       totalMilestones: milestones.length,
       milestones,
       upcomingDeadlines,
@@ -2171,7 +2214,7 @@ export const getAdviserFeedback = async (req, res) => {
     const feedback = await Feedback.find({
       student: req.user.id,
     })
-      .populate("research", "title")
+      .populate("research", "title forms")
       .populate("adviser", "name")
       .sort({ createdAt: -1 });
     
@@ -2185,8 +2228,44 @@ export const getAdviserFeedback = async (req, res) => {
         const totalComments = await FeedbackComment.countDocuments({ 
           feedback: item._id 
         });
+
+        const researchForms = Array.isArray(item.research?.forms) ? item.research.forms : [];
+        const searchableText = [
+          item.message,
+          item.file?.filename,
+          item.file?.filepath,
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+        const matchedForm = researchForms.find((form) => {
+          if (!form) return false;
+          if (item.file?.filepath && form.filepath && item.file.filepath === form.filepath) {
+            return true;
+          }
+          if (item.file?.filename && form.filename && item.file.filename === form.filename) {
+            return true;
+          }
+          return false;
+        });
+
+        const detectedChapterType = Object.keys(CHAPTER_LABELS).find((type) => {
+          const label = CHAPTER_LABELS[type];
+          return (
+            searchableText.includes(type.toLowerCase()) ||
+            (label && searchableText.includes(label.toLowerCase()))
+          );
+        });
+
+        const chapterType = matchedForm?.type || detectedChapterType || null;
+        const chapterLabel =
+          (chapterType && CHAPTER_LABELS[chapterType]) ||
+          null;
+
         return {
           ...item.toObject(),
+          chapterType,
+          chapterLabel,
           commentCount,
           totalComments
         };
@@ -2328,11 +2407,11 @@ export const getFeedbackComments = async (req, res) => {
 // Get my research
 export const getMyResearch = async (req, res) => {
   try {
-    const research = await Research.find({
-      students: req.user.id,
-    })
+    const research = await applyStudentResearchSort(
+      Research.find(buildStudentResearchQuery(req.user.id))
+    )
       .populate("adviser", "name email")
-      .sort({ updatedAt: -1 });
+      .exec();
     
     res.json(research);
   } catch (error) {
@@ -2351,16 +2430,157 @@ export const getAvailableDocuments = async (req, res) => {
     })
       .populate("uploadedBy", "name")
       .sort({ createdAt: -1 });
+
+    const researches = await applyStudentResearchSort(
+      Research.find(buildStudentResearchQuery(req.user.id))
+        .select("_id title forms")
+        .populate("forms.uploadedBy", "name email")
+    ).exec();
+    const researchIds = researches.map((research) => research._id);
+
+    let panelDocuments = [];
+    if (researchIds.length > 0) {
+      const panels = await Panel.find({ research: { $in: researchIds } })
+        .populate("research", "title")
+        .populate("documents.uploadedBy", "name email")
+        .select("name type research documents")
+        .sort({ updatedAt: -1, createdAt: -1 });
+
+      panelDocuments = panels.flatMap((panel) =>
+        (panel.documents || [])
+          .filter((doc) => doc.isActive)
+          .map((doc) => ({
+            ...doc.toObject(),
+            sourceType: "panel",
+            panelId: panel._id,
+            panelName: panel.name,
+            panelType: panel.type,
+            researchTitle: panel.research?.title || "",
+            category: doc.category || "panel",
+            createdAt: doc.uploadedAt || panel.updatedAt || panel.createdAt,
+          }))
+      );
+    }
     
-    console.log(`Found ${documents.length} documents for graduate student`);
+    let researchDocuments = [];
+    researches.forEach(research => {
+      const docs = (research.forms || [])
+        .filter(f => f.type === "other")
+        .map(f => ({
+           _id: f._id,
+           title: f.partName || f.filename,
+           description: f.feedback || "",
+           filename: f.filename,
+           filepath: f.filepath,
+           fileSize: f.fileSize || 0,
+           mimeType: f.mimeType || "",
+           uploadedAt: f.uploadedAt,
+           createdAt: f.uploadedAt,
+           sourceType: "research",
+           researchId: research._id,
+           researchTitle: research.title,
+           category: "other",
+           uploadedBy: f.uploadedBy
+        }));
+      researchDocuments = [...researchDocuments, ...docs];
+    });
+
+    const mergedDocuments = [...panelDocuments, ...researchDocuments, ...documents]
+      .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+
+    console.log(`Found ${mergedDocuments.length} documents for graduate student`);
     console.log("Document accessibleTo values:", documents.map(d => ({ 
       title: d.title, 
       accessibleTo: d.accessibleTo 
     })));
     
-    res.json(documents);
+    res.json(mergedDocuments);
   } catch (error) {
     console.error("Error fetching student documents:", error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+export const downloadResearchDocument = async (req, res) => {
+  try {
+    const { researchId, docId } = req.params;
+    const research = await Research.findById(researchId);
+    if (!research) return res.status(404).json({ message: "Research not found" });
+
+    const isStudent = research.students.some((s) => s.toString() === req.user.id);
+    if (!isStudent) return res.status(403).json({ message: "Access denied" });
+
+    const form = research.forms.find((f) => f._id.toString() === docId);
+    if (!form) return res.status(404).json({ message: "Document not found" });
+
+    let filePath = path.isAbsolute(form.filepath) ? form.filepath : path.join(process.cwd(), form.filepath);
+    if (!fs.existsSync(filePath)) return res.status(404).json({ message: "File not found on server" });
+
+    res.download(filePath, form.filename);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+export const viewResearchDocument = async (req, res) => {
+  try {
+    const { researchId, docId } = req.params;
+    const research = await Research.findById(researchId);
+    if (!research) return res.status(404).json({ message: "Research not found" });
+
+    const isStudent = research.students.some((s) => s.toString() === req.user.id);
+    if (!isStudent) return res.status(403).json({ message: "Access denied" });
+
+    const form = research.forms.find((f) => f._id.toString() === docId);
+    if (!form) return res.status(404).json({ message: "Document not found" });
+
+    let filePath = path.isAbsolute(form.filepath) ? form.filepath : path.join(process.cwd(), form.filepath);
+    if (!fs.existsSync(filePath)) return res.status(404).json({ message: "File not found on server" });
+
+    res.setHeader('Content-Type', form.mimeType || 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="${form.filename}"`);
+    const fileStream = fs.createReadStream(filePath);
+    fileStream.pipe(res);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+export const getMyPanelDocuments = async (req, res) => {
+  try {
+    const researches = await applyStudentResearchSort(
+      Research.find(buildStudentResearchQuery(req.user.id)).select("_id title")
+    ).exec();
+    const researchIds = researches.map((research) => research._id);
+
+    if (researchIds.length === 0) {
+      return res.json([]);
+    }
+
+    const panels = await Panel.find({ research: { $in: researchIds } })
+      .populate("research", "title")
+      .populate("documents.uploadedBy", "name email")
+      .select("name type research documents")
+      .sort({ updatedAt: -1, createdAt: -1 });
+
+    const panelDocuments = panels.flatMap((panel) =>
+      (panel.documents || [])
+        .filter((doc) => doc.isActive)
+        .map((doc) => ({
+          ...doc.toObject(),
+          sourceType: "panel",
+          panelId: panel._id,
+          panelName: panel.name,
+          panelType: panel.type,
+          researchTitle: panel.research?.title || "",
+          category: "panel",
+          createdAt: doc.uploadedAt || panel.updatedAt || panel.createdAt,
+        }))
+    );
+
+    res.json(panelDocuments);
+  } catch (error) {
+    console.error("Error fetching student panel documents:", error);
     res.status(500).json({ message: error.message });
   }
 };
@@ -3086,7 +3306,7 @@ export const createCustomConsultationRequest = async (req, res) => {
   }
 };
 
-// Get completed thesis for student
+// Get completed research for student
 export const getCompletedThesis = async (req, res) => {
   try {
     const { semester, academicYear, search } = req.query;
@@ -3166,8 +3386,8 @@ export const getCompletedThesis = async (req, res) => {
       user: req.user.id,
       action: "view",
       entityType: "research",
-      entityName: "Completed Thesis",
-      description: "Viewed completed thesis list",
+      entityName: "Completed Research",
+      description: "Viewed completed research list",
       metadata: {
         count: thesisList.length,
         filters: { semester, academicYear, search }
@@ -3178,12 +3398,12 @@ export const getCompletedThesis = async (req, res) => {
     
     res.json(thesisList);
   } catch (error) {
-    console.error('Error fetching completed thesis:', error);
+    console.error('Error fetching completed research:', error);
     res.status(500).json({ message: error.message });
   }
 };
 
-// Get panel feedback for a specific completed thesis
+// Get panel feedback for a specific completed research entry
 export const getPanelFeedback = async (req, res) => {
   try {
     const { id } = req.params;
@@ -3227,7 +3447,7 @@ export const getPanelFeedback = async (req, res) => {
       entityType: "research",
       entityId: research._id,
       entityName: research.title,
-      description: "Viewed panel feedback for completed thesis",
+      description: "Viewed panel feedback for completed research",
       metadata: {
         researchId: research._id,
         panelId: panel?._id || null,

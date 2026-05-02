@@ -14,7 +14,15 @@ const panelSchema = new mongoose.Schema(
     },
     type: {
       type: String,
-      enum: ["oral_defense", "thesis_review", "proposal_defense", "final_defense"],
+      enum: [
+        "title_defense",
+        "proposal",
+        "oral_examination_manuscript",
+        "oral_defense",
+        "thesis_review",
+        "proposal_defense",
+        "final_defense",
+      ],
       required: true,
     },
     research: {
@@ -46,8 +54,16 @@ const panelSchema = new mongoose.Schema(
         },
         role: {
           type: String,
-          enum: ["chair", "member", "external_examiner", "secretary"],
+          enum: ["chair", "member", "adviser", "external_examiner", "secretary"],
           required: true,
+        },
+        memberCategory: {
+          type: String,
+          enum: ["internal", "external", "adviser"],
+        },
+        specialization: {
+          type: String,
+          enum: ["content", "method"],
         },
         status: {
           type: String,
@@ -133,6 +149,10 @@ const panelSchema = new mongoose.Schema(
           type: String,
           enum: ["approve", "reject", "revision", "pending"],
           default: "pending",
+        },
+        grade: {
+          type: String,
+          default: null,
         },
         submittedAt: {
           type: Date,

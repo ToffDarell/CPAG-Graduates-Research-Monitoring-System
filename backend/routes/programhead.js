@@ -25,6 +25,8 @@ import {
   getProcessMonitoring,
   uploadForm,
   getResearchRecords,
+  viewResearchDocument,
+  downloadResearchDocument,
   exportResearchRecords,
   getAvailableAdvisers,
   assignAdviser,
@@ -58,11 +60,16 @@ import {
   getPanelDefenseSchedules,
   archiveSchedule,
   getAvailableDocuments,
+  uploadDocument,
   downloadDocument,
   viewDocument,
   updateResearchTitle,
   finalizeResearch,
   setPanelDecision,
+  uploadResearchDocument,
+  getResearchDocumentsList,
+  deleteResearchDocument,
+  downloadResearchDocumentDirect,
 } from "../controllers/programHeadController.js";
 
 const router = express.Router();
@@ -121,11 +128,11 @@ router.put("/panels/:id/status", checkPermission("manage_panels"), updatePanelSt
 router.put("/panels/:id/decision", checkPermission("approve_research"), setPanelDecision);
 
 // Panel documents
-router.get("/panels/:panelId/documents", checkPermission("view_documents"), getPanelDocuments);
-router.post("/panels/:panelId/documents", uploadPanelDocumentMiddleware.single("file"), checkPermission("upload_documents"), uploadPanelDocument);
-router.get("/panels/:panelId/documents/:documentId/download", checkPermission("download_documents"), downloadPanelDocument);
-router.delete("/panels/:panelId/documents/:documentId", checkPermission("delete_documents"), removePanelDocument);
-router.put("/panels/:panelId/documents/:documentId/replace", uploadPanelDocumentMiddleware.single("file"), checkPermission("upload_documents"), replacePanelDocument);
+router.get("/panels/:panelId/documents", checkPermission("view_research"), getPanelDocuments);
+router.post("/panels/:panelId/documents", uploadPanelDocumentMiddleware.single("file"), checkPermission("manage_panels"), uploadPanelDocument);
+router.get("/panels/:panelId/documents/:documentId/download", checkPermission("view_research"), downloadPanelDocument);
+router.delete("/panels/:panelId/documents/:documentId", checkPermission("manage_panels"), removePanelDocument);
+router.put("/panels/:panelId/documents/:documentId/replace", uploadPanelDocumentMiddleware.single("file"), checkPermission("manage_panels"), replacePanelDocument);
 
 // Schedule management
 router.get("/schedules", checkPermission("view_schedules"), getSchedules);
@@ -149,6 +156,8 @@ router.post("/forms", upload.single("file"), checkPermission("upload_documents")
 
 // Research records
 router.get("/research", checkPermission("view_research"), getResearchRecords);
+router.get("/research/:researchId/documents/:documentId", checkPermission("view_research"), viewResearchDocument);
+router.get("/research/:researchId/documents/:documentId/download", checkPermission("view_research"), downloadResearchDocument);
 router.post("/research/export", checkPermission("export_activity"), exportResearchRecords);
 router.put("/research/:id/finalize", checkPermission("approve_research"), finalizeResearch);
 
@@ -170,6 +179,12 @@ router.post("/research/add-students", checkPermission("manage_users"), addStuden
 router.put("/research/:id", checkPermission("create_research"), updateResearchTitle);
 router.delete("/research/:id", checkPermission("delete_research"), deleteResearchTitle);
 
+// Research document upload (no panel required)
+router.get("/research/:id/docs", checkPermission("view_research"), getResearchDocumentsList);
+router.post("/research/:id/docs", uploadPanelDocumentMiddleware.single("file"), checkPermission("upload_documents"), uploadResearchDocument);
+router.delete("/research/:id/docs/:docId", checkPermission("upload_documents"), deleteResearchDocument);
+router.get("/research/:id/docs/:docId/download", checkPermission("view_research"), downloadResearchDocumentDirect);
+
 // Activity logs
 router.get("/activity-logs", checkPermission("view_activity"), getActivityLogs);
 router.get("/activity-stats", checkPermission("view_activity"), getActivityStats);
@@ -184,6 +199,7 @@ router.post("/schedules/export", checkPermission("export_activity"), exportDefen
 
 // Document routes
 router.get("/documents", checkPermission("view_documents"), getAvailableDocuments);
+router.post("/documents", upload.single("file"), checkPermission("upload_documents"), uploadDocument);
 router.get("/documents/:id", checkPermission("view_documents"), viewDocument);
 router.get("/documents/:id/download", checkPermission("download_documents"), downloadDocument);
 

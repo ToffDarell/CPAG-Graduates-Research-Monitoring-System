@@ -57,6 +57,122 @@ const applyUpdatedDriveTokens = async (user, credentials) => {
   }
 };
 
+const PANEL_TYPE_LABELS = {
+  title_defense: "Stage 0 - Title Defense",
+  proposal: "Stage 1 - Proposal",
+  oral_examination_manuscript: "Stage 2 - Oral Examination and Manuscript",
+  oral_defense: "Stage 3 - Final Oral Defense",
+  thesis_review: "Thesis Review",
+  proposal_defense: "Proposal Defense",
+  final_defense: "Final Defense",
+};
+
+const DEFENSE_SCHEDULE_TYPES = [
+  "title_defense",
+  "proposal",
+  "oral_examination_manuscript",
+  "oral_defense",
+  "proposal_defense",
+  "final_defense",
+];
+
+const GRADED_PANEL_TYPES = new Set(["oral_defense", "final_defense"]);
+
+const isGradedPanelType = (panelType) => GRADED_PANEL_TYPES.has(panelType);
+
+const normalizePanelGrade = (value) => {
+  if (value === undefined || value === null || value === "") {
+    return null;
+  }
+
+  const numeric = Number(String(value).trim().replace(",", "."));
+  if (Number.isNaN(numeric)) {
+    return null;
+  }
+
+  const isWithinRange = numeric >= 1 && numeric <= 5;
+  const quarterStep = numeric * 4;
+  const isQuarterStep = Math.abs(quarterStep - Math.round(quarterStep)) < 1e-9;
+
+  if (!isWithinRange || !isQuarterStep) {
+    return null;
+  }
+
+  return numeric.toFixed(2);
+};
+
+const buildPanelGradeSummary = (submittedReviews = []) => {
+  const validGrades = submittedReviews
+    .map((review) => Number(review.grade))
+    .filter((grade) => !Number.isNaN(grade));
+
+  if (!validGrades.length) {
+    return null;
+  }
+
+  const rawAverage = validGrades.reduce((sum, grade) => sum + grade, 0) / validGrades.length;
+  const roundedAverage = Math.round(rawAverage * 4) / 4;
+
+  return {
+    gradedCount: validGrades.length,
+    averageGrade: roundedAverage.toFixed(2),
+    rawAverageGrade: rawAverage.toFixed(2),
+    gradingScale: "quarter-point",
+  };
+};
+
+const formatPanelTypeLabel = (value) => PANEL_TYPE_LABELS[value] || value?.replace(/_/g, " ") || "N/A";
+
+const formatPanelRoleLabel = (member = {}) => {
+  const category = member.memberCategory || (member.isExternal ? "external" : member.role === "adviser" ? "adviser" : "internal");
+  const specialization = member.specialization || (member.role === "external_examiner" ? "content" : null);
+
+  if (member.role === "chair") {
+    return "Chair";
+  }
+
+  if (member.role === "adviser" || category === "adviser") {
+    return specialization === "method"
+      ? "Adviser (Method Specialist)"
+      : "Adviser (Content Specialist)";
+  }
+
+  if (member.role === "external_examiner") {
+    return "Member (External / Content Specialist)";
+  }
+
+  if (member.role === "secretary") {
+    return "Secretary";
+  }
+
+  if (member.role === "member") {
+    if (category === "external") {
+      return "Member (External / Content Specialist)";
+    }
+
+    if (specialization === "method") {
+      return "Member (Internal / Method Specialist)";
+    }
+
+    return "Member (Internal / Content Specialist)";
+  }
+
+  return member.role?.replace(/_/g, " ") || "Member";
+};
+
+const normalizeMemberPayload = (member = {}) => ({
+  faculty: member.faculty,
+  role: member.role,
+  memberCategory: member.memberCategory || (member.isExternal ? "external" : member.role === "adviser" ? "adviser" : "internal"),
+  specialization: member.specialization || (member.role === "external_examiner" ? "content" : undefined),
+  isSelected: member.isSelected,
+  status: member.status,
+  isExternal: member.isExternal,
+  name: member.name,
+  email: member.email,
+  reviewDeadline: member.reviewDeadline,
+});
+
 // Get panel members
 export const getPanelMembers = async (req, res) => {
   try {
@@ -156,6 +272,8 @@ export const createPanel = async (req, res) => {
     const activatedMembers = members.map(member => ({
       faculty: member.faculty,
       role: member.role,
+      memberCategory: member.memberCategory || (member.role === "adviser" ? "adviser" : "internal"),
+      specialization: member.specialization,
       isSelected: true, // Auto-activate faculty members
       status: 'assigned' // Valid enum value from Panel schema
     }));
@@ -261,7 +379,7 @@ export const createPanel = async (req, res) => {
                 
                 <div style="background-color: white; padding: 15px; margin: 20px 0; border-left: 4px solid #7C1D23; border-radius: 4px;">
                   <p style="margin: 8px 0;"><strong style="color: #333;">Panel Name:</strong> <span style="color: #7C1D23;">${name}</span></p>
-                  <p style="margin: 8px 0;"><strong style="color: #333;">Panel Type:</strong> ${type.replace(/_/g, " ").replace(/\b\w/g, l => l.toUpperCase())}</p>
+                  <p style="margin: 8px 0;"><strong style="color: #333;">Panel Type:</strong> ${formatPanelTypeLabel(type)}</p>
                   <p style="margin: 8px 0;"><strong style="color: #333;">Research Title:</strong> ${researchTitle}</p>
                   <p style="margin: 8px 0;"><strong style="color: #333;">Student(s):</strong> ${studentNamesText}</p>
                   ${description ? `<p style="margin: 8px 0;"><strong style="color: #333;">Description:</strong> ${description}</p>` : ''}
@@ -334,12 +452,12 @@ export const updatePanelMembers = async (req, res) => {
       // If it's a new member, auto-activate it; otherwise, preserve existing isSelected status
       if (existingMember) {
         return {
-          ...member,
+          ...normalizeMemberPayload(member),
           isSelected: existingMember.isSelected // Preserve existing status
         };
       } else {
         return {
-          ...member,
+          ...normalizeMemberPayload(member),
           isSelected: true // Auto-activate new members
         };
       }
@@ -709,9 +827,12 @@ const formatResearchStageLabel = (stage) => {
   if (!stage) return "N/A";
 
   const labels = {
+    preliminary: "Preliminary Pages",
     chapter1: "Chapter 1",
     chapter2: "Chapter 2",
     chapter3: "Chapter 3",
+    chapter4: "Chapter 4",
+    chapter5: "Chapter 5",
   };
 
   if (labels[stage]) {
@@ -830,7 +951,7 @@ export const getPanelDetails = async (req, res) => {
     // Get related schedules
     const schedules = await Schedule.find({
       research: panel.research._id,
-      type: { $in: ["proposal_defense", "final_defense"] }
+      type: { $in: DEFENSE_SCHEDULE_TYPES }
     })
       .populate("participants.user", "name email")
       .sort({ datetime: 1 });
@@ -905,10 +1026,15 @@ export const downloadPanelDocument = async (req, res) => {
     const { panelId, documentId } = req.params;
     const fs = await import('fs');
 
-    const panel = await Panel.findById(panelId);
+    const panel = await Panel.findById(panelId)
+      .populate("research", "adviser students");
 
     if (!panel) {
       return res.status(404).json({ message: "Panel not found" });
+    }
+
+    if (!canAccessPanelDocuments(panel, req.user)) {
+      return res.status(403).json({ message: "You are not authorized to download documents for this panel" });
     }
 
     const document = panel.documents.find(doc => doc._id.toString() === documentId);
@@ -917,7 +1043,9 @@ export const downloadPanelDocument = async (req, res) => {
       return res.status(404).json({ message: "Document not found" });
     }
 
-    const filePath = document.filepath;
+    const filePath = path.isAbsolute(document.filepath)
+      ? document.filepath
+      : path.join(process.cwd(), document.filepath || "");
 
     // Check if file exists
     if (!fs.existsSync(filePath)) {
@@ -949,6 +1077,60 @@ export const downloadPanelDocument = async (req, res) => {
     fileStream.pipe(res);
   } catch (error) {
     console.error("Download panel document error:", error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+export const viewPanelDocument = async (req, res) => {
+  try {
+    const { panelId, documentId } = req.params;
+    const fs = await import("fs");
+
+    const panel = await Panel.findById(panelId)
+      .populate("research", "adviser students");
+
+    if (!panel) {
+      return res.status(404).json({ message: "Panel not found" });
+    }
+
+    if (!canAccessPanelDocuments(panel, req.user)) {
+      return res.status(403).json({ message: "You are not authorized to view documents for this panel" });
+    }
+
+    const document = panel.documents.find((doc) => doc._id.toString() === documentId);
+
+    if (!document) {
+      return res.status(404).json({ message: "Document not found" });
+    }
+
+    const filePath = path.isAbsolute(document.filepath)
+      ? document.filepath
+      : path.join(process.cwd(), document.filepath || "");
+
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ message: "File not found on server" });
+    }
+
+    await Activity.create({
+      user: req.user.id,
+      action: "view",
+      entityType: "panel",
+      entityId: panel._id,
+      entityName: panel.name,
+      description: `Viewed document "${document.title}" from panel ${panel.name}`,
+      metadata: {
+        documentTitle: document.title,
+        documentId,
+        filename: document.filename,
+        fileSize: document.fileSize,
+      },
+    }).catch((err) => console.error("Error logging activity:", err));
+
+    res.setHeader("Content-Type", document.mimeType);
+    res.setHeader("Content-Disposition", `inline; filename="${document.filename}"`);
+    fs.createReadStream(filePath).pipe(res);
+  } catch (error) {
+    console.error("View panel document error:", error);
     res.status(500).json({ message: error.message });
   }
 };
@@ -1645,6 +1827,9 @@ export const deleteResearchTitle = async (req, res) => {
       }
     });
 
+    // Also delete all panels associated with this research so they don't show as "N/A"
+    await Panel.deleteMany({ research: researchId });
+
     await Research.findByIdAndDelete(id);
 
     res.json({ message: "Research title deleted successfully" });
@@ -1653,6 +1838,235 @@ export const deleteResearchTitle = async (req, res) => {
   }
 };
 
+
+// Upload a document directly to a research title (no panel required)
+export const uploadResearchDocument = async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ message: "No file uploaded" });
+    }
+
+    const { id } = req.params;
+    const title = req.body.title?.trim();
+    const description = req.body.description?.trim() || "";
+
+    if (!title) {
+      return res.status(400).json({ message: "Document title is required" });
+    }
+
+    const allowedMimes = [
+      "application/pdf",
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      "application/msword",
+    ];
+    if (!allowedMimes.includes(req.file.mimetype)) {
+      return res.status(400).json({ message: "Only PDF and DOCX files are allowed" });
+    }
+
+    const research = await Research.findById(id);
+    if (!research) {
+      return res.status(404).json({ message: "Research not found" });
+    }
+
+    const newForm = {
+      filename: req.file.originalname,
+      filepath: req.file.path,
+      fileSize: req.file.size || 0,
+      mimeType: req.file.mimetype || "",
+      type: "other",
+      status: "pending",
+      uploadedBy: req.user.id,
+      uploadedAt: new Date(),
+      partName: title,
+      feedback: description || null,
+      storageLocation: "local",
+    };
+
+    research.forms.push(newForm);
+    await research.save();
+
+    const savedForm = research.forms[research.forms.length - 1];
+
+    await Activity.create({
+      user: req.user.id,
+      action: "upload",
+      entityType: "research",
+      entityId: research._id,
+      entityName: research.title,
+      description: `Program Head uploaded document: ${title} for research: ${research.title}`,
+      metadata: { researchId: research._id, title, filename: req.file.originalname },
+    }).catch((err) => console.error("Activity log error:", err));
+
+    // Send email notifications to students and adviser
+    try {
+      const populatedResearch = await Research.findById(id).populate("students adviser", "name email");
+      
+      const transporter = nodemailer.createTransport({
+        host: process.env.SMTP_HOST,
+        port: process.env.SMTP_PORT,
+        secure: false,
+        auth: {
+          user: process.env.SMTP_USER,
+          pass: process.env.SMTP_PASS,
+        },
+      });
+
+      const emailsToNotify = [];
+      if (populatedResearch.adviser && populatedResearch.adviser.email) {
+        emailsToNotify.push({ email: populatedResearch.adviser.email, name: populatedResearch.adviser.name, role: 'Adviser' });
+      }
+      
+      if (populatedResearch.students && populatedResearch.students.length > 0) {
+        populatedResearch.students.forEach(student => {
+          if (student.email) {
+            emailsToNotify.push({ email: student.email, name: student.name, role: 'Student' });
+          }
+        });
+      }
+
+      for (const recipient of emailsToNotify) {
+        try {
+          await rateLimitedSendMail(transporter, {
+            from: `"CPAG System" <${process.env.SMTP_USER}>`,
+            to: recipient.email,
+            subject: `New Document Uploaded: ${populatedResearch.title}`,
+            html: `
+              <h2>New Document Uploaded</h2>
+              <p>Hello ${recipient.name},</p>
+              <p>The Program Head has uploaded a new document (<strong>${title}</strong>) to your research title: <em>${populatedResearch.title}</em>.</p>
+              <p>You can view or download this document from your dashboard under the Forms and Documents section.</p>
+              <br/>
+              <p>This is an automated message. Please do not reply.</p>
+            `,
+          });
+        } catch (mailError) {
+          console.error(`Failed to send email to ${recipient.email}:`, mailError);
+        }
+      }
+    } catch (notificationError) {
+      console.error("Error sending upload notifications:", notificationError);
+    }
+
+    res.json({
+      message: "Document uploaded successfully",
+      document: {
+        _id: savedForm._id,
+        title,
+        description,
+        filename: savedForm.filename,
+        uploadedAt: savedForm.uploadedAt,
+        status: savedForm.status,
+      },
+    });
+  } catch (error) {
+    console.error("uploadResearchDocument error:", error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Get documents uploaded directly to a research title
+export const getResearchDocumentsList = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const research = await Research.findById(id)
+      .populate("forms.uploadedBy", "name email");
+
+    if (!research) {
+      return res.status(404).json({ message: "Research not found" });
+    }
+
+    const docs = (research.forms || [])
+      .filter((f) => f.type === "other")
+      .map((f) => ({
+        _id: f._id,
+        title: f.partName || f.filename,
+        description: f.feedback || "",
+        filename: f.filename,
+        uploadedAt: f.uploadedAt,
+        status: f.status,
+        uploadedBy: f.uploadedBy,
+      }))
+      .sort((a, b) => new Date(b.uploadedAt) - new Date(a.uploadedAt));
+
+    res.json({ documents: docs });
+  } catch (error) {
+    console.error("getResearchDocumentsList error:", error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Delete a document from a research title
+export const deleteResearchDocument = async (req, res) => {
+  try {
+    const { id, docId } = req.params;
+    const research = await Research.findById(id);
+    if (!research) {
+      return res.status(404).json({ message: "Research not found" });
+    }
+
+    const formIndex = research.forms.findIndex((f) => f._id.toString() === docId);
+    if (formIndex === -1) {
+      return res.status(404).json({ message: "Document not found" });
+    }
+
+    const removed = research.forms[formIndex];
+    try {
+      const filePath = path.isAbsolute(removed.filepath)
+        ? removed.filepath
+        : path.join(process.cwd(), removed.filepath);
+      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    } catch (fileErr) {
+      console.error("Could not delete file from disk:", fileErr.message);
+    }
+
+    research.forms.splice(formIndex, 1);
+    await research.save();
+
+    await Activity.create({
+      user: req.user.id,
+      action: "delete",
+      entityType: "research",
+      entityId: research._id,
+      entityName: research.title,
+      description: `Deleted document: ${removed.partName || removed.filename}`,
+      metadata: { researchId: research._id, filename: removed.filename },
+    }).catch((err) => console.error("Activity log error:", err));
+
+    res.json({ message: "Document deleted successfully" });
+  } catch (error) {
+    console.error("deleteResearchDocument error:", error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Download a document from a research title
+export const downloadResearchDocumentDirect = async (req, res) => {
+  try {
+    const { id, docId } = req.params;
+    const research = await Research.findById(id);
+    if (!research) {
+      return res.status(404).json({ message: "Research not found" });
+    }
+
+    const form = research.forms.find((f) => f._id.toString() === docId);
+    if (!form) {
+      return res.status(404).json({ message: "Document not found" });
+    }
+
+    let filePath = path.isAbsolute(form.filepath)
+      ? form.filepath
+      : path.join(process.cwd(), form.filepath);
+
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ message: "File not found on server" });
+    }
+
+    res.download(filePath, form.filename);
+  } catch (error) {
+    console.error("downloadResearchDocumentDirect error:", error);
+    res.status(500).json({ message: error.message });
+  }
+};
 
 // Get process monitoring data
 export const getProcessMonitoring = async (req, res) => {
@@ -1734,6 +2148,105 @@ export const getResearchRecords = async (req, res) => {
       .sort({ createdAt: -1 });
     
     res.json(research);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+export const viewResearchDocument = async (req, res) => {
+  try {
+    const { researchId, documentId } = req.params;
+    const research = await Research.findOne({ _id: researchId, status: { $ne: "archived" } });
+
+    if (!research) {
+      return res.status(404).json({ message: "Research not found" });
+    }
+
+    const document = research.forms.id(documentId);
+    if (!document) {
+      return res.status(404).json({ message: "Research document not found" });
+    }
+
+    let mimeType = document.driveMimeType || "application/pdf";
+    if (!mimeType || mimeType === "application/octet-stream") {
+      const ext = path.extname(document.filename || "").toLowerCase();
+      const mimeTypes = {
+        ".pdf": "application/pdf",
+        ".doc": "application/msword",
+        ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      };
+      mimeType = mimeTypes[ext] || "application/pdf";
+    }
+
+    const filePath = path.isAbsolute(document.filepath)
+      ? document.filepath
+      : path.join(process.cwd(), document.filepath || "");
+
+    if (!document.filepath || !fs.existsSync(filePath)) {
+      return res.status(404).json({ message: "Research document file not found on server" });
+    }
+
+    await Activity.create({
+      user: req.user.id,
+      action: "view",
+      entityType: "research",
+      entityId: research._id,
+      entityName: research.title,
+      description: `Viewed research document: ${document.filename}`,
+      metadata: {
+        researchId: research._id,
+        documentId,
+        documentType: document.type,
+        filename: document.filename,
+      },
+    }).catch(() => {});
+
+    res.setHeader("Content-Type", mimeType);
+    res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(document.filename || "research-document")}"`);
+    fs.createReadStream(filePath).pipe(res);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+export const downloadResearchDocument = async (req, res) => {
+  try {
+    const { researchId, documentId } = req.params;
+    const research = await Research.findOne({ _id: researchId, status: { $ne: "archived" } });
+
+    if (!research) {
+      return res.status(404).json({ message: "Research not found" });
+    }
+
+    const document = research.forms.id(documentId);
+    if (!document) {
+      return res.status(404).json({ message: "Research document not found" });
+    }
+
+    const filePath = path.isAbsolute(document.filepath)
+      ? document.filepath
+      : path.join(process.cwd(), document.filepath || "");
+
+    if (!document.filepath || !fs.existsSync(filePath)) {
+      return res.status(404).json({ message: "Research document file not found on server" });
+    }
+
+    await Activity.create({
+      user: req.user.id,
+      action: "download",
+      entityType: "research",
+      entityId: research._id,
+      entityName: research.title,
+      description: `Downloaded research document: ${document.filename}`,
+      metadata: {
+        researchId: research._id,
+        documentId,
+        documentType: document.type,
+        filename: document.filename,
+      },
+    }).catch(() => {});
+
+    res.download(filePath, document.filename || "research-document");
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -2270,7 +2783,7 @@ export const addStudentsToResearch = async (req, res) => {
 // Invite external panelist via email
 export const invitePanelist = async (req, res) => {
   try {
-    const { panelId, name, email, role, reviewDeadline } = req.body;
+    const { panelId, name, email, role, memberCategory, specialization, reviewDeadline } = req.body;
 
     if (!panelId || !name || !email || !role) {
       return res.status(400).json({ message: "Missing required fields: panelId, name, email, role" });
@@ -2330,6 +2843,8 @@ export const invitePanelist = async (req, res) => {
       name,
       email,
       role,
+      memberCategory: memberCategory || "external",
+      specialization: specialization || "content",
       status: "invited",
       isSelected: true, // Auto-select invited panelists
       isExternal: true,
@@ -2534,14 +3049,14 @@ export const getPanelReviewByToken = async (req, res) => {
 export const submitPanelReviewByToken = async (req, res) => {
   try {
     const { token } = req.params;
-    const { comments, recommendation } = req.body;
+    const { comments, recommendation, grade } = req.body;
 
     if (!token) {
       return res.status(400).json({ message: "Token is required" });
     }
 
-    if (!comments || !recommendation) {
-      return res.status(400).json({ message: "Comments and recommendation are required" });
+    if (!comments || !comments.trim()) {
+      return res.status(400).json({ message: "Comments are required" });
     }
 
     const panel = await Panel.findOne({
@@ -2572,6 +3087,32 @@ export const submitPanelReviewByToken = async (req, res) => {
       return res.status(403).json({ message: "You are not an active panelist for this panel" });
     }
 
+    const gradedPanel = isGradedPanelType(panel.type);
+    let normalizedGrade = null;
+    let normalizedRecommendation = "pending";
+
+    if (gradedPanel) {
+      normalizedGrade = normalizePanelGrade(grade);
+      if (!normalizedGrade) {
+        return res.status(400).json({
+          message: "A valid panel grade is required. Use values from 1.00 to 5.00 in 0.25 intervals.",
+        });
+      }
+    } else {
+      if (!recommendation) {
+        return res.status(400).json({ message: "Result is required" });
+      }
+
+      const validRecommendations = ["approve", "reject", "revision"];
+      if (!validRecommendations.includes(recommendation)) {
+        return res.status(400).json({
+          message: `Invalid result. Must be one of: ${validRecommendations.join(", ")}`,
+        });
+      }
+
+      normalizedRecommendation = recommendation;
+    }
+
     // Find existing review or create new one
     const existingReviewIndex = panel.reviews.findIndex(r => 
       r.isExternal && r.panelistEmail === invitedMember.email
@@ -2581,7 +3122,8 @@ export const submitPanelReviewByToken = async (req, res) => {
       panelistEmail: invitedMember.email,
       panelistName: invitedMember.name,
       comments: comments.trim(),
-      recommendation: recommendation,
+      recommendation: normalizedRecommendation,
+      grade: normalizedGrade,
       status: 'submitted',
       submittedAt: new Date(),
       dueDate: panel.reviewDeadline || null,
@@ -2631,6 +3173,29 @@ export const submitPanelReviewByToken = async (req, res) => {
           // Guard: remaining cannot be negative (data inconsistency)
           if (remaining < 0) {
             console.error('Panel tally error: submitted count exceeds active members for panel', panel._id);
+          } else if (gradedPanel) {
+            const gradeSummary = buildPanelGradeSummary(submitted);
+            const updatedResearch = await Research.findByIdAndUpdate(
+              panel.research,
+              {
+                panelRecommendationTally: {
+                  ...(gradeSummary || {}),
+                  totalPanelists: activeMembers.length,
+                  submittedCount: submitted.length,
+                  resultMode: "grade",
+                },
+                panelDecision: null,
+                panelDecisionDate: null,
+                panelDecisionAuto: null,
+                panelDecisionBy: null,
+                panelDecisionReason: null,
+              },
+              { new: true }
+            );
+
+            if (!updatedResearch) {
+              console.error('Panel grade summary error: Research document not found for ID', panel.research);
+            }
           } else {
             const tally = { approve: 0, reject: 0, revision: 0 };
             submitted.forEach(r => {
@@ -2697,7 +3262,8 @@ export const submitPanelReviewByToken = async (req, res) => {
         metadata: {
           panelistEmail: invitedMember.email,
           panelistName: invitedMember.name,
-          recommendation,
+          recommendation: normalizedRecommendation,
+          grade: normalizedGrade,
           panelProgress: panel.progress,
         }
       });
@@ -2796,12 +3362,23 @@ export const uploadPanelDocument = async (req, res) => {
     }
 
     const panel = await Panel.findById(panelId)
-      .populate("research", "title students")
+      .populate({
+        path: "research",
+        select: "title students adviser",
+        populate: [
+          { path: "students", select: "name email" },
+          { path: "adviser", select: "name email" },
+        ],
+      })
       .populate("members.faculty", "name email")
       .populate("assignedBy", "name email");
 
     if (!panel) {
       return res.status(404).json({ message: "Panel not found" });
+    }
+
+    if (!canAccessPanelDocuments(panel, req.user)) {
+      return res.status(403).json({ message: "You are not authorized to upload documents for this panel" });
     }
 
     const uploader = await User.findById(req.user.id);
@@ -2927,6 +3504,11 @@ export const uploadPanelDocument = async (req, res) => {
       const activeMembers = panel.members.filter(m => m.isSelected);
       const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
       const researchTitle = panel.research?.title || "Research";
+      const normalizedTitle = title.trim().toLowerCase();
+      const normalizedFilename = req.file.originalname.trim().toLowerCase();
+      const isMinutesDocument =
+        normalizedTitle.includes("minutes") ||
+        normalizedFilename.includes("minutes");
 
       // Send emails to external panelists with their invitation links
       // Check for external members: either explicitly marked as external OR has email but no faculty reference
@@ -3081,6 +3663,48 @@ export const uploadPanelDocument = async (req, res) => {
           `,
         });
       }
+
+      if (isMinutesDocument) {
+        const adviserEmail = panel.research?.adviser?.email || null;
+        const studentEmails = Array.isArray(panel.research?.students)
+          ? panel.research.students.map((student) => student?.email).filter(Boolean)
+          : [];
+        const recipientEmails = [...new Set([adviserEmail, ...studentEmails].filter(Boolean))];
+
+        if (recipientEmails.length > 0) {
+          const panelTypeLabel = formatPanelTypeLabel(panel.type);
+
+          await rateLimitedSendMail(transporter, {
+            from: process.env.SMTP_FROM,
+            to: recipientEmails.join(","),
+            subject: `Minutes Uploaded: ${researchTitle}`,
+            html: `
+              <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+                <div style="background-color: #7C1D23; color: white; padding: 20px; border-radius: 5px 5px 0 0;">
+                  <h2 style="margin: 0;">Defense Minutes Uploaded</h2>
+                </div>
+                <div style="background-color: #f9f9f9; padding: 20px; border: 1px solid #ddd; border-top: none;">
+                  <p>Dear Research Participant,</p>
+                  <p>The Program Head uploaded a minutes document for your research.</p>
+
+                  <div style="background-color: white; padding: 15px; margin: 20px 0; border-left: 4px solid #7C1D23;">
+                    <p style="margin: 5px 0;"><strong>Research:</strong> ${researchTitle}</p>
+                    <p style="margin: 5px 0;"><strong>Panel:</strong> ${panel.name}</p>
+                    <p style="margin: 5px 0;"><strong>Panel Type:</strong> ${panelTypeLabel}</p>
+                    <p style="margin: 5px 0;"><strong>Document:</strong> ${title.trim()}</p>
+                    ${description?.trim() ? `<p style="margin: 5px 0;"><strong>Description:</strong> ${description.trim()}</p>` : ""}
+                  </div>
+
+                  <p>Please log in to your dashboard if you need to review the uploaded minutes.</p>
+                </div>
+                <div style="background-color: #f0f0f0; padding: 15px; border-radius: 0 0 5px 5px; border: 1px solid #ddd; border-top: none;">
+                  <p style="color: #999; font-size: 12px; margin: 0;">This is an automated notification from the research management system.</p>
+                </div>
+              </div>
+            `,
+          });
+        }
+      }
     } catch (emailErr) {
       console.error("Document notification email error:", emailErr);
       // Don't fail the upload if email fails
@@ -3125,12 +3749,17 @@ export const getPanelDocuments = async (req, res) => {
     const { panelId } = req.params;
 
     const panel = await Panel.findById(panelId)
+      .populate("research", "adviser students")
       .populate("documents.uploadedBy", "name email")
       .populate("documents.versions.uploadedBy", "name email")
       .select("documents");
 
     if (!panel) {
       return res.status(404).json({ message: "Panel not found" });
+    }
+
+    if (!canAccessPanelDocuments(panel, req.user)) {
+      return res.status(403).json({ message: "You are not authorized to view documents for this panel" });
     }
 
     // Return only active documents
@@ -3149,10 +3778,15 @@ export const removePanelDocument = async (req, res) => {
   try {
     const { panelId, documentId } = req.params;
 
-    const panel = await Panel.findById(panelId);
+    const panel = await Panel.findById(panelId)
+      .populate("research", "adviser");
 
     if (!panel) {
       return res.status(404).json({ message: "Panel not found" });
+    }
+
+    if (!canAccessPanelDocuments(panel, req.user)) {
+      return res.status(403).json({ message: "You are not authorized to remove documents for this panel" });
     }
 
     const documentIndex = panel.documents.findIndex(
@@ -3215,11 +3849,15 @@ export const replacePanelDocument = async (req, res) => {
     }
 
     const panel = await Panel.findById(panelId)
-      .populate("research", "title students")
+      .populate("research", "title students adviser")
       .populate("members.faculty", "name email");
 
     if (!panel) {
       return res.status(404).json({ message: "Panel not found" });
+    }
+
+    if (!canAccessPanelDocuments(panel, req.user)) {
+      return res.status(403).json({ message: "You are not authorized to replace documents for this panel" });
     }
 
     const uploader = await User.findById(req.user.id);
@@ -4040,6 +4678,44 @@ const getUniversityLogoBase64 = () => {
     console.log("Error reading logo:", logoError.message);
     return "";
   }
+};
+
+const canAccessPanelDocuments = (panel, user) => {
+  if (!panel || !user) return false;
+
+  if (user.role === "program head") {
+    return true;
+  }
+
+  if (user.role === "faculty adviser") {
+    const adviserId = panel.research?.adviser?._id || panel.research?.adviser;
+    if ((adviserId?.toString?.() || adviserId) === user.id?.toString()) {
+      return true;
+    }
+
+    return (panel.members || []).some((member) => {
+      const facultyId = member.faculty?._id || member.faculty;
+      return (
+        (facultyId?.toString?.() || facultyId) === user.id?.toString() &&
+        member.isSelected
+      );
+    });
+  }
+
+  if (user.role === "graduate student") {
+    const students = Array.isArray(panel.research?.students)
+      ? panel.research.students
+      : panel.research?.students
+        ? [panel.research.students]
+        : [];
+
+    return students.some((student) => {
+      const studentId = student?._id || student;
+      return (studentId?.toString?.() || studentId) === user.id?.toString();
+    });
+  }
+
+  return false;
 };
 
 const getProgramHeadPanelReportFolderId = () => (
@@ -7086,7 +7762,7 @@ export const exportDefenseSchedule = async (req, res) => {
 
     // Build query for finalized defense schedules
     const query = {
-      type: { $in: ["proposal_defense", "final_defense"] },
+      type: { $in: DEFENSE_SCHEDULE_TYPES },
       status: { $in: ["finalized", "confirmed", "scheduled"] }
     };
 
@@ -7668,7 +8344,7 @@ export const getSchedulesForFinalization = async (req, res) => {
     const query = {
       $or: [
         { type: "consultation", status: "confirmed" },
-        { type: { $in: ["proposal_defense", "final_defense"] }, status: "scheduled" }
+        { type: { $in: DEFENSE_SCHEDULE_TYPES }, status: "scheduled" }
       ]
     };
 
@@ -7816,9 +8492,7 @@ export const finalizeSchedule = async (req, res) => {
       const uniqueEmails = [...new Set(participantEmails)];
 
       const researchTitle = schedule.research?.title || "Research";
-      const scheduleType = schedule.type === "consultation" ? "Consultation" : 
-                          schedule.type === "proposal_defense" ? "Proposal Defense" : 
-                          "Final Defense";
+      const scheduleType = schedule.type === "consultation" ? "Consultation" : formatPanelTypeLabel(schedule.type);
 
       if (uniqueEmails.length > 0) {
         await rateLimitedSendMail(transporter, {
@@ -8059,12 +8733,7 @@ export const createPanelSchedule = async (req, res) => {
     }
 
     // Determine schedule type based on panel type (before conflict check)
-    let scheduleType = "proposal_defense"; // Default
-    if (panel.type === "final_defense") {
-      scheduleType = "final_defense";
-    } else if (panel.type === "proposal_defense") {
-      scheduleType = "proposal_defense";
-    }
+    const scheduleType = panel.type || "proposal";
 
     // Check for conflicts with panel members (but don't block creation - allow override)
     // Conflicts are checked on frontend, backend just logs them if they exist
@@ -8106,6 +8775,21 @@ export const createPanelSchedule = async (req, res) => {
 
     // Create participants array
     const participants = [];
+    const participantIds = new Set();
+    const addParticipant = (userId, role) => {
+      const normalizedId = userId?._id || userId;
+      const key = normalizedId?.toString();
+      if (!key || participantIds.has(key)) {
+        return;
+      }
+
+      participantIds.add(key);
+      participants.push({
+        user: normalizedId,
+        role,
+        status: "confirmed",
+      });
+    };
     
     // Add panel members (only internal faculty - external panelists don't have User IDs)
     const activeMembers = panel.members.filter(m => m.isSelected);
@@ -8120,11 +8804,13 @@ export const createPanelSchedule = async (req, res) => {
         // Internal faculty member
         const facultyId = member.faculty?._id || member.faculty;
         if (facultyId) {
-          participants.push({
-            user: facultyId._id || facultyId,
-            role: member.role === "chair" ? "chair" : member.role === "secretary" ? "secretary" : "panel_member",
-            status: "confirmed",
-          });
+          const participantRole =
+            member.role === "chair"
+              ? "chair"
+              : member.role === "adviser" || member.memberCategory === "adviser"
+                ? "adviser"
+                : "panel_member";
+          addParticipant(facultyId, participantRole);
           console.log(`[CREATE PANEL SCHEDULE] Added internal panelist: ${member.faculty?.name || 'Unknown'} (${member.role})`);
         } else {
           console.warn(`[CREATE PANEL SCHEDULE] Skipping member with no faculty ID:`, {
@@ -8143,21 +8829,13 @@ export const createPanelSchedule = async (req, res) => {
     if (panel.research?.students) {
       const students = Array.isArray(panel.research.students) ? panel.research.students : [panel.research.students];
       for (const student of students) {
-        participants.push({
-          user: student._id || student,
-          role: "student",
-          status: "confirmed",
-        });
+        addParticipant(student._id || student, "student");
       }
     }
 
     // Add adviser (if research has adviser)
     if (panel.research?.adviser) {
-      participants.push({
-        user: panel.research.adviser._id || panel.research.adviser,
-        role: "adviser",
-        status: "confirmed",
-      });
+      addParticipant(panel.research.adviser._id || panel.research.adviser, "adviser");
     }
 
     // Create schedule
@@ -8173,7 +8851,7 @@ export const createPanelSchedule = async (req, res) => {
       research: panel.research?._id || panel.research || null,
       panel: panelId,
       type: scheduleType,
-      title: `${panel.name} - ${panel.type.replace(/_/g, ' ')}`,
+      title: `${panel.name} - ${formatPanelTypeLabel(panel.type)}`,
       description: description || panel.description || "",
       datetime: scheduleDate,
       duration: duration || 120, // Default 2 hours for defense
@@ -8291,7 +8969,7 @@ export const createPanelSchedule = async (req, res) => {
                 <div style="background-color: white; padding: 15px; margin: 20px 0; border-left: 4px solid #7C1D23;">
                   <p style="margin: 5px 0;"><strong>Panel Name:</strong> ${panel.name}</p>
                   <p style="margin: 5px 0;"><strong>Research:</strong> ${researchTitle}</p>
-                  <p style="margin: 5px 0;"><strong>Panel Type:</strong> ${panel.type.replace(/_/g, ' ')}</p>
+                  <p style="margin: 5px 0;"><strong>Panel Type:</strong> ${formatPanelTypeLabel(panel.type)}</p>
                   <p style="margin: 5px 0;"><strong>Date & Time:</strong> ${scheduleDateStr}</p>
                   <p style="margin: 5px 0;"><strong>Duration:</strong> ${schedule.duration} minutes (until ${endTime})</p>
                   <p style="margin: 5px 0;"><strong>Location:</strong> ${schedule.location}</p>
@@ -8338,7 +9016,7 @@ export const createPanelSchedule = async (req, res) => {
         });
 
         const researchTitle = panel.research?.title || "Research";
-        const scheduleTypeLabel = scheduleType === "proposal_defense" ? "Proposal Defense" : "Final Defense";
+        const scheduleTypeLabel = formatPanelTypeLabel(scheduleType);
 
         // Create Google Calendar event (token refresh will happen automatically if needed)
         // All participants (students, panel members, adviser) will be added as attendees
@@ -8688,9 +9366,95 @@ export const getAvailableDocuments = async (req, res) => {
     })
       .populate("uploadedBy", "name")
       .sort({ createdAt: -1 });
-    
-    res.json(documents);
+
+    const panels = await Panel.find({})
+      .populate("research", "title")
+      .populate("documents.uploadedBy", "name email")
+      .select("name type research documents")
+      .sort({ updatedAt: -1, createdAt: -1 });
+
+    const panelDocuments = panels.flatMap((panel) =>
+      (panel.documents || [])
+        .filter((doc) => doc.isActive)
+        .map((doc) => ({
+          ...doc.toObject(),
+          sourceType: "panel",
+          panelId: panel._id,
+          panelName: panel.name,
+          panelType: panel.type,
+          researchTitle: panel.research?.title || "",
+          category: doc.category || "panel",
+          createdAt: doc.uploadedAt || panel.updatedAt || panel.createdAt,
+        }))
+    );
+
+    const mergedDocuments = [...panelDocuments, ...documents]
+      .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+
+    res.json(mergedDocuments);
   } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+export const uploadDocument = async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ message: "No file uploaded" });
+    }
+
+    const title = req.body.title?.trim();
+    const description = req.body.description?.trim() || "";
+    const category = req.body.category || "other";
+
+    if (!title) {
+      return res.status(400).json({ message: "Document title is required" });
+    }
+
+    const allowedMimes = [
+      "application/pdf",
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      "application/msword",
+    ];
+
+    if (!allowedMimes.includes(req.file.mimetype)) {
+      return res.status(400).json({ message: "Only PDF and DOCX files are allowed" });
+    }
+
+    const document = new Document({
+      title,
+      description,
+      category,
+      filename: req.file.originalname,
+      filepath: req.file.path,
+      fileSize: req.file.size,
+      mimeType: req.file.mimetype,
+      uploadedBy: req.user.id,
+      accessibleTo: ["dean", "program head", "faculty adviser"],
+      storageLocation: "local",
+    });
+
+    await document.save();
+
+    await Activity.create({
+      user: req.user.id,
+      action: "upload",
+      entityType: "document",
+      entityId: document._id,
+      entityName: document.title,
+      description: `Uploaded document: ${document.title}`,
+      metadata: {
+        category: document.category,
+        fileSize: document.fileSize,
+        accessibleTo: document.accessibleTo,
+      },
+    }).catch((err) => console.error("Error logging document upload:", err));
+
+    await document.populate("uploadedBy", "name email");
+
+    res.json({ message: "Document uploaded successfully", document });
+  } catch (error) {
+    console.error("Program head document upload error:", error);
     res.status(500).json({ message: error.message });
   }
 };
@@ -8833,18 +9597,6 @@ export const finalizeResearch = async (req, res) => {
       return numeric <= 3 ? "passed" : "failed";
     };
 
-    if (!finalGrade) {
-      return res.status(400).json({ message: "Final Grade is required" });
-    }
-
-    const normalizedFinalGrade = formatGrade(finalGrade);
-    if (!normalizedFinalGrade) {
-      return res.status(400).json({
-        message: "Invalid final grade. Use values from 1.00 to 5.00 in 0.25 intervals.",
-      });
-    }
-    const evaluationStatus = normalizeStatusFromGrade(normalizedFinalGrade);
-
     const research = await Research.findById(id)
       .populate("students", "name email")
       .populate("adviser", "name email");
@@ -8862,6 +9614,52 @@ export const finalizeResearch = async (req, res) => {
     if (research.finalizedDate) {
       return res.status(400).json({ message: "Research has already been finalized." });
     }
+
+    const stage3Panel = await Panel.findOne({
+      research: id,
+      type: { $in: ["oral_defense", "final_defense"] },
+    });
+
+    let normalizedFinalGrade = null;
+
+    if (stage3Panel) {
+      const activeMembers = stage3Panel.members.filter((member) => member.isSelected);
+      const submittedGradeReviews = stage3Panel.reviews.filter(
+        (review) => review.status === "submitted" && normalizePanelGrade(review.grade)
+      );
+
+      if (activeMembers.length === 0) {
+        return res.status(400).json({ message: "The Final Oral Defense panel has no active panelists." });
+      }
+
+      if (submittedGradeReviews.length < activeMembers.length) {
+        return res.status(400).json({
+          message: "All active Final Oral Defense panelists must submit their grades before finalization.",
+        });
+      }
+
+      const gradeSummary = buildPanelGradeSummary(submittedGradeReviews);
+      normalizedFinalGrade = gradeSummary?.averageGrade || null;
+
+      if (!normalizedFinalGrade) {
+        return res.status(400).json({
+          message: "Unable to calculate the final grade from panelist submissions.",
+        });
+      }
+    } else {
+      if (!finalGrade) {
+        return res.status(400).json({ message: "Final Grade is required" });
+      }
+
+      normalizedFinalGrade = formatGrade(finalGrade);
+      if (!normalizedFinalGrade) {
+        return res.status(400).json({
+          message: "Invalid final grade. Use values from 1.00 to 5.00 in 0.25 intervals.",
+        });
+      }
+    }
+
+    const evaluationStatus = normalizeStatusFromGrade(normalizedFinalGrade);
 
     // Update the research record
     const updateData = {
@@ -8884,7 +9682,13 @@ export const finalizeResearch = async (req, res) => {
       entityId: research._id,
       entityName: research.title,
       description: `Finalized research: ${research.title} — Grade: ${normalizedFinalGrade}, Status: ${evaluationStatus}`,
-      metadata: { finalGrade: normalizedFinalGrade, evaluationStatus, semester, academicYear }
+      metadata: {
+        finalGrade: normalizedFinalGrade,
+        evaluationStatus,
+        semester,
+        academicYear,
+        autoCalculatedFromPanel: !!stage3Panel,
+      }
     });
 
     // Send email notification to students

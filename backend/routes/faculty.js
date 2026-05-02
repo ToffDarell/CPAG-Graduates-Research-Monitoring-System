@@ -27,11 +27,21 @@ import {
   getMyPanels,
   submitPanelReview,
   getAvailableDocuments,
+  getMyPanelDocuments,
+  uploadDocument,
   downloadDocument,
   viewDocument,
   deleteChapterSubmission,
   viewChapterSubmission,
+  downloadResearchDocument,
+  viewResearchDocument
 } from "../controllers/facultyController.js";
+import {
+  uploadPanelDocument,
+  getPanelDocuments,
+  downloadPanelDocument,
+  viewPanelDocument,
+} from "../controllers/programHeadController.js";
 
 const router = express.Router();
 
@@ -46,6 +56,25 @@ const storage = multer.diskStorage({
 });
 
 const upload = multer({ storage });
+const panelDocumentFilter = (req, file, cb) => {
+  const allowedMimes = [
+    "application/pdf",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/msword",
+  ];
+
+  if (allowedMimes.includes(file.mimetype)) {
+    cb(null, true);
+  } else {
+    cb(new Error("Only PDF and DOCX files are allowed"), false);
+  }
+};
+
+const uploadPanelDocumentMiddleware = multer({
+  storage,
+  fileFilter: panelDocumentFilter,
+  limits: { fileSize: 10 * 1024 * 1024 },
+});
 
 // Apply authentication middleware to all routes
 router.use(protect, checkAuth(["faculty adviser"]));
@@ -97,11 +126,19 @@ router.get("/students", getMyStudents);
 // Panel reviews
 router.get("/panels", getMyPanels);
 router.post("/panels/:panelId/review", submitPanelReview);
+router.get("/panels/:panelId/documents", getPanelDocuments);
+router.post("/panels/:panelId/documents", uploadPanelDocumentMiddleware.single("file"), uploadPanelDocument);
+router.get("/panels/:panelId/documents/:documentId/download", downloadPanelDocument);
+router.get("/panels/:panelId/documents/:documentId", viewPanelDocument);
 
 // Document routes
 router.get("/documents", getAvailableDocuments);
+router.get("/panel-documents", getMyPanelDocuments);
+router.post("/documents", upload.single("file"), uploadDocument);
 router.get("/documents/:id", viewDocument);
 router.get("/documents/:id/download", downloadDocument);
+router.get("/research/:researchId/documents/:docId", viewResearchDocument);
+router.get("/research/:researchId/documents/:docId/download", downloadResearchDocument);
 
 export default router;
 

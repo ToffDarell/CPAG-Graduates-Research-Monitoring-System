@@ -127,9 +127,12 @@ const DEFAULT_EXPORT_FIELDS = [
 
 const STAGE_LABELS = {
   proposal: "Proposal",
+  preliminary: "Preliminary Pages",
   chapter1: "Chapter 1 - Introduction",
   chapter2: "Chapter 2 - Literature Review",
   chapter3: "Chapter 3 - Methodology",
+  chapter4: "Chapter 4 - Results and Discussion",
+  chapter5: "Chapter 5 - Summary, Conclusions, and Recommendations",
   defense: "Defense",
   final: "Final Submission"
 };
@@ -1749,6 +1752,107 @@ export const getResearchRecords = async (req, res) => {
   }
 };
 
+export const viewResearchDocument = async (req, res) => {
+  try {
+    const { researchId, documentId } = req.params;
+    const research = await Research.findById(researchId);
+
+    if (!research) {
+      return res.status(404).json({ message: "Research not found" });
+    }
+
+    const document = research.forms.id(documentId);
+    if (!document) {
+      return res.status(404).json({ message: "Research document not found" });
+    }
+
+    let mimeType = document.driveMimeType || "application/pdf";
+    if (!mimeType || mimeType === "application/octet-stream") {
+      const ext = path.extname(document.filename || "").toLowerCase();
+      const mimeTypes = {
+        ".pdf": "application/pdf",
+        ".doc": "application/msword",
+        ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      };
+      mimeType = mimeTypes[ext] || "application/pdf";
+    }
+
+    const filePath = path.isAbsolute(document.filepath)
+      ? document.filepath
+      : path.join(process.cwd(), document.filepath || "");
+
+    if (!document.filepath || !fs.existsSync(filePath)) {
+      return res.status(404).json({ message: "Research document file not found on server" });
+    }
+
+    await logActivity(
+      req.user.id,
+      "view",
+      "research",
+      research._id,
+      research.title,
+      `Viewed research document: ${document.filename}`,
+      {
+        researchId,
+        documentId,
+        documentType: document.type,
+        filename: document.filename,
+      },
+      req
+    );
+
+    res.setHeader("Content-Type", mimeType);
+    res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(document.filename || "research-document")}"`);
+    fs.createReadStream(filePath).pipe(res);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+export const downloadResearchDocument = async (req, res) => {
+  try {
+    const { researchId, documentId } = req.params;
+    const research = await Research.findById(researchId);
+
+    if (!research) {
+      return res.status(404).json({ message: "Research not found" });
+    }
+
+    const document = research.forms.id(documentId);
+    if (!document) {
+      return res.status(404).json({ message: "Research document not found" });
+    }
+
+    const filePath = path.isAbsolute(document.filepath)
+      ? document.filepath
+      : path.join(process.cwd(), document.filepath || "");
+
+    if (!document.filepath || !fs.existsSync(filePath)) {
+      return res.status(404).json({ message: "Research document file not found on server" });
+    }
+
+    await logActivity(
+      req.user.id,
+      "download",
+      "research",
+      research._id,
+      research.title,
+      `Downloaded research document: ${document.filename}`,
+      {
+        researchId,
+        documentId,
+        documentType: document.type,
+        filename: document.filename,
+      },
+      req
+    );
+
+    res.download(filePath, document.filename || "research-document");
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
 export const exportResearchRecords = async (req, res) => {
   let tempDirPath = null;
   try {
@@ -3361,7 +3465,7 @@ export const exportDefenseSchedule = async (req, res) => {
 
     // Build query for finalized defense schedules
     const query = {
-      type: { $in: ["proposal_defense", "final_defense"] },
+      type: { $in: ["title_defense", "proposal", "oral_examination_manuscript", "oral_defense", "proposal_defense", "final_defense"] },
       status: { $in: ["finalized", "confirmed", "scheduled"] }
     };
 

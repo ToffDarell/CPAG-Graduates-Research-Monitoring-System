@@ -789,6 +789,7 @@ const DocxViewer = ({ blob, containerRef, onError }) => {
 
 // Student Submissions Component
 const StudentSubmissions = ({ submissions, onApprove, onReject, onRefresh, loading }) => {
+  const draftSubmissionTypes = ["preliminary", "chapter1", "chapter2", "chapter3", "chapter4", "chapter5", "completed_research"];
   const [selectedSubmission, setSelectedSubmission] = useState(null);
   const [showRejectModal, setShowRejectModal] = useState(false);
   const [showApproveModal, setShowApproveModal] = useState(false);
@@ -798,9 +799,13 @@ const StudentSubmissions = ({ submissions, onApprove, onReject, onRefresh, loadi
   const [successMessage, setSuccessMessage] = useState("");
   const [selectedForm, setSelectedForm] = useState(null);
   const [expandedChapters, setExpandedChapters] = useState({
+    preliminary: false,
     chapter1: false,
     chapter2: false,
-    chapter3: false
+    chapter3: false,
+    chapter4: false,
+    chapter5: false,
+    completed_research: false,
   });
   const [viewDocumentUrl, setViewDocumentUrl] = useState(null);
   const [viewDocumentFilename, setViewDocumentFilename] = useState(null);
@@ -819,17 +824,25 @@ const StudentSubmissions = ({ submissions, onApprove, onReject, onRefresh, loadi
 
   // Chapter titles mapping
   const chapterTitles = useMemo(() => ({
+    preliminary: "Preliminary Pages",
     chapter1: "Chapter 1 - Introduction",
     chapter2: "Chapter 2 - Literature Review",
     chapter3: "Chapter 3 - Methodology",
+    chapter4: "Chapter 4 - Results and Discussion",
+    chapter5: "Chapter 5 - Summary, Conclusions, and Recommendations",
+    completed_research: "Completed Research",
   }), []);
 
   // Group submissions by chapter type, filter, and show only latest version per part
   const groupedSubmissions = useMemo(() => {
     const groups = {
+      preliminary: [],
       chapter1: [],
       chapter2: [],
-      chapter3: []
+      chapter3: [],
+      chapter4: [],
+      chapter5: [],
+      completed_research: [],
     };
 
     // First, collect all submissions
@@ -837,7 +850,7 @@ const StudentSubmissions = ({ submissions, onApprove, onReject, onRefresh, loadi
     submissions.forEach(research => {
       const student = research.students?.[0];
       research.forms?.forEach(form => {
-        if (form.type === 'chapter1' || form.type === 'chapter2' || form.type === 'chapter3') {
+        if (draftSubmissionTypes.includes(form.type)) {
           allSubmissions.push({
             ...form,
             research: research,
@@ -904,7 +917,7 @@ const StudentSubmissions = ({ submissions, onApprove, onReject, onRefresh, loadi
 
     // Group by chapter type
     filtered.forEach(submission => {
-      if (submission.type === 'chapter1' || submission.type === 'chapter2' || submission.type === 'chapter3') {
+      if (draftSubmissionTypes.includes(submission.type)) {
         groups[submission.type].push(submission);
       }
     });
@@ -1196,9 +1209,9 @@ const StudentSubmissions = ({ submissions, onApprove, onReject, onRefresh, loadi
               className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23]/20 focus:border-[#7C1D23]"
             >
               <option value="">All Chapters</option>
-              <option value="chapter1">Chapter 1</option>
-              <option value="chapter2">Chapter 2</option>
-              <option value="chapter3">Chapter 3</option>
+              {draftSubmissionTypes.map((chapterType) => (
+                <option key={chapterType} value={chapterType}>{chapterTitles[chapterType]}</option>
+              ))}
             </select>
           </div>
 
@@ -1284,7 +1297,7 @@ const StudentSubmissions = ({ submissions, onApprove, onReject, onRefresh, loadi
         </div>
       ) : (
         // Group by chapter type
-        ['chapter1', 'chapter2', 'chapter3'].map((chapterType) => {
+        draftSubmissionTypes.map((chapterType) => {
           const chapterSubmissions = groupedSubmissions[chapterType];
           const submissionCount = chapterSubmissions.length;
           const reviewedCount = chapterSubmissions.filter(s => s.status === 'approved' || s.status === 'rejected').length;
@@ -4196,9 +4209,12 @@ const StudentList = ({ students, onUpdateStatus, loading }) => {
 
   const stageOptions = [
     { value: "proposal", label: "Proposal" },
+    { value: "preliminary", label: "Preliminary Pages" },
     { value: "chapter1", label: "Chapter 1" },
     { value: "chapter2", label: "Chapter 2" },
     { value: "chapter3", label: "Chapter 3" },
+    { value: "chapter4", label: "Chapter 4" },
+    { value: "chapter5", label: "Chapter 5" },
     { value: "defense", label: "Defense" },
     { value: "final", label: "Final" },
   ];
@@ -4525,14 +4541,32 @@ const StudentList = ({ students, onUpdateStatus, loading }) => {
 };
 
 // Panel Reviews Component
+const panelGradeOptions = Array.from({ length: 17 }, (_, index) => (1 + index * 0.25).toFixed(2));
+const isGradedPanelReviewType = (panelType) => ['oral_defense', 'final_defense'].includes(panelType);
+const getPanelReviewTypeLabel = (panelType = '') => ({
+  title_defense: 'Stage 0 - Title Defense',
+  proposal: 'Stage 1 - Proposal',
+  oral_examination_manuscript: 'Stage 2 - Oral Examination, Manuscript',
+  oral_defense: 'Stage 3 - Final Oral Defense',
+  proposal_defense: 'Proposal Defense',
+  final_defense: 'Final Defense',
+}[panelType] || panelType.replace(/_/g, ' '));
+
 const PanelReviews = () => {
   const [panels, setPanels] = useState([]);
   const [loading, setLoading] = useState(false);
   const [selectedPanel, setSelectedPanel] = useState(null);
   const [showReviewModal, setShowReviewModal] = useState(false);
+  const [panelDocuments, setPanelDocuments] = useState([]);
+  const [documentsLoading, setDocumentsLoading] = useState(false);
+  const [minutesTitle, setMinutesTitle] = useState("Minutes of Defense");
+  const [minutesDescription, setMinutesDescription] = useState("");
+  const [minutesFile, setMinutesFile] = useState(null);
+  const [uploadingMinutes, setUploadingMinutes] = useState(false);
   const [reviewForm, setReviewForm] = useState({
     comments: '',
     recommendation: 'pending',
+    grade: '',
   });
   const [submitting, setSubmitting] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
@@ -4541,6 +4575,11 @@ const PanelReviews = () => {
   useEffect(() => {
     fetchPanels();
   }, []);
+
+  useEffect(() => {
+    if (!showReviewModal || !selectedPanel?._id) return;
+    fetchPanelDocuments(selectedPanel._id);
+  }, [showReviewModal, selectedPanel?._id]);
 
   const fetchPanels = async () => {
     setLoading(true);
@@ -4560,9 +4599,14 @@ const PanelReviews = () => {
 
   const handleOpenReviewModal = (panel) => {
     setSelectedPanel(panel);
+    setPanelDocuments([]);
+    setMinutesTitle("Minutes of Defense");
+    setMinutesDescription("");
+    setMinutesFile(null);
     setReviewForm({
       comments: panel.myReview?.comments || '',
       recommendation: panel.myReview?.recommendation || 'pending',
+      grade: panel.myReview?.grade || '',
     });
     setShowReviewModal(true);
   };
@@ -4570,7 +4614,89 @@ const PanelReviews = () => {
   const handleCloseReviewModal = () => {
     setShowReviewModal(false);
     setSelectedPanel(null);
-    setReviewForm({ comments: '', recommendation: 'pending' });
+    setPanelDocuments([]);
+    setMinutesTitle("Minutes of Defense");
+    setMinutesDescription("");
+    setMinutesFile(null);
+    setReviewForm({ comments: '', recommendation: 'pending', grade: '' });
+  };
+
+  const fetchPanelDocuments = async (panelId) => {
+    setDocumentsLoading(true);
+    try {
+      const token = localStorage.getItem('token');
+      const res = await axios.get(`/api/faculty/panels/${panelId}/documents`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      setPanelDocuments(res.data.documents || []);
+    } catch (error) {
+      console.error('Error fetching panel documents:', error);
+      setPanelDocuments([]);
+    } finally {
+      setDocumentsLoading(false);
+    }
+  };
+
+  const handleUploadMinutes = async () => {
+    if (!selectedPanel?._id) return;
+    if (!minutesTitle.trim()) {
+      showWarning('Validation Error', 'Please enter a document title.');
+      return;
+    }
+    if (!minutesFile) {
+      showWarning('Validation Error', 'Please select a minutes file to upload.');
+      return;
+    }
+
+    setUploadingMinutes(true);
+    try {
+      const token = localStorage.getItem('token');
+      const formData = new FormData();
+      formData.append('title', minutesTitle.trim());
+      formData.append('description', minutesDescription.trim());
+      formData.append('file', minutesFile);
+
+      await axios.post(`/api/faculty/panels/${selectedPanel._id}/documents`, formData, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'multipart/form-data',
+        }
+      });
+
+      await showSuccess('Minutes Uploaded', 'Defense minutes uploaded successfully.');
+      setMinutesFile(null);
+      setMinutesDescription("");
+      setMinutesTitle("Minutes of Defense");
+      await fetchPanelDocuments(selectedPanel._id);
+      await fetchPanels();
+    } catch (error) {
+      console.error('Error uploading minutes:', error);
+      showError('Upload Error', error.response?.data?.message || 'Failed to upload minutes document.');
+    } finally {
+      setUploadingMinutes(false);
+    }
+  };
+
+  const handleDownloadPanelDocument = async (documentId, filename) => {
+    try {
+      const token = localStorage.getItem('token');
+      const response = await axios.get(`/api/faculty/panels/${selectedPanel._id}/documents/${documentId}/download`, {
+        headers: { Authorization: `Bearer ${token}` },
+        responseType: 'blob',
+      });
+
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', filename || 'document');
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error('Error downloading panel document:', error);
+      showError('Download Error', error.response?.data?.message || 'Failed to download document.');
+    }
   };
 
   const handleSubmitReview = async (e) => {
@@ -4579,8 +4705,15 @@ const PanelReviews = () => {
       showWarning('Validation Error', 'Please provide review comments');
       return;
     }
-    if (reviewForm.recommendation === 'pending') {
-      showWarning('Validation Error', 'Please select a recommendation');
+    if (isGradedPanelReviewType(selectedPanel?.type)) {
+      if (!reviewForm.grade) {
+        showWarning('Validation Error', 'Please select a panel grade');
+        return;
+      }
+    }
+    
+    if (reviewForm.recommendation === 'pending' || !reviewForm.recommendation) {
+      showWarning('Validation Error', 'Please select a result');
       return;
     }
 
@@ -4592,6 +4725,7 @@ const PanelReviews = () => {
         {
           comments: reviewForm.comments,
           recommendation: reviewForm.recommendation,
+          grade: reviewForm.grade,
         },
         {
           headers: { Authorization: `Bearer ${token}` }
@@ -4627,6 +4761,16 @@ const PanelReviews = () => {
       pending: 'bg-gray-100 text-gray-800',
     };
     return colors[recommendation] || colors.pending;
+  };
+
+  const getRecommendationLabel = (recommendation) => {
+    const labels = {
+      approve: 'Pass',
+      reject: 'Fail',
+      revision: 'Revision',
+      pending: 'Pending',
+    };
+    return labels[recommendation] || recommendation || 'Pending';
   };
 
   return (
@@ -4680,7 +4824,7 @@ const PanelReviews = () => {
                     )}
                   </p>
                   <p className="text-sm text-gray-600 mb-1">
-                    <span className="font-medium">Type:</span> {panel.type?.replace(/_/g, ' ')}
+                    <span className="font-medium">Type:</span> {getPanelReviewTypeLabel(panel.type)}
                   </p>
                   {panel.description && (
                     <p className="text-sm text-gray-600 mb-2">{panel.description}</p>
@@ -4717,9 +4861,11 @@ const PanelReviews = () => {
                           {panel.reviewStatus.replace(/_/g, ' ')}
                         </span>
                       </p>
-                      {panel.myReview.recommendation !== 'pending' && (
+                      {(isGradedPanelReviewType(panel.type) ? !!panel.myReview.grade : panel.myReview.recommendation !== 'pending') && (
                         <span className={`inline-block mt-2 px-2 py-1 text-xs rounded ${getRecommendationColor(panel.myReview.recommendation)}`}>
-                          Recommendation: {panel.myReview.recommendation.replace(/_/g, ' ')}
+                          {isGradedPanelReviewType(panel.type)
+                            ? `Grade: ${panel.myReview.grade || 'Pending'}`
+                            : `Result: ${getRecommendationLabel(panel.myReview.recommendation)}`}
                         </span>
                       )}
                     </div>
@@ -4778,13 +4924,15 @@ const PanelReviews = () => {
                                     You
                                   </span>
                                 )}
-                                {review.recommendation && review.recommendation !== 'pending' && (
+                                {(isGradedPanelReviewType(panel.type) ? !!review.grade : (review.recommendation && review.recommendation !== 'pending')) && (
                                   <span
                                     className={`px-2 py-0.5 text-xs font-medium rounded ${getRecommendationColor(
                                       review.recommendation
                                     )}`}
                                   >
-                                    {review.recommendation.replace(/_/g, ' ')}
+                                    {isGradedPanelReviewType(panel.type)
+                                      ? `Grade ${review.grade || 'Pending'}`
+                                      : getRecommendationLabel(review.recommendation)}
                                   </span>
                                 )}
                                 {review.status && (
@@ -4907,9 +5055,28 @@ const PanelReviews = () => {
                   />
                 </div>
 
+                {isGradedPanelReviewType(selectedPanel.type) && (
+                  <div className="mb-4">
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Panel Grade <span className="text-red-500">*</span>
+                    </label>
+                    <select
+                      value={reviewForm.grade}
+                      onChange={(e) => setReviewForm({ ...reviewForm, grade: e.target.value })}
+                      className="w-full px-4 py-2 rounded-md border border-gray-300 focus:border-[#7C1D23] focus:ring-2 focus:ring-[#7C1D23]/20 text-sm"
+                      required
+                    >
+                      <option value="">Select Panel Grade</option>
+                      {panelGradeOptions.map((grade) => (
+                        <option key={grade} value={grade}>{grade}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+                
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Recommendation <span className="text-red-500">*</span>
+                    Result (Pass/Fail/Revision) <span className="text-red-500">*</span>
                   </label>
                   <select
                     value={reviewForm.recommendation}
@@ -4917,10 +5084,10 @@ const PanelReviews = () => {
                     className="w-full px-4 py-2 rounded-md border border-gray-300 focus:border-[#7C1D23] focus:ring-2 focus:ring-[#7C1D23]/20 text-sm"
                     required
                   >
-                    <option value="pending">Select Recommendation</option>
-                    <option value="approve">Approve</option>
-                    <option value="revision">Require Revision</option>
-                    <option value="reject">Reject</option>
+                    <option value="pending">Select Result</option>
+                    <option value="approve">Pass</option>
+                    <option value="revision">Revision</option>
+                    <option value="reject">Fail</option>
                   </select>
                 </div>
 
@@ -4934,6 +5101,8 @@ const PanelReviews = () => {
                     </p>
                   </div>
                 )}
+
+
               </div>
 
               <div className="p-5 border-t border-gray-200 bg-gray-50">
@@ -4966,10 +5135,14 @@ const PanelReviews = () => {
 const DocumentsView = () => {
   const [documents, setDocuments] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [uploading, setUploading] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(10);
+  const [minutesTitle, setMinutesTitle] = useState("Minutes of Defense");
+  const [minutesDescription, setMinutesDescription] = useState("");
+  const [minutesFile, setMinutesFile] = useState(null);
   // Document viewer state (for inline preview)
   const [viewUrl, setViewUrl] = useState(null);
   const [viewFilename, setViewFilename] = useState("");
@@ -4984,10 +5157,21 @@ const DocumentsView = () => {
   const fetchDocuments = async () => {
     try {
       const token = localStorage.getItem('token');
-      const response = await axios.get('/api/faculty/documents', {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      setDocuments(response.data);
+      const [documentsResponse, panelDocumentsResponse] = await Promise.all([
+        axios.get('/api/faculty/documents', {
+          headers: { Authorization: `Bearer ${token}` }
+        }),
+        axios.get('/api/faculty/panel-documents', {
+          headers: { Authorization: `Bearer ${token}` }
+        }),
+      ]);
+      const mergedDocuments = [...(panelDocumentsResponse.data || []), ...(documentsResponse.data || [])]
+        .filter((doc, index, list) => {
+          const key = `${doc.sourceType || 'global'}:${doc.panelId || ''}:${doc._id}`;
+          return index === list.findIndex((item) => `${item.sourceType || 'global'}:${item.panelId || ''}:${item._id}` === key);
+        })
+        .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+      setDocuments(mergedDocuments);
     } catch (error) {
       console.error('Error fetching documents:', error);
     } finally {
@@ -4998,7 +5182,15 @@ const DocumentsView = () => {
   const handleDownload = async (doc) => {
     try {
       const token = localStorage.getItem('token');
-      const response = await axios.get(`/api/faculty/documents/${doc._id}/download`, {
+      let downloadUrl = `/api/faculty/documents/${doc._id}/download`;
+      
+      if (doc.sourceType === 'panel') {
+        downloadUrl = `/api/faculty/panels/${doc.panelId}/documents/${doc._id}/download`;
+      } else if (doc.sourceType === 'research') {
+        downloadUrl = `/api/faculty/research/${doc.researchId}/documents/${doc._id}/download`;
+      }
+
+      const response = await axios.get(downloadUrl, {
         headers: { Authorization: `Bearer ${token}` },
         responseType: 'blob'
       });
@@ -5020,15 +5212,24 @@ const DocumentsView = () => {
   const handleView = async (doc) => {
     try {
       const token = localStorage.getItem('token');
-      const response = await axios.get(`/api/faculty/documents/${doc._id}`, {
+      let viewUrl = `/api/faculty/documents/${doc._id}`;
+      
+      if (doc.sourceType === 'panel') {
+        viewUrl = `/api/faculty/panels/${doc.panelId}/documents/${doc._id}`;
+      } else if (doc.sourceType === 'research') {
+        viewUrl = `/api/faculty/research/${doc.researchId}/documents/${doc._id}`;
+      }
+
+      const response = await axios.get(viewUrl, {
         headers: { Authorization: `Bearer ${token}` },
         responseType: 'blob'
       });
       
-      const blob = new Blob([response.data], { type: doc.mimeType });
+      const fileMimeType = doc.mimeType || response.headers['content-type'] || 'application/pdf';
+      const blob = new Blob([response.data], { type: fileMimeType });
       const filename = doc.filename || 'document';
       const lowerName = filename.toLowerCase();
-      const isDocx = doc.mimeType?.includes('word') ||
+      const isDocx = fileMimeType.includes('word') ||
         lowerName.endsWith('.docx') ||
         lowerName.endsWith('.doc');
 
@@ -5057,6 +5258,45 @@ const DocumentsView = () => {
     } catch (error) {
       console.error('Error viewing document:', error);
       showError('Error', 'Error viewing document');
+    }
+  };
+
+  const handleUploadMinutes = async () => {
+    if (!minutesTitle.trim()) {
+      showWarning('Validation Error', 'Please enter a document title.');
+      return;
+    }
+    if (!minutesFile) {
+      showWarning('Validation Error', 'Please select a minutes file.');
+      return;
+    }
+
+    setUploading(true);
+    try {
+      const token = localStorage.getItem('token');
+      const formData = new FormData();
+      formData.append('title', minutesTitle.trim());
+      formData.append('description', minutesDescription.trim());
+      formData.append('category', 'other');
+      formData.append('file', minutesFile);
+
+      await axios.post('/api/faculty/documents', formData, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'multipart/form-data',
+        }
+      });
+
+      await showSuccess('Minutes Uploaded', 'Minutes document uploaded successfully.');
+      setMinutesTitle('Minutes of Defense');
+      setMinutesDescription('');
+      setMinutesFile(null);
+      fetchDocuments();
+    } catch (error) {
+      console.error('Error uploading minutes:', error);
+      showError('Upload Error', error.response?.data?.message || 'Failed to upload minutes document.');
+    } finally {
+      setUploading(false);
     }
   };
 
@@ -5093,6 +5333,7 @@ const DocumentsView = () => {
       template: 'bg-green-100 text-green-700',
       guideline: 'bg-purple-100 text-purple-700',
       policy: 'bg-red-100 text-red-700',
+      panel: 'bg-amber-100 text-amber-700',
       other: 'bg-gray-100 text-gray-700'
     };
     return colors[category] || colors.other;
@@ -5111,6 +5352,49 @@ const DocumentsView = () => {
       <div className="flex justify-between items-center">
         <h2 className="text-xl font-bold text-gray-800">Documents</h2>
         <span className="text-sm text-gray-600">{filteredDocuments.length} document(s)</span>
+      </div>
+
+      <div className="bg-white rounded-lg border border-gray-200 p-4 space-y-3">
+        <div>
+          <h3 className="text-sm font-semibold text-gray-800">Upload Minutes</h3>
+          <p className="text-xs text-gray-500 mt-1">
+            Faculty Adviser can upload minutes documents here as backup.
+          </p>
+        </div>
+        <input
+          type="text"
+          value={minutesTitle}
+          onChange={(e) => setMinutesTitle(e.target.value)}
+          placeholder="Document title"
+          className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-transparent"
+        />
+        <textarea
+          value={minutesDescription}
+          onChange={(e) => setMinutesDescription(e.target.value)}
+          rows={3}
+          placeholder="Optional description"
+          className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-transparent"
+        />
+        <input
+          type="file"
+          accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+          onChange={(e) => setMinutesFile(e.target.files?.[0] || null)}
+          className="w-full text-sm text-gray-700"
+        />
+        {minutesFile && (
+          <p className="text-xs text-gray-500">Selected file: {minutesFile.name}</p>
+        )}
+        <div className="flex justify-end">
+          <button
+            type="button"
+            onClick={handleUploadMinutes}
+            disabled={uploading}
+            className="px-4 py-2 bg-[#7C1D23] text-white rounded-md hover:bg-[#5a1519] transition-colors disabled:opacity-60 text-sm font-medium flex items-center gap-2"
+          >
+            <FaUpload className="h-4 w-4" />
+            {uploading ? 'Uploading...' : 'Upload Minutes'}
+          </button>
+        </div>
       </div>
 
       {/* Search and Filter */}
@@ -5136,6 +5420,7 @@ const DocumentsView = () => {
               <option value="template">Templates</option>
               <option value="guideline">Guidelines</option>
               <option value="policy">Policies</option>
+              <option value="panel">Panel Uploads</option>
               <option value="other">Other</option>
             </select>
           </div>
@@ -5169,6 +5454,11 @@ const DocumentsView = () => {
                     </div>
                     {doc.description && (
                       <p className="text-sm text-gray-600 mb-2">{doc.description}</p>
+                    )}
+                    {doc.sourceType === 'panel' && (
+                      <p className="text-sm text-amber-700 mb-2">
+                        From {doc.researchTitle || 'your assigned research'}{doc.panelName ? ` - ${doc.panelName}` : ''}
+                      </p>
                     )}
                     <div className="flex items-center space-x-4 text-xs text-gray-500">
                       <span>Uploaded by: {doc.uploadedBy?.name || 'Unknown'}</span>

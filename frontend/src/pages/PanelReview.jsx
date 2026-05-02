@@ -4,6 +4,23 @@ import axios from 'axios';
 import { FaCheckCircle, FaExclamationCircle, FaSpinner, FaFileAlt, FaDownload, FaFilePdf, FaFileWord } from 'react-icons/fa';
 import { showError, showWarning } from '../utils/sweetAlert';
 
+const universityGradeOptions = Array.from({ length: 17 }, (_, index) => (1 + index * 0.25).toFixed(2));
+const isStage3Panel = (panelType) => ['oral_defense', 'final_defense'].includes(panelType);
+const getRecommendationLabel = (recommendation) => ({
+  approve: 'Pass',
+  reject: 'Fail',
+  revision: 'Revision',
+  pending: 'Pending',
+}[recommendation] || recommendation || 'Pending');
+const getPanelTypeLabel = (panelType = '') => ({
+  title_defense: 'Stage 0 - Title Defense',
+  proposal: 'Stage 1 - Proposal',
+  oral_examination_manuscript: 'Stage 2 - Oral Examination, Manuscript',
+  oral_defense: 'Stage 3 - Final Oral Defense',
+  proposal_defense: 'Proposal Defense',
+  final_defense: 'Final Defense',
+}[panelType] || panelType.replace(/_/g, ' '));
+
 const PanelReview = () => {
   const { token } = useParams();
   const [loading, setLoading] = useState(true);
@@ -13,6 +30,7 @@ const PanelReview = () => {
   const [reviewForm, setReviewForm] = useState({
     comments: '',
     recommendation: 'pending',
+    grade: '',
   });
   const [success, setSuccess] = useState(false);
 
@@ -28,6 +46,7 @@ const PanelReview = () => {
         setReviewForm({
           comments: res.data.review.comments || '',
           recommendation: res.data.review.recommendation || 'pending',
+          grade: res.data.review.grade || '',
         });
       }
     } catch (err) {
@@ -43,8 +62,15 @@ const PanelReview = () => {
       showWarning('Validation Error', 'Please provide review comments');
       return;
     }
-    if (reviewForm.recommendation === 'pending') {
-      showWarning('Validation Error', 'Please select a recommendation');
+    if (isStage3Panel(panelData?.panel?.type)) {
+      if (!reviewForm.grade) {
+        showWarning('Validation Error', 'Please select a panel grade');
+        return;
+      }
+    }
+    
+    if (reviewForm.recommendation === 'pending' || !reviewForm.recommendation) {
+      showWarning('Validation Error', 'Please select a result');
       return;
     }
 
@@ -53,6 +79,7 @@ const PanelReview = () => {
       await axios.post(`/api/panel-review/${token}/submit`, {
         comments: reviewForm.comments,
         recommendation: reviewForm.recommendation,
+        grade: reviewForm.grade,
       });
       setSuccess(true);
       fetchPanelData(); // Refresh to show updated status
@@ -116,7 +143,7 @@ const PanelReview = () => {
             </div>
             <div>
               <span className="text-sm font-medium text-gray-600">Panel Type:</span>
-              <p className="text-gray-900">{panelData.panel.type?.replace(/_/g, ' ')}</p>
+              <p className="text-gray-900">{getPanelTypeLabel(panelData.panel.type)}</p>
             </div>
             <div>
               <span className="text-sm font-medium text-gray-600">Your Role:</span>
@@ -224,10 +251,16 @@ const PanelReview = () => {
                   Submitted
                 </span>
               </div>
+              {isStage3Panel(panelData.panel.type) && (
+                <div>
+                  <span className="text-sm font-medium text-gray-600">Panel Grade:</span>
+                  <p className="text-gray-900 mt-1">{panelData.review?.grade || 'Pending'}</p>
+                </div>
+              )}
               <div>
-                <span className="text-sm font-medium text-gray-600">Recommendation:</span>
+                <span className="text-sm font-medium text-gray-600">Result:</span>
                 <p className="text-gray-900 mt-1">
-                  {panelData.review?.recommendation?.replace(/_/g, ' ') || 'Pending'}
+                  {getRecommendationLabel(panelData.review?.recommendation)}
                 </p>
               </div>
               <div>
@@ -270,9 +303,28 @@ const PanelReview = () => {
               />
             </div>
 
+            {isStage3Panel(panelData.panel.type) && (
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Panel Grade <span className="text-red-500">*</span>
+                </label>
+                <select
+                  value={reviewForm.grade}
+                  onChange={(e) => setReviewForm({ ...reviewForm, grade: e.target.value })}
+                  className="w-full px-4 py-2 rounded-md border border-gray-300 focus:border-[#7C1D23] focus:ring-2 focus:ring-[#7C1D23]/20 text-sm"
+                  required
+                >
+                  <option value="">Select Panel Grade</option>
+                  {universityGradeOptions.map((grade) => (
+                    <option key={grade} value={grade}>{grade}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+            
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
-                Recommendation <span className="text-red-500">*</span>
+                Result (Pass/Fail/Revision) <span className="text-red-500">*</span>
               </label>
               <select
                 value={reviewForm.recommendation}
@@ -280,10 +332,10 @@ const PanelReview = () => {
                 className="w-full px-4 py-2 rounded-md border border-gray-300 focus:border-[#7C1D23] focus:ring-2 focus:ring-[#7C1D23]/20 text-sm"
                 required
               >
-                <option value="pending">Select Recommendation</option>
-                <option value="approve">Approve</option>
-                <option value="revision">Require Revision</option>
-                <option value="reject">Reject</option>
+                <option value="pending">Select Result</option>
+                <option value="approve">Pass</option>
+                <option value="revision">Revision</option>
+                <option value="reject">Fail</option>
               </select>
             </div>
 

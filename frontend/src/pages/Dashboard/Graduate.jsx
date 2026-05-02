@@ -10,6 +10,36 @@ import { checkPermission } from "../../utils/permissionChecker";
 import { buildDirectApiUrl } from "../../utils/api";
 import Settings from "../Settings";
 
+const DRAFT_UPLOAD_LABELS = {
+  preliminary: "Preliminary Pages",
+  chapter1: "Chapter 1 - Introduction",
+  chapter2: "Chapter 2 - Literature Review",
+  chapter3: "Chapter 3 - Methodology",
+  chapter4: "Chapter 4 - Results and Discussion",
+  chapter5: "Chapter 5 - Summary, Conclusions, and Recommendations",
+};
+
+const DRAFT_UPLOAD_TYPES = Object.keys(DRAFT_UPLOAD_LABELS);
+const COUNTED_CHAPTER_TYPES = DRAFT_UPLOAD_TYPES.filter((type) => type !== "preliminary");
+const REQUIRED_PROGRESS_MILESTONE_TYPES = [...COUNTED_CHAPTER_TYPES];
+
+const PANEL_RECOMMENDATION_LABELS = {
+  approve: "Pass",
+  reject: "Fail",
+  revision: "Revision",
+  pending: "Pending",
+};
+
+const PROGRESS_MILESTONE_ORDER = [...DRAFT_UPLOAD_TYPES, "completed_research"];
+const ADVISER_STAGE_PROGRESS_ORDER = [
+  "preliminary",
+  "chapter1",
+  "chapter2",
+  "chapter3",
+  "chapter4",
+  "chapter5",
+];
+
 // Reusable Pagination Component
 const Pagination = ({ 
   currentPage, 
@@ -173,9 +203,12 @@ const GraduateDashboard = ({ setUser, user }) => {
   const tabFromUrl = searchParams.get('tab');
   const [selectedTab, setSelectedTab] = useState(tabFromUrl || "chapters");
   const [uploadProgress, setUploadProgress] = useState({
+    preliminary: false,
     chapter1: false,
     chapter2: false,
-    chapter3: false
+    chapter3: false,
+    chapter4: false,
+    chapter5: false
   });
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [myResearch, setMyResearch] = useState([]);
@@ -200,9 +233,21 @@ const GraduateDashboard = ({ setUser, user }) => {
   const [showSettings, setShowSettings] = useState(false);
 
 
-  const completedChapters = Object.values(uploadProgress).filter(Boolean).length;
-  const totalChapters = Object.keys(uploadProgress).length;
-  const progressPercentage = (completedChapters / totalChapters) * 100;
+  const totalChapters = COUNTED_CHAPTER_TYPES.length;
+  let completedChapters = 0;
+  if (myResearch && myResearch.length > 0) {
+    const currentStage = myResearch[0].stage;
+    const currentResearchStatus = myResearch[0].status;
+    if (currentStage === "defense" || currentStage === "final" || currentResearchStatus === "completed") {
+      completedChapters = 5;
+    } else if (currentStage) {
+      const stageIndex = ADVISER_STAGE_PROGRESS_ORDER.indexOf(currentStage);
+      if (stageIndex > 0) {
+        completedChapters = Math.max(0, stageIndex - 1);
+      }
+    }
+  }
+  const progressPercentage = progressOverview?.percentage ?? ((completedChapters / totalChapters) * 100);
 
   // Initialize tab from URL on mount (only if URL has tab param and it differs from initial state)
   useEffect(() => {
@@ -256,8 +301,8 @@ const GraduateDashboard = ({ setUser, user }) => {
         },
         'completed': { 
           permissions: ['view_research'], 
-          feature: 'Completed Thesis', 
-          context: 'You will not be able to view completed thesis.',
+          feature: 'Completed Research', 
+          context: 'You will not be able to view completed research.',
           redirectTo: 'chapters'
         },
         'documents': { 
@@ -327,9 +372,12 @@ const GraduateDashboard = ({ setUser, user }) => {
       if (res.data.length > 0) {
         const research = res.data[0]; // Assuming student has one main research
         const progress = {
+          preliminary: research.forms?.some(f => f.type === 'preliminary' && f.status === 'approved') || false,
           chapter1: research.forms?.some(f => f.type === 'chapter1' && f.status === 'approved') || false,
           chapter2: research.forms?.some(f => f.type === 'chapter2' && f.status === 'approved') || false,
           chapter3: research.forms?.some(f => f.type === 'chapter3' && f.status === 'approved') || false,
+          chapter4: research.forms?.some(f => f.type === 'chapter4' && f.status === 'approved') || false,
+          chapter5: research.forms?.some(f => f.type === 'chapter5' && f.status === 'approved') || false,
         };
         setUploadProgress(progress);
       }
@@ -379,7 +427,7 @@ const GraduateDashboard = ({ setUser, user }) => {
         );
         acc[chapter.chapterType] = Boolean(approvedSubmission);
         return acc;
-      }, { chapter1: false, chapter2: false, chapter3: false });
+      }, { preliminary: false, chapter1: false, chapter2: false, chapter3: false, chapter4: false, chapter5: false });
 
       setUploadProgress((prev) => ({
         ...prev,
@@ -623,7 +671,7 @@ const GraduateDashboard = ({ setUser, user }) => {
     { id: "compliance", label: "Compliance Forms", icon: <FaFileAlt /> },
     { id: "schedule", label: "My Schedule", icon: <FaCalendar /> },
     { id: "progress", label: "Progress Tracking", icon: <FaChartLine /> },
-    { id: "completed", label: "Completed Thesis", icon: <FaCheckCircle /> },
+    { id: "completed", label: "Completed Research", icon: <FaCheckCircle /> },
     { id: "documents", label: "Documents", icon: <FaFileAlt /> },
   ];
 
@@ -663,14 +711,24 @@ const GraduateDashboard = ({ setUser, user }) => {
               completed: completedChapters,
               total: totalChapters,
               research: myResearch,
+              chapters: chapterData,
+              uploadProgress,
             }}
           feedback={adviserFeedback}
           />
         );
       case "completed":
-        return <CompletedThesis />;
+        return <CompletedResearch />;
       case "documents":
-        return <DocumentsView />;
+        return (
+          <DocumentsView
+            myResearch={myResearch}
+            onCompletedResearchUpload={handleChapterUpload}
+            uploading={loading}
+            uploadingChapter={uploadingChapter}
+            onResearchRefresh={fetchMyResearch}
+          />
+        );
       default:
         return null;
     }
@@ -942,24 +1000,23 @@ const ResearchChapters = ({
   onRefresh,
 }) => {
   const defaultTitles = useMemo(
-    () => ({
-      chapter1: "Chapter 1 - Introduction",
-      chapter2: "Chapter 2 - Literature Review",
-      chapter3: "Chapter 3 - Methodology",
-    }),
+    () => DRAFT_UPLOAD_LABELS,
     []
   );
 
-  const [selectedChapter, setSelectedChapter] = useState("chapter1");
+  const [selectedChapter, setSelectedChapter] = useState("preliminary");
   const [chapterTitle, setChapterTitle] = useState("");
   const [selectedFile, setSelectedFile] = useState(null);
   const [dragActive, setDragActive] = useState(false);
   const [formError, setFormError] = useState(null);
   const [formSuccess, setFormSuccess] = useState(null);
   const [expanded, setExpanded] = useState({
-    chapter1: true,
+    preliminary: true,
+    chapter1: false,
     chapter2: false,
     chapter3: false,
+    chapter4: false,
+    chapter5: false,
   });
   const [showPartModal, setShowPartModal] = useState(false);
   const [partName, setPartName] = useState("");
@@ -1148,6 +1205,9 @@ const ResearchChapters = ({
   const approvedSubmissions = useMemo(
     () =>
       chapters.reduce((acc, chapter) => {
+        if (!COUNTED_CHAPTER_TYPES.includes(chapter.chapterType)) {
+          return acc;
+        }
         const approved = chapter.submissions?.filter(
           (submission) => submission.status === "approved"
         );
@@ -1198,12 +1258,12 @@ const ResearchChapters = ({
         <div>
         <h2 className="text-xl font-bold text-gray-800">Research Chapters</h2>
           <p className="text-sm text-gray-500">
-            Upload thesis chapters individually, track review status, and access reviewer feedback.
+            Upload your draft sections individually, track review status, and access reviewer feedback.
           </p>
         </div>
         <div className="flex items-center gap-2 mt-2 md:mt-0">
           <div className="whitespace-nowrap px-3 py-1.5 bg-green-100 text-green-700 rounded-full text-xs font-medium border border-green-200">
-            {approvedSubmissions}/{Object.keys(progress).length} Chapters Reviewed
+            {approvedSubmissions}/{COUNTED_CHAPTER_TYPES.length} Chapters Reviewed
           </div>
           <div className="whitespace-nowrap px-3 py-1.5 bg-blue-100 text-blue-700 rounded-full text-xs font-medium border border-blue-200">
             {totalSubmissions} Submission{totalSubmissions !== 1 ? "s" : ""}
@@ -1215,13 +1275,13 @@ const ResearchChapters = ({
         <div className="p-5 border-b border-gray-200">
           <h3 className="text-lg font-semibold text-gray-800 mb-2 flex items-center gap-2">
             <FaUpload className="text-[#7C1D23]" />
-            Submit a Chapter for Review
+            Submit a Draft for Review
           </h3>
           <p className="text-sm text-gray-500">
-            Select the chapter, provide a title, and upload your latest draft. You can resubmit new versions at any time.
+            Select the section, provide a title, and upload your latest draft. You can resubmit new versions at any time.
           </p>
           <p className="mt-1 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2">
-            Note: Please upload your chapter as a <span className="font-semibold">PDF file</span> so your adviser can add comments and feedback directly on the document.
+            Note: Please upload your draft as a <span className="font-semibold">PDF file</span> so your adviser can add comments and feedback directly on the document.
           </p>
         </div>
         <div
@@ -1234,16 +1294,18 @@ const ResearchChapters = ({
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
-                Chapter
+                Section
               </label>
               <select
                 value={selectedChapter}
                 onChange={(e) => setSelectedChapter(e.target.value)}
                 className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23]/20 focus:border-[#7C1D23]"
               >
-                <option value="chapter1">Chapter 1 - Introduction</option>
-                <option value="chapter2">Chapter 2 - Literature Review</option>
-                <option value="chapter3">Chapter 3 - Methodology</option>
+                {DRAFT_UPLOAD_TYPES.map((chapterType) => (
+                  <option key={chapterType} value={chapterType}>
+                    {DRAFT_UPLOAD_LABELS[chapterType]}
+                  </option>
+                ))}
               </select>
             </div>
             <div>
@@ -1395,7 +1457,7 @@ const ResearchChapters = ({
               ) : (
                 <>
                   <FaUpload className="text-xs" />
-                  Upload Chapter
+                  Upload Draft
                 </>
               )}
                 </button>
@@ -1416,7 +1478,7 @@ const ResearchChapters = ({
           </div>
       ) : chapters.length === 0 ? (
         <div className="bg-white border border-gray-200 rounded-lg p-6 text-sm text-gray-500">
-          No chapter submissions yet. Upload your first chapter to begin the review process.
+          No draft submissions yet. Upload your first section to begin the review process.
         </div>
       ) : (
         <div className="space-y-4">
@@ -1455,9 +1517,11 @@ const ResearchChapters = ({
                     className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23]/20 focus:border-[#7C1D23]"
                   >
                     <option value="">All Chapters</option>
-                    <option value="chapter1">Chapter 1</option>
-                    <option value="chapter2">Chapter 2</option>
-                    <option value="chapter3">Chapter 3</option>
+                    {DRAFT_UPLOAD_TYPES.map((chapterType) => (
+                      <option key={chapterType} value={chapterType}>
+                        {DRAFT_UPLOAD_LABELS[chapterType]}
+                      </option>
+                    ))}
                   </select>
                 </div>
 
@@ -2878,20 +2942,146 @@ const ProgressTracking = ({ data, loading, error, onRefresh, fallback, feedback 
   const navigate = useNavigate();
   const [selectedMilestone, setSelectedMilestone] = useState(null);
 
+  const milestones = useMemo(() => {
+    const apiMilestones = Array.isArray(data?.milestones) ? data.milestones : [];
+    const milestoneMap = new Map(apiMilestones.map((milestone) => [milestone.id, milestone]));
+    const fallbackChapters = Array.isArray(fallback?.chapters) ? fallback.chapters : [];
+    const researchForms = Array.isArray(fallback?.research?.[0]?.forms)
+      ? fallback.research[0].forms
+      : [];
+    const uploadProgress = fallback?.uploadProgress || {};
+    const currentStage =
+      data?.research?.stage ||
+      fallback?.research?.[0]?.stage ||
+      null;
+    const currentResearchStatus =
+      data?.research?.status ||
+      fallback?.research?.[0]?.status ||
+      null;
+    const currentStageIndex = ADVISER_STAGE_PROGRESS_ORDER.indexOf(currentStage);
+    
+    const orderedMilestones = PROGRESS_MILESTONE_ORDER.map((chapterType) => {
+      const existingMilestone = milestoneMap.get(chapterType);
+      const chapterRecord = fallbackChapters.find(
+        (chapter) => chapter.chapterType === chapterType
+      );
+      const chapterSubmissions = Array.isArray(chapterRecord?.submissions)
+        ? [...chapterRecord.submissions]
+        : [];
+      const formSubmissions = researchForms
+        .filter((form) => form?.type === chapterType)
+        .map((form) => ({
+          status: form.status,
+          uploadedAt: form.uploadedAt,
+          filename: form.filename,
+          partName: form.partName || null,
+        }));
+      const mergedSubmissions = [...chapterSubmissions, ...formSubmissions].sort(
+        (a, b) => new Date(b.uploadedAt || 0) - new Date(a.uploadedAt || 0)
+      );
+      const latestSubmission = mergedSubmissions[0];
+      const hasAnySubmission = Boolean(
+        latestSubmission ||
+        mergedSubmissions.some((submission) =>
+          ["pending", "revision", "rejected", "approved"].includes(submission.status)
+        ) ||
+        existingMilestone?.status === "in-progress"
+      );
+
+      let mergedStatus = "not-started";
+      if (chapterType === "completed_research") {
+        if (currentResearchStatus === "completed") {
+          mergedStatus = "completed";
+        } else if (currentStage === "final") {
+          mergedStatus = "in-progress";
+        }
+      } else {
+        const milestoneStageIndex = ADVISER_STAGE_PROGRESS_ORDER.indexOf(chapterType);
+        if (currentStageIndex >= 0 && milestoneStageIndex >= 0) {
+          if (milestoneStageIndex < currentStageIndex) {
+            mergedStatus = "completed";
+          } else if (milestoneStageIndex === currentStageIndex) {
+            mergedStatus = "in-progress";
+          } else {
+            mergedStatus = "not-started";
+          }
+        } else if (currentStage === "defense") {
+          mergedStatus = "completed";
+        } else if (currentStage === "final") {
+          mergedStatus = "completed";
+        } else if (!currentStage && hasAnySubmission) {
+          mergedStatus = "in-progress";
+        }
+      }
+
+      const isCompletedResearch = chapterType === "completed_research";
+      const fallbackTitle =
+        chapterType === "completed_research"
+          ? "Completed Research"
+          : DRAFT_UPLOAD_LABELS[chapterType] || chapterType;
+      const submissionLink = isCompletedResearch
+        ? "/dashboard/graduate?tab=documents"
+        : "/dashboard/graduate?tab=chapters";
+
+      if (existingMilestone) {
+        return {
+          ...existingMilestone,
+          title: existingMilestone.title || fallbackTitle,
+          description:
+            existingMilestone.description ||
+            (isCompletedResearch
+              ? "Upload and get approval for your final completed research manuscript"
+              : `Submit and get approval for ${fallbackTitle}`),
+          status: mergedStatus,
+          completedAt: existingMilestone.completedAt || null,
+          startedAt: latestSubmission?.uploadedAt || existingMilestone.startedAt || null,
+          submissionLink: existingMilestone.submissionLink || submissionLink,
+        };
+      }
+
+      return {
+        id: chapterType,
+        title: fallbackTitle,
+        description: isCompletedResearch
+          ? "Upload and get approval for your final completed research manuscript"
+          : `Submit and get approval for ${fallbackTitle}`,
+        status: mergedStatus,
+        type: isCompletedResearch ? "final-document" : "chapter",
+        dueDate: null,
+        completedAt: null,
+        startedAt: latestSubmission?.uploadedAt || null,
+        submissionLink,
+      };
+    });
+
+    const extraMilestones = apiMilestones.filter(
+      (milestone) => !PROGRESS_MILESTONE_ORDER.includes(milestone.id)
+    );
+
+    return [...orderedMilestones, ...extraMilestones];
+  }, [data?.milestones, fallback?.chapters, fallback?.research, fallback?.uploadProgress]);
+
   useEffect(() => {
-    if (data?.milestones?.length) {
-      const exists = selectedMilestone && data.milestones.some((m) => m.id === selectedMilestone.id);
+    if (milestones.length) {
+      const exists = selectedMilestone && milestones.some((m) => m.id === selectedMilestone.id);
       if (!exists) {
-        setSelectedMilestone(data.milestones[0]);
+        setSelectedMilestone(milestones[0]);
       }
     } else if (!loading) {
       setSelectedMilestone(null);
     }
-  }, [data, loading, selectedMilestone]);
+  }, [loading, milestones, selectedMilestone]);
 
-  const percentage = data?.percentage ?? fallback?.percentage ?? 0;
-  const totalMilestones = data?.totalMilestones ?? fallback?.total ?? 0;
-  const completedCount = data?.completedCount ?? fallback?.completed ?? 0;
+  const requiredMilestones = milestones.filter((milestone) =>
+    REQUIRED_PROGRESS_MILESTONE_TYPES.includes(milestone.id)
+  );
+  const completedCount = requiredMilestones.filter(
+    (milestone) => milestone.status === "completed"
+  ).length;
+  const totalMilestones = requiredMilestones.length || fallback?.total || 0;
+  const percentage = data?.percentage ?? fallback?.percentage ?? (
+    totalMilestones > 0 ? Math.round((completedCount / totalMilestones) * 100) : 0
+  );
   const researchInfo = data?.research ?? (fallback?.research?.[0] ? {
     title: fallback.research[0].title,
     stage: fallback.research[0].stage,
@@ -2899,7 +3089,20 @@ const ProgressTracking = ({ data, loading, error, onRefresh, fallback, feedback 
   } : null);
   const upcomingDeadlines = data?.upcomingDeadlines ?? [];
   const notifications = data?.notifications ?? [];
-  const milestones = data?.milestones ?? [];
+  const chapterFeedback = useMemo(
+    () =>
+      (feedback || []).filter(
+        (item) =>
+          item &&
+          (item.commentCount > 0 || item.totalComments > 0) &&
+          (item.chapterType || item.chapterLabel)
+      ),
+    [feedback]
+  );
+  const selectedMilestoneFeedback = useMemo(() => {
+    if (!selectedMilestone?.id) return [];
+    return chapterFeedback.filter((item) => item.chapterType === selectedMilestone.id);
+  }, [chapterFeedback, selectedMilestone?.id]);
 
   const formatDate = (value) => {
     if (!value) return "Not set";
@@ -3202,8 +3405,8 @@ const ProgressTracking = ({ data, loading, error, onRefresh, fallback, feedback 
       <div className="bg-white rounded-lg border border-gray-200 p-5">
             <h3 className="text-sm font-semibold text-gray-800 mb-3">Recent Adviser Feedback</h3>
             <div className="space-y-3 max-h-80 overflow-y-auto">
-          {feedback && feedback.length > 0 ? (
-                feedback.slice(0, 5).map((item, index) => (
+          {selectedMilestoneFeedback.length > 0 ? (
+                selectedMilestoneFeedback.slice(0, 5).map((item, index) => (
               <div 
                 key={index} 
                     className={`p-3 rounded-lg border-l-4 ${
@@ -3232,6 +3435,9 @@ const ProgressTracking = ({ data, loading, error, onRefresh, fallback, feedback 
                         {new Date(item.createdAt).toLocaleDateString()}
                     </span>
                   </div>
+                    {item.chapterLabel && (
+                      <p className="text-xs font-medium text-[#7C1D23] mb-1">{item.chapterLabel}</p>
+                    )}
                     <p className="text-xs text-gray-500 capitalize mb-1">{item.type}</p>
                     <p className="text-sm text-gray-700 mb-2">{item.message}</p>
                     {item.file && (
@@ -3248,7 +3454,11 @@ const ProgressTracking = ({ data, loading, error, onRefresh, fallback, feedback 
               </div>
             ))
           ) : (
-                <p className="text-sm text-gray-500">No feedback yet.</p>
+                <p className="text-sm text-gray-500">
+                  {selectedMilestone?.title
+                    ? `No adviser feedback for ${selectedMilestone.title} yet.`
+                    : "No chapter feedback with adviser comments yet."}
+                </p>
               )}
             </div>
           </div>
@@ -3258,9 +3468,9 @@ const ProgressTracking = ({ data, loading, error, onRefresh, fallback, feedback 
   );
 };
 
-// Completed Thesis Component
-const CompletedThesis = () => {
-  const [completedThesis, setCompletedThesis] = useState([]);
+// Completed Research Component
+const CompletedResearch = () => {
+  const [completedResearch, setCompletedResearch] = useState([]);
   const [loading, setLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [semesterFilter, setSemesterFilter] = useState("");
@@ -3269,10 +3479,10 @@ const CompletedThesis = () => {
   const [showDetails, setShowDetails] = useState(false);
 
   useEffect(() => {
-    fetchCompletedThesis();
+    fetchCompletedResearch();
   }, [semesterFilter, academicYearFilter]);
 
-  const fetchCompletedThesis = async () => {
+  const fetchCompletedResearch = async () => {
     setLoading(true);
     try {
       const token = localStorage.getItem('token');
@@ -3284,16 +3494,16 @@ const CompletedThesis = () => {
       const res = await axios.get(`/api/student/completed-thesis?${params.toString()}`, {
         headers: { Authorization: `Bearer ${token}` }
       });
-      setCompletedThesis(res.data);
+      setCompletedResearch(res.data);
     } catch (error) {
-      console.error('Error fetching completed thesis:', error);
+      console.error('Error fetching completed research:', error);
     } finally {
       setLoading(false);
     }
   };
 
   const handleSearch = () => {
-    fetchCompletedThesis();
+    fetchCompletedResearch();
   };
 
   const handleViewDetails = async (thesis) => {
@@ -3313,10 +3523,10 @@ const CompletedThesis = () => {
 
 
   // Get unique academic years for filter
-  const academicYears = [...new Set(completedThesis.map(t => t.academicYear).filter(Boolean))].sort().reverse();
+  const academicYears = [...new Set(completedResearch.map(t => t.academicYear).filter(Boolean))].sort().reverse();
 
   // Filter by search query
-  const filteredThesis = completedThesis.filter(thesis => {
+  const filteredThesis = completedResearch.filter(thesis => {
     if (!searchQuery) return true;
     const query = searchQuery.toLowerCase();
     return thesis.title.toLowerCase().includes(query) ||
@@ -3351,10 +3561,13 @@ const CompletedThesis = () => {
     }
   };
 
+  const getRecommendationLabel = (recommendation) =>
+    PANEL_RECOMMENDATION_LABELS[recommendation] || recommendation || "N/A";
+
   return (
     <div className="space-y-5">
       <div className="flex justify-between items-center">
-        <h2 className="text-xl font-bold text-gray-800">Completed Thesis</h2>
+        <h2 className="text-xl font-bold text-gray-800">Completed Research</h2>
       </div>
 
       {/* Filters and Search */}
@@ -3423,7 +3636,7 @@ const CompletedThesis = () => {
       ) : filteredThesis.length === 0 ? (
         <div className="bg-white rounded-lg border border-gray-200 p-8 text-center">
               <FaFileAlt className="mx-auto h-12 w-12 text-gray-400 mb-3" />
-          <p className="text-gray-500 text-sm">No completed thesis found.</p>
+          <p className="text-gray-500 text-sm">No completed research found.</p>
             </div>
       ) : (
         <div className="space-y-4">
@@ -3603,7 +3816,7 @@ const CompletedThesis = () => {
                           )}
                         </div>
                         <span className={`px-2 py-1 rounded-full text-xs font-medium ${getRecommendationColor(feedback.recommendation)}`}>
-                          {feedback.recommendation || 'N/A'}
+                          {getRecommendationLabel(feedback.recommendation)}
                         </span>
                       </div>
                       {feedback.comments && (
@@ -3654,11 +3867,21 @@ const CompletedThesis = () => {
 };
 
 // Documents View Component
-const DocumentsView = () => {
+const DocumentsView = ({
+  myResearch = [],
+  onCompletedResearchUpload,
+  uploading,
+  uploadingChapter,
+  onResearchRefresh,
+}) => {
   const [documents, setDocuments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("all");
+  const [finalTitle, setFinalTitle] = useState("");
+  const [finalUploadError, setFinalUploadError] = useState("");
+  const [finalUploadSuccess, setFinalUploadSuccess] = useState("");
+  const [finalSelectedFile, setFinalSelectedFile] = useState(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(10);
   const [viewerOpen, setViewerOpen] = useState(false);
@@ -3667,6 +3890,13 @@ const DocumentsView = () => {
   const [viewerUrl, setViewerUrl] = useState(null);
   const [docViewerBlob, setDocViewerBlob] = useState(null);
   const docViewerContainerRef = useRef(null);
+  const finalFileInputRef = useRef(null);
+
+  const activeResearch = myResearch[0] || null;
+  const completedResearchSubmissions = (activeResearch?.forms || [])
+    .filter((form) => form.type === "completed_research")
+    .sort((a, b) => new Date(b.uploadedAt) - new Date(a.uploadedAt));
+  const isUploadingCompletedResearch = Boolean(uploading && uploadingChapter === "completed_research");
 
   useEffect(() => {
     fetchDocuments();
@@ -3683,11 +3913,22 @@ const DocumentsView = () => {
         return;
       }
       
-      const response = await axios.get('/api/student/documents', {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      console.log('Documents fetched successfully:', response.data.length, 'documents');
-      setDocuments(response.data);
+      const [documentsResponse, panelDocumentsResponse] = await Promise.all([
+        axios.get('/api/student/documents', {
+          headers: { Authorization: `Bearer ${token}` }
+        }),
+        axios.get('/api/student/panel-documents', {
+          headers: { Authorization: `Bearer ${token}` }
+        }),
+      ]);
+      const mergedDocuments = [...(panelDocumentsResponse.data || []), ...(documentsResponse.data || [])]
+        .filter((doc, index, list) => {
+          const key = `${doc.sourceType || 'global'}:${doc.panelId || ''}:${doc._id}`;
+          return index === list.findIndex((item) => `${item.sourceType || 'global'}:${item.panelId || ''}:${item._id}` === key);
+        })
+        .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+      console.log('Documents fetched successfully:', mergedDocuments.length, 'documents');
+      setDocuments(mergedDocuments);
     } catch (error) {
       console.error('Error fetching documents:', error);
       if (error.response) {
@@ -3702,10 +3943,201 @@ const DocumentsView = () => {
     }
   };
 
+  const resetCompletedResearchForm = () => {
+    setFinalSelectedFile(null);
+    setFinalTitle("");
+    setFinalUploadError("");
+    if (finalFileInputRef.current) {
+      finalFileInputRef.current.value = "";
+    }
+  };
+
+  const handleCompletedResearchFileSelect = (file) => {
+    if (!file) return;
+
+    if (file.isDriveFile && file.driveFileId && file.accessToken) {
+      setFinalSelectedFile(file);
+      setFinalUploadError("");
+      return;
+    }
+
+    const allowedTypes = [
+      "application/pdf",
+      "application/msword",
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ];
+
+    if (!allowedTypes.includes(file.type)) {
+      setFinalUploadError("Unsupported file type. Please upload a PDF or Word document.");
+      return;
+    }
+
+    if (file.size > 10 * 1024 * 1024) {
+      setFinalUploadError("File size exceeds the 10MB limit.");
+      return;
+    }
+
+    setFinalSelectedFile(file);
+    setFinalUploadError("");
+  };
+
+  const handleCompletedResearchDriveFile = (fileInfo) => {
+    if (!fileInfo?.id || !fileInfo?.accessToken) {
+      setFinalUploadError("Failed to get Google Drive file information. Please try again.");
+      return;
+    }
+
+    setFinalSelectedFile({
+      name: fileInfo.name,
+      driveFileId: fileInfo.id,
+      accessToken: fileInfo.accessToken,
+      mimeType: fileInfo.mimeType,
+      size: fileInfo.size,
+      isDriveFile: true,
+    });
+    setFinalUploadError("");
+  };
+
+  const handleCompletedResearchUpload = async () => {
+    if (!activeResearch?._id) {
+      setFinalUploadError("No active research found for final manuscript upload.");
+      return;
+    }
+
+    if (!finalSelectedFile) {
+      setFinalUploadError("Please select the completed research file to upload.");
+      return;
+    }
+
+    setFinalUploadError("");
+    setFinalUploadSuccess("");
+
+    try {
+      await onCompletedResearchUpload({
+        chapterType: "completed_research",
+        chapterTitle: finalTitle.trim(),
+        partName: null,
+        file: finalSelectedFile,
+      });
+      setFinalUploadSuccess("Completed research uploaded successfully and is now pending review.");
+      resetCompletedResearchForm();
+      await onResearchRefresh?.();
+      setTimeout(() => setFinalUploadSuccess(""), 4000);
+    } catch (error) {
+      setFinalUploadError(
+        error?.response?.data?.message || error?.message || "Failed to upload completed research."
+      );
+    }
+  };
+
+  const handleCompletedResearchDownload = async (submission) => {
+    try {
+      const token = localStorage.getItem("token");
+      const response = await axios.get(`/api/student/chapter-submissions/${submission._id}/download`, {
+        headers: { Authorization: `Bearer ${token}` },
+        responseType: "blob",
+      });
+
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement("a");
+      link.href = url;
+      link.setAttribute("download", submission.filename || "completed_research");
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error("Error downloading completed research:", error);
+      showError("Error", error.response?.data?.message || "Error downloading completed research");
+    }
+  };
+
+  const handleCompletedResearchDelete = async (submission) => {
+    if (submission.status === 'approved') return;
+
+    try {
+      const result = await showDangerConfirm(
+        'Delete Submission',
+        `Are you sure you want to delete ${submission.filename}? This action cannot be undone.`
+      );
+
+      if (result.isConfirmed) {
+        setLoading(true);
+        const token = localStorage.getItem('token');
+        await axios.delete(`/api/student/chapter-submissions/${submission._id}`, {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        
+        await fetchMyResearch();
+        Swal.fire({
+          title: 'Deleted!',
+          text: 'The submission has been deleted successfully.',
+          icon: 'success',
+          confirmButtonColor: '#7C1D23',
+          confirmButtonText: 'OK'
+        });
+      }
+    } catch (error) {
+      console.error("Error deleting final document:", error);
+      showError("Error", error.response?.data?.message || "Failed to delete submission");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleCompletedResearchView = async (submission) => {
+    try {
+      const token = localStorage.getItem("token");
+      const filename = submission.filename || "";
+      const extension = filename.split(".").pop()?.toLowerCase();
+      const mimeType = submission.driveMimeType || "";
+      setViewerTitle(filename || "Completed Research");
+
+      if (
+        extension === "docx" ||
+        extension === "doc" ||
+        mimeType.includes("wordprocessingml") ||
+        mimeType.includes("msword")
+      ) {
+        const response = await axios.get(`/api/student/chapter-submissions/${submission._id}/view`, {
+          headers: { Authorization: `Bearer ${token}` },
+          responseType: "arraybuffer",
+        });
+        setDocViewerBlob(response.data);
+        setViewerType("docx");
+        setViewerUrl(null);
+      } else {
+        const response = await axios.get(`/api/student/chapter-submissions/${submission._id}/view`, {
+          headers: { Authorization: `Bearer ${token}` },
+          responseType: "blob",
+        });
+        const contentType = response.headers["content-type"] || mimeType || "application/pdf";
+        const blob = new Blob([response.data], { type: contentType });
+        const url = URL.createObjectURL(blob);
+        setViewerType("pdf");
+        setViewerUrl(url);
+        setDocViewerBlob(null);
+      }
+
+      setViewerOpen(true);
+    } catch (error) {
+      console.error("Error viewing completed research:", error);
+      showError("Error", error.response?.data?.message || "Error viewing completed research");
+    }
+  };
+
   const handleDownload = async (doc) => {
     try {
       const token = localStorage.getItem('token');
-      const response = await axios.get(`/api/student/documents/${doc._id}/download`, {
+      let downloadUrl = `/api/student/documents/${doc._id}/download`;
+      
+      if (doc.sourceType === 'panel') {
+        downloadUrl = `/api/student/panels/${doc.panelId}/documents/${doc._id}/download`;
+      } else if (doc.sourceType === 'research') {
+        downloadUrl = `/api/student/research/${doc.researchId}/documents/${doc._id}/download`;
+      }
+
+      const response = await axios.get(downloadUrl, {
         headers: { Authorization: `Bearer ${token}` },
         responseType: 'blob'
       });
@@ -3734,13 +4166,20 @@ const DocumentsView = () => {
       setViewerTitle(doc.title || filename || 'Document');
 
       // Use DOCX preview for Word documents
+      let viewUrl = `/api/student/documents/${doc._id}`;
+      
+      if (doc.sourceType === 'panel') {
+        viewUrl = `/api/student/panels/${doc.panelId}/documents/${doc._id}`;
+      } else if (doc.sourceType === 'research') {
+        viewUrl = `/api/student/research/${doc.researchId}/documents/${doc._id}`;
+      }
       if (
         extension === 'docx' ||
         extension === 'doc' ||
         mimeType.includes('wordprocessingml') ||
         mimeType.includes('msword')
       ) {
-        const response = await axios.get(`/api/student/documents/${doc._id}`, {
+        const response = await axios.get(viewUrl, {
           headers: { Authorization: `Bearer ${token}` },
           responseType: 'arraybuffer'
         });
@@ -3755,7 +4194,7 @@ const DocumentsView = () => {
         setViewerOpen(true);
       } else {
         // For PDF and other types, show in an embedded viewer
-      const response = await axios.get(`/api/student/documents/${doc._id}`, {
+      const response = await axios.get(viewUrl, {
         headers: { Authorization: `Bearer ${token}` },
         responseType: 'blob'
       });
@@ -3795,18 +4234,11 @@ const DocumentsView = () => {
       template: 'bg-green-100 text-green-700',
       guideline: 'bg-purple-100 text-purple-700',
       policy: 'bg-red-100 text-red-700',
+      panel: 'bg-amber-100 text-amber-700',
       other: 'bg-gray-100 text-gray-700'
     };
     return colors[category] || colors.other;
   };
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <div className="text-gray-500">Loading documents...</div>
-      </div>
-    );
-  }
 
   return (
     <div className="space-y-5">
@@ -3862,6 +4294,189 @@ const DocumentsView = () => {
           </div>
         </div>
       )}
+
+      <div className="bg-white rounded-lg border border-gray-200 p-5 space-y-4">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h2 className="text-xl font-bold text-gray-800">Completed Research Submission</h2>
+            <p className="text-sm text-gray-500">
+              Upload the final approved manuscript here. This final submission is separate from draft chapter uploads.
+            </p>
+          </div>
+          <span className="text-xs px-3 py-1.5 rounded-full bg-blue-100 text-blue-700 font-medium">
+            {completedResearchSubmissions.length} submission{completedResearchSubmissions.length !== 1 ? "s" : ""}
+          </span>
+        </div>
+
+        {!activeResearch ? (
+          <div className="rounded-md border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+            No active research found. You need an assigned research record before uploading the completed manuscript.
+          </div>
+        ) : (
+          <>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Submission Title <span className="text-gray-400 text-xs">(optional)</span>
+                </label>
+                <input
+                  type="text"
+                  value={finalTitle}
+                  onChange={(e) => setFinalTitle(e.target.value)}
+                  placeholder="Completed Research Manuscript"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-[#7C1D23]"
+                />
+              </div>
+              <div className="flex items-end gap-3">
+                <button
+                  type="button"
+                  onClick={() => finalFileInputRef.current?.click()}
+                  className="px-4 py-2 bg-[#7C1D23] text-white rounded-md hover:bg-[#5a1519] transition-colors text-sm font-medium"
+                >
+                  Select File from Computer
+                </button>
+                <DriveUploader
+                  defaultType="chapter"
+                  driveButtonLabel="Upload from Google Drive"
+                  buttonBg="#7C1D23"
+                  buttonTextColor="#ffffff"
+                  skipBackendSave={true}
+                  onFilePicked={handleCompletedResearchDriveFile}
+                />
+                <input
+                  ref={finalFileInputRef}
+                  type="file"
+                  className="hidden"
+                  accept=".pdf,.doc,.docx"
+                  onChange={(event) => handleCompletedResearchFileSelect(event.target.files?.[0])}
+                />
+              </div>
+            </div>
+
+            {finalSelectedFile && (
+              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-gray-50 border border-gray-200 text-sm text-gray-700">
+                <FaFileAlt className="text-gray-500" />
+                <span className="truncate max-w-xs">{finalSelectedFile.name}</span>
+                <button
+                  type="button"
+                  onClick={resetCompletedResearchForm}
+                  className="text-red-500 hover:text-red-600 text-xs"
+                >
+                  Remove
+                </button>
+              </div>
+            )}
+
+            {finalUploadError && (
+              <div className="flex items-start gap-2 text-sm text-red-600 bg-red-50 border border-red-200 rounded-md p-3">
+                <FaTimesCircle className="mt-0.5" />
+                <span>{finalUploadError}</span>
+              </div>
+            )}
+
+            {finalUploadSuccess && (
+              <div className="flex items-start gap-2 text-sm text-green-700 bg-green-50 border border-green-200 rounded-md p-3">
+                <FaCheckCircle className="mt-0.5 text-green-600" />
+                <span>{finalUploadSuccess}</span>
+              </div>
+            )}
+
+            <div className="flex justify-end gap-3">
+              {finalSelectedFile && (
+                <button
+                  type="button"
+                  onClick={resetCompletedResearchForm}
+                  className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-md transition-colors"
+                  disabled={isUploadingCompletedResearch}
+                >
+                  Clear
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={handleCompletedResearchUpload}
+                disabled={!finalSelectedFile || isUploadingCompletedResearch}
+                className="px-4 py-2 bg-[#7C1D23] text-white rounded-md hover:bg-[#5a1519] transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm font-medium"
+              >
+                {isUploadingCompletedResearch ? "Uploading..." : "Upload Completed Research"}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+
+      <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+        <div className="px-5 py-4 border-b border-gray-200 flex items-center justify-between gap-3">
+          <div>
+            <h3 className="text-lg font-semibold text-gray-800">My Final Manuscript Uploads</h3>
+            <p className="text-sm text-gray-500">These are the completed research files you submitted for final review.</p>
+          </div>
+        </div>
+        {completedResearchSubmissions.length === 0 ? (
+          <div className="p-8 text-center text-gray-500 text-sm">
+            No completed research submissions yet.
+          </div>
+        ) : (
+          <div className="divide-y divide-gray-200">
+            {completedResearchSubmissions.map((submission) => (
+              <div key={submission._id} className="p-4 hover:bg-gray-50 transition-colors">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2 mb-2">
+                      <FaFileAlt className="text-[#7C1D23] h-5 w-5" />
+                      <h4 className="text-base font-semibold text-gray-900">{submission.filename}</h4>
+                      <span className={`px-2 py-1 rounded-full text-xs font-medium ${
+                        submission.status === "approved"
+                          ? "bg-green-100 text-green-700"
+                          : submission.status === "rejected"
+                            ? "bg-red-100 text-red-700"
+                            : submission.status === "revision"
+                              ? "bg-orange-100 text-orange-700"
+                              : "bg-yellow-100 text-yellow-700"
+                      }`}>
+                        {submission.status || "pending"}
+                      </span>
+                    </div>
+                    <p className="text-xs text-gray-500">
+                      Uploaded {submission.uploadedAt ? new Date(submission.uploadedAt).toLocaleString() : "N/A"}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => handleCompletedResearchView(submission)}
+                      className="px-3 py-2 border border-gray-300 text-gray-700 rounded-md hover:bg-gray-100 transition-colors text-sm"
+                    >
+                      View
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleCompletedResearchDownload(submission)}
+                      className="px-3 py-2 bg-[#7C1D23] text-white rounded-md hover:bg-[#5a1519] transition-colors text-sm"
+                    >
+                      Download
+                    </button>
+                    {submission.status !== 'approved' ? (
+                      <button
+                        type="button"
+                        onClick={() => handleCompletedResearchDelete(submission)}
+                        className="px-3 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 transition-colors text-sm"
+                      >
+                        Delete
+                      </button>
+                    ) : (
+                      <span className="text-xs text-gray-500 italic mt-2">
+                        Approved submissions cannot be deleted
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
       <div className="flex justify-between items-center">
         <h2 className="text-xl font-bold text-gray-800">Available Documents</h2>
         <span className="text-sm text-gray-600">{filteredDocuments.length} document(s)</span>
@@ -3887,18 +4502,23 @@ const DocumentsView = () => {
             >
               <option value="all">All Categories</option>
               <option value="form">Forms</option>
-              <option value="template">Templates</option>
-              <option value="guideline">Guidelines</option>
-              <option value="policy">Policies</option>
-              <option value="other">Other</option>
-            </select>
+            <option value="template">Templates</option>
+            <option value="guideline">Guidelines</option>
+            <option value="policy">Policies</option>
+            <option value="panel">Panel Uploads</option>
+            <option value="other">Other</option>
+          </select>
           </div>
         </div>
       </div>
 
       {/* Documents List */}
       <div className="bg-white rounded-lg border border-gray-200">
-        {filteredDocuments.length === 0 ? (
+        {loading ? (
+          <div className="p-8 text-center text-gray-500">
+            Loading documents...
+          </div>
+        ) : filteredDocuments.length === 0 ? (
           <div className="p-8 text-center text-gray-500">
             No documents available
           </div>
@@ -3923,6 +4543,11 @@ const DocumentsView = () => {
                     </div>
                     {doc.description && (
                       <p className="text-sm text-gray-600 mb-2">{doc.description}</p>
+                    )}
+                    {doc.sourceType === 'panel' && (
+                      <p className="text-sm text-amber-700 mb-2">
+                        From {doc.researchTitle || 'your research'}{doc.panelName ? ` - ${doc.panelName}` : ''}
+                      </p>
                     )}
                     <div className="flex items-center space-x-4 text-xs text-gray-500">
                       <span>Uploaded by: {doc.uploadedBy?.name || 'Unknown'}</span>

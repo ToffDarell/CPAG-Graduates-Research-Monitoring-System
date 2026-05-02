@@ -153,6 +153,7 @@ const seedRBAC = async () => {
 
     // Faculty Adviser role
     const facultyPermissions = [
+      createdPermissions["upload_documents"],
       createdPermissions["view_documents"],
       createdPermissions["download_documents"],
       createdPermissions["comment_documents"],
@@ -182,6 +183,7 @@ const seedRBAC = async () => {
 
     // Program Head role
     const programHeadPermissions = [
+      createdPermissions["upload_documents"],
       createdPermissions["view_documents"],
       createdPermissions["download_documents"],
       createdPermissions["approve_documents"],
@@ -295,4 +297,3 @@ const seedRBAC = async () => {
 };
 
 seedRBAC();
-

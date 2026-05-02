@@ -16,6 +16,104 @@ const localizer = momentLocalizer(moment);
 const sanitizePanelistFullName = (value = "") => value.replace(/\d+/g, "");
 const hasNumberInName = (value = "") => /\d/.test(value);
 
+const PANEL_TYPE_OPTIONS = [
+  { value: "title_defense", label: "Stage 0 - Title Defense" },
+  { value: "proposal", label: "Stage 1 - Proposal" },
+  { value: "oral_examination_manuscript", label: "Stage 2 - Oral Examination and Manuscript" },
+  { value: "oral_defense", label: "Stage 3 - Final Oral Defense" },
+];
+
+const UNIVERSITY_GRADE_OPTIONS = Array.from({ length: 17 }, (_, index) => (1 + index * 0.25).toFixed(2));
+
+const PANEL_TYPE_LABELS = Object.fromEntries(PANEL_TYPE_OPTIONS.map((option) => [option.value, option.label]));
+
+const INTERNAL_ROLE_OPTIONS = [
+  {
+    key: "chair_internal_content",
+    role: "chair",
+    memberCategory: "internal",
+    specialization: "content",
+    label: "Chair",
+  },
+  {
+    key: "member_internal_content",
+    role: "member",
+    memberCategory: "internal",
+    specialization: "content",
+    label: "Member (Internal / Content Specialist)",
+  },
+  {
+    key: "member_internal_method",
+    role: "member",
+    memberCategory: "internal",
+    specialization: "method",
+    label: "Member (Internal / Method Specialist)",
+  },
+  {
+    key: "adviser_content",
+    role: "adviser",
+    memberCategory: "adviser",
+    specialization: "content",
+    label: "Adviser (Content Specialist)",
+  },
+];
+
+const EXTERNAL_ROLE_OPTIONS = [
+  {
+    key: "member_external_content",
+    role: "member",
+    memberCategory: "external",
+    specialization: "content",
+    label: "Member (External / Content Specialist)",
+  },
+];
+
+const ROLE_OPTION_MAP = Object.fromEntries(
+  [...INTERNAL_ROLE_OPTIONS, ...EXTERNAL_ROLE_OPTIONS].map((option) => [option.key, option])
+);
+
+const getPanelTypeLabel = (value = "") => PANEL_TYPE_LABELS[value] || value.replace(/_/g, " ");
+const isStage3PanelType = (value = "") => ["oral_defense", "final_defense"].includes(value);
+const calculateAveragePanelGrade = (reviews = []) => {
+  const grades = reviews
+    .map((review) => Number(String(review.grade || "").replace(",", ".")))
+    .filter((grade) => !Number.isNaN(grade));
+
+  if (!grades.length) {
+    return "";
+  }
+
+  const average = grades.reduce((sum, grade) => sum + grade, 0) / grades.length;
+  return (Math.round(average * 4) / 4).toFixed(2);
+};
+
+const getPanelRoleLabel = (member = {}) => {
+  if (member.role === "chair") return "Chair";
+  if (member.role === "adviser" || member.memberCategory === "adviser") return "Adviser (Content Specialist)";
+  if (member.role === "member" && member.memberCategory === "external") return "Member (External / Content Specialist)";
+  if (member.role === "member" && member.specialization === "method") return "Member (Internal / Method Specialist)";
+  if (member.role === "member") return "Member (Internal / Content Specialist)";
+  if (member.role === "external_examiner") return "Member (External / Content Specialist)";
+  if (member.role === "secretary") return "Secretary";
+  return member.role?.replace(/_/g, " ") || "Member";
+};
+
+const mapPanelTypeToScheduleType = (value = "") => {
+  if (["title_defense", "proposal", "oral_examination_manuscript", "oral_defense"].includes(value)) {
+    return value;
+  }
+
+  if (value === "final_defense") {
+    return "oral_defense";
+  }
+
+  if (value === "proposal_defense") {
+    return "proposal";
+  }
+
+  return "proposal";
+};
+
 // Helper function to handle permission errors
 const handlePermissionError = (error, defaultMessage = 'Operation failed') => {
   if (error?.response?.status === 403) {
@@ -669,7 +767,7 @@ const PanelSelection = () => {
   const [panelForm, setPanelForm] = useState({
     name: '',
     description: '',
-    type: 'oral_defense',
+    type: 'title_defense',
     researchId: '',
   });
   const [availablePanelists, setAvailablePanelists] = useState([]);
@@ -677,7 +775,7 @@ const PanelSelection = () => {
   const [selectedMembers, setSelectedMembers] = useState([]); // [{faculty, role}]
   const [panels, setPanels] = useState([]);
   const [inviteMode, setInviteMode] = useState(false); // Toggle between select/invite
-  const [inviteForm, setInviteForm] = useState({ name: '', email: '', role: 'member', reviewDeadline: '' });
+  const [inviteForm, setInviteForm] = useState({ name: '', email: '', role: EXTERNAL_ROLE_OPTIONS[0].key, reviewDeadline: '' });
   const [inviting, setInviting] = useState(false);
   const [loading, setLoading] = useState(false);
   
@@ -723,10 +821,17 @@ const PanelSelection = () => {
     fetchAll();
   }, []);
 
-  const handleAddMember = (facultyId, role) => {
-    if (!facultyId || !role) return;
+  const handleAddMember = (facultyId, roleKey) => {
+    if (!facultyId || !roleKey) return;
     if (selectedMembers.find(m => m.faculty === facultyId)) return;
-    setSelectedMembers(prev => [...prev, { faculty: facultyId, role }]);
+    const roleConfig = ROLE_OPTION_MAP[roleKey];
+    if (!roleConfig) return;
+    setSelectedMembers(prev => [...prev, {
+      faculty: facultyId,
+      role: roleConfig.role,
+      memberCategory: roleConfig.memberCategory,
+      specialization: roleConfig.specialization,
+    }]);
   };
 
   const handleRemoveMember = (facultyId) => {
@@ -810,6 +915,8 @@ const PanelSelection = () => {
             name: member.name,
             email: member.email,
             role: member.role,
+            memberCategory: member.memberCategory,
+            specialization: member.specialization,
             reviewDeadline: member.reviewDeadline || undefined,
           }, { headers })
         );
@@ -836,7 +943,7 @@ const PanelSelection = () => {
       setPanels(panelsRes.data || []);
       setAvailableResearch(unassignedResearch);
       
-      setPanelForm({ name: '', description: '', type: 'oral_defense', researchId: '' });
+      setPanelForm({ name: '', description: '', type: 'title_defense', researchId: '' });
       setSelectedMembers([]);
       setInviteMode(false);
       
@@ -901,12 +1008,14 @@ const PanelSelection = () => {
         panelId,
         name: inviteForm.name.trim(),
         email: inviteForm.email,
-        role: inviteForm.role,
+        role: ROLE_OPTION_MAP[inviteForm.role]?.role || "member",
+        memberCategory: ROLE_OPTION_MAP[inviteForm.role]?.memberCategory || "external",
+        specialization: ROLE_OPTION_MAP[inviteForm.role]?.specialization || "content",
         reviewDeadline: inviteForm.reviewDeadline || undefined,
       }, { headers });
 
       await showSuccess('Invitation Sent', res.data.message || 'Invitation sent successfully!');
-      setInviteForm({ name: '', email: '', role: 'member', reviewDeadline: '' });
+      setInviteForm({ name: '', email: '', role: EXTERNAL_ROLE_OPTIONS[0].key, reviewDeadline: '' });
       setInviteMode(false);
 
       // Refresh panels list
@@ -1127,10 +1236,9 @@ const PanelSelection = () => {
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Defense Type</label>
               <select value={panelForm.type} onChange={e => setPanelForm({ ...panelForm, type: e.target.value })} className="w-full px-4 py-2 rounded-md border border-gray-300 focus:border-[#7C1D23] focus:ring-2 focus:ring-[#7C1D23]/20 text-sm">
-                <option value="oral_defense">Oral Defense</option>
-                <option value="thesis_review">Thesis Review</option>
-                <option value="proposal_defense">Proposal Defense</option>
-                <option value="final_defense">Final Defense</option>
+                {PANEL_TYPE_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
               </select>
             </div>
           </div>
@@ -1200,10 +1308,9 @@ const PanelSelection = () => {
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Role</label>
                 <select id="roleSelect" className="w-full px-4 py-2 rounded-md border border-gray-300 focus:border-[#7C1D23] focus:ring-2 focus:ring-[#7C1D23]/20 text-sm">
-                  <option value="chair">Chair</option>
-                  <option value="member">Member</option>
-                  <option value="secretary">Secretary</option>
-                  <option value="external_examiner">External Examiner</option>
+                  {INTERNAL_ROLE_OPTIONS.map((option) => (
+                    <option key={option.key} value={option.key}>{option.label}</option>
+                  ))}
                 </select>
               </div>
               <div>
@@ -1249,10 +1356,9 @@ const PanelSelection = () => {
                     onChange={e => setInviteForm({ ...inviteForm, role: e.target.value })}
                     className="w-full px-4 py-2 rounded-md border border-gray-300 focus:border-[#7C1D23] focus:ring-2 focus:ring-[#7C1D23]/20 text-sm"
                   >
-                    <option value="chair">Chair</option>
-                    <option value="member">Member</option>
-                    <option value="secretary">Secretary</option>
-                    <option value="external_examiner">External Examiner</option>
+                    {EXTERNAL_ROLE_OPTIONS.map((option) => (
+                      <option key={option.key} value={option.key}>{option.label}</option>
+                    ))}
                   </select>
                 </div>
                 <div>
@@ -1269,7 +1375,7 @@ const PanelSelection = () => {
                 <button
                   type="button"
                   onClick={() => {
-                    setInviteForm({ name: '', email: '', role: 'member', reviewDeadline: '' });
+                    setInviteForm({ name: '', email: '', role: EXTERNAL_ROLE_OPTIONS[0].key, reviewDeadline: '' });
                     setInviteMode(false);
                   }}
                   className="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors mr-2"
@@ -1310,9 +1416,17 @@ const PanelSelection = () => {
                     }
                     
                     // This will be handled after panel creation - store invite data for now
-                    const inviteData = { ...inviteForm, name: inviteForm.name.trim(), isExternal: true };
+                    const roleConfig = ROLE_OPTION_MAP[inviteForm.role];
+                    const inviteData = {
+                      ...inviteForm,
+                      name: inviteForm.name.trim(),
+                      role: roleConfig?.role || "member",
+                      memberCategory: roleConfig?.memberCategory || "external",
+                      specialization: roleConfig?.specialization || "content",
+                      isExternal: true,
+                    };
                     setSelectedMembers(prev => [...prev, inviteData]);
-                    setInviteForm({ name: '', email: '', role: 'member', reviewDeadline: '' });
+                    setInviteForm({ name: '', email: '', role: EXTERNAL_ROLE_OPTIONS[0].key, reviewDeadline: '' });
                     setInviteMode(false);
                   }}
                   className="px-4 py-2 bg-[#7C1D23] text-white rounded-md text-sm font-medium hover:bg-[#5a1519] transition-colors"
@@ -1330,7 +1444,7 @@ const PanelSelection = () => {
                   if (m.isExternal) {
                     return (
                       <span key={`external-${idx}`} className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-50 border border-blue-300 text-sm">
-                        {m.name} ({m.email}) — {m.role.replace(/_/g, ' ')} <span className="text-xs text-blue-600">(Invited)</span>
+                        {m.name} ({m.email}) — {getPanelRoleLabel(m)} <span className="text-xs text-blue-600">(Invited)</span>
                         <button type="button" onClick={() => setSelectedMembers(prev => prev.filter((mem, i) => i !== idx))} className="text-gray-500 hover:text-gray-700">&times;</button>
                       </span>
                     );
@@ -1338,7 +1452,7 @@ const PanelSelection = () => {
                   const person = availablePanelists.find(p => p._id === m.faculty);
                   return (
                     <span key={m.faculty} className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white border border-gray-300 text-sm">
-                      {person?.name || m.faculty} — {m.role.replace(/_/g, ' ')}
+                      {person?.name || m.faculty} — {getPanelRoleLabel(m)}
                       <button type="button" onClick={() => handleRemoveMember(m.faculty)} className="text-gray-500 hover:text-gray-700">&times;</button>
                     </span>
                   );
@@ -1386,7 +1500,7 @@ const PanelSelection = () => {
                     <div className="flex items-center gap-2 mb-2">
                       <h4 className="text-base font-semibold text-gray-900">{panel.name}</h4>
                       <span className="px-2 py-1 text-xs font-medium rounded bg-blue-100 text-blue-700">
-                        {panel.type?.replace(/_/g, ' ')}
+                        {getPanelTypeLabel(panel.type)}
                       </span>
               </div>
                     {panel.description && (
@@ -1432,7 +1546,7 @@ const PanelSelection = () => {
                             : 'bg-gray-50 border-gray-200 text-gray-600'
                         }`}>
                           {m.isExternal ? `${m.name} (${m.email})` : (m.faculty?.name || 'Unknown')}
-                          <span className="text-xs">({m.role.replace(/_/g, ' ')})</span>
+                          <span className="text-xs">({getPanelRoleLabel(m)})</span>
                           {m.isExternal && <span className="text-xs text-blue-600">External</span>}
                           {m.isSelected && <span className="text-xs font-semibold">✓ Active</span>}
                           {!m.isSelected && <span className="text-xs text-gray-400">Inactive</span>}
@@ -1481,19 +1595,31 @@ const PanelSelection = () => {
                       <div>
                         <label className="block text-sm font-medium text-gray-700 mb-1">Role</label>
                         <select id={`role-${panel._id}`} className="w-full px-3 py-2 rounded-md border border-gray-300 text-sm">
-                          <option value="chair">Chair</option>
-                          <option value="member">Member</option>
-                          <option value="secretary">Secretary</option>
-                          <option value="external_examiner">External Examiner</option>
+                          {INTERNAL_ROLE_OPTIONS.map((option) => (
+                            <option key={option.key} value={option.key}>{option.label}</option>
+                          ))}
                         </select>
                       </div>
                       <div className="flex items-end">
                         <button type="button" onClick={() => {
                           const facultyId = document.getElementById(`panelist-${panel._id}`)?.value;
-                          const role = document.getElementById(`role-${panel._id}`)?.value;
+                          const roleKey = document.getElementById(`role-${panel._id}`)?.value;
+                          const roleConfig = ROLE_OPTION_MAP[roleKey];
                           if (!facultyId) return;
-                          const next = [...(panel.members || []).map(m => ({ faculty: m.faculty?._id || m.faculty, role: m.role }))];
-                          if (!next.find(m => m.faculty === facultyId)) next.push({ faculty: facultyId, role });
+                          const next = [...(panel.members || []).map(m => ({
+                            faculty: m.faculty?._id || m.faculty,
+                            role: m.role,
+                            memberCategory: m.memberCategory,
+                            specialization: m.specialization,
+                          }))];
+                          if (!next.find(m => m.faculty === facultyId) && roleConfig) {
+                            next.push({
+                              faculty: facultyId,
+                              role: roleConfig.role,
+                              memberCategory: roleConfig.memberCategory,
+                              specialization: roleConfig.specialization,
+                            });
+                          }
                           handleUpdateMembers(panel._id, next);
                         }} className="w-full bg-white border border-gray-300 px-4 py-2 rounded-md text-sm hover:bg-gray-50 transition-colors">
                           Add Panelist
@@ -1534,10 +1660,9 @@ const PanelSelection = () => {
                             onChange={e => setInviteForm({ ...inviteForm, role: e.target.value })}
                             className="w-full px-3 py-2 rounded-md border border-gray-300 text-sm"
                           >
-                            <option value="chair">Chair</option>
-                            <option value="member">Member</option>
-                            <option value="secretary">Secretary</option>
-                            <option value="external_examiner">External Examiner</option>
+                            {EXTERNAL_ROLE_OPTIONS.map((option) => (
+                              <option key={option.key} value={option.key}>{option.label}</option>
+                            ))}
                           </select>
                         </div>
                         <div>
@@ -1554,7 +1679,7 @@ const PanelSelection = () => {
                         <button
                           type="button"
                           onClick={() => {
-                            setInviteForm({ name: '', email: '', role: 'member', reviewDeadline: '' });
+                            setInviteForm({ name: '', email: '', role: EXTERNAL_ROLE_OPTIONS[0].key, reviewDeadline: '' });
                             setInviteMode(false);
                           }}
                           className="px-3 py-1 border border-gray-300 rounded-md text-xs font-medium text-gray-700 hover:bg-gray-50 transition-colors"
@@ -1685,7 +1810,7 @@ const PanelSelection = () => {
                             <div className="flex items-center gap-2">
                               <div className="text-right">
                                 <span className="inline-block px-2 py-1 text-xs font-medium rounded bg-gray-100 text-gray-700">
-                                  {member.role.replace(/_/g, ' ')}
+                                  {getPanelRoleLabel(member)}
                                 </span>
                                 <span className={`ml-2 inline-block px-2 py-1 text-xs rounded ${
                                   member.status === 'confirmed' 
@@ -1955,9 +2080,7 @@ const ScheduleManagement = () => {
       }
 
       // Determine schedule type from panel type
-      const scheduleType = panel?.type === 'proposal_defense' ? 'proposal_defense' : 
-                          panel?.type === 'final_defense' ? 'final_defense' : 
-                          'proposal_defense'; // Default to proposal_defense
+      const scheduleType = mapPanelTypeToScheduleType(panel?.type);
 
       const res = await axios.post('/api/programhead/schedules/check-conflicts', {
         datetime: scheduleForm.datetime,
@@ -2121,9 +2244,7 @@ const ScheduleManagement = () => {
   const calendarEvents = finalizedSchedules.map(schedule => {
     const start = new Date(schedule.datetime);
     const end = new Date(start.getTime() + (schedule.duration || 60) * 60000);
-    const scheduleType = schedule.type === "consultation" ? "Consultation" : 
-                        schedule.type === "proposal_defense" ? "Proposal Defense" : 
-                        "Final Defense";
+    const scheduleType = schedule.type === "consultation" ? "Consultation" : getPanelTypeLabel(schedule.type);
     
     return {
       id: schedule._id,
@@ -2375,7 +2496,7 @@ const ScheduleManagement = () => {
                         <p className="text-sm text-gray-600 mb-2">{panel.research?.title || 'N/A'}</p>
                         <div className="flex items-center gap-2 mt-2">
                           <span className="px-2 py-1 text-xs bg-blue-100 text-blue-700 rounded">
-                            {panel.type.replace(/_/g, ' ')}
+                            {getPanelTypeLabel(panel.type)}
                           </span>
                           <span className="px-2 py-1 text-xs bg-gray-100 text-gray-700 rounded">
                             {panel.members.filter(m => m.isSelected).length} panelists
@@ -2727,9 +2848,7 @@ const ScheduleManagement = () => {
                         </div>
                         <div>
                           <span className="px-2 py-1 text-xs bg-blue-100 text-blue-700 rounded">
-                            {selectedEvent.type === 'consultation' ? 'Consultation' : 
-                             selectedEvent.type === 'proposal_defense' ? 'Proposal Defense' : 
-                             'Final Defense'}
+                            {selectedEvent.type === 'consultation' ? 'Consultation' : getPanelTypeLabel(selectedEvent.type)}
                           </span>
                           <span className="ml-2 px-2 py-1 text-xs bg-green-100 text-green-700 rounded">
                             Finalized
@@ -3477,7 +3596,7 @@ const ProcessMonitoring = () => {
                       </div>
                     )}
                     <p className="text-xs text-gray-500">
-                      {panel.type?.replace(/_/g, ' ')} • {panel.totalActiveMembers || 0} active panelists
+                      {getPanelTypeLabel(panel.type)} • {panel.totalActiveMembers || 0} active panelists
                     </p>
                   </div>
                   <button
@@ -3695,7 +3814,15 @@ const ProcessMonitoring = () => {
                             <p className="text-sm text-gray-700 mb-2">{review.comments}</p>
                           )}
                           <div className="flex items-center gap-4 text-xs text-gray-500">
-                            <span>Recommendation: {review.recommendation?.replace(/_/g, ' ') || 'Pending'}</span>
+                            <span>
+                              {isStage3PanelType(panelDetails.panel.type)
+                                ? `Grade: ${review.grade || 'Pending'}`
+                                : `Result: ${review.recommendation === 'approve'
+                                    ? 'Pass'
+                                    : review.recommendation === 'reject'
+                                      ? 'Fail'
+                                      : 'Pending'}`}
+                            </span>
                             {review.submittedAt && (
                               <span>Submitted: {new Date(review.submittedAt).toLocaleDateString()}</span>
                             )}
@@ -3713,8 +3840,26 @@ const ProcessMonitoring = () => {
               {/* Panel Decision — shown when all panelists have submitted */}
               {panelDetails.panel.progress === 100 && panelDetails.panel.research && (
                 <div className="border border-gray-200 rounded-lg p-4">
-                  <h4 className="text-base font-semibold text-gray-800 mb-3">Panel Decision</h4>
+                  <h4 className="text-base font-semibold text-gray-800 mb-3">
+                    {isStage3PanelType(panelDetails.panel.type) ? 'Panel Grades' : 'Panel Decision'}
+                  </h4>
 
+                  {isStage3PanelType(panelDetails.panel.type) ? (
+                    <div className="space-y-3">
+                      <div className="flex flex-wrap gap-2">
+                        <span className="px-2.5 py-1 bg-blue-100 text-blue-700 text-xs rounded-full font-medium">
+                          Submitted Grades: {panelDetails.panel.research.panelRecommendationTally?.submittedCount || 0}
+                        </span>
+                        <span className="px-2.5 py-1 bg-green-100 text-green-700 text-xs rounded-full font-medium">
+                          Average Grade: {panelDetails.panel.research.panelRecommendationTally?.averageGrade || calculateAveragePanelGrade(panelDetails.panel.reviews || []) || 'Pending'}
+                        </span>
+                      </div>
+                      <p className="text-sm text-gray-600">
+                        The final student grade will be computed from the average of all submitted Final Oral Defense panel grades when the Program Head finalizes the research.
+                      </p>
+                    </div>
+                  ) : (
+                    <>
                   {/* Recommendation Tally */}
                   {panelDetails.panel.research.panelRecommendationTally && (
                     <div className="flex flex-wrap gap-2 mb-3">
@@ -3799,6 +3944,8 @@ const ProcessMonitoring = () => {
                       ))}
                       </div>
                     </div>
+                  )}
+                    </>
                   )}
                 </div>
               )}
@@ -3932,8 +4079,8 @@ const ProcessMonitoring = () => {
 
 // Forms Management Component
 const FormsManagement = ({ driveStatus }) => {
-  const [panels, setPanels] = useState([]);
-  const [selectedPanel, setSelectedPanel] = useState(null);
+  const [researchList, setResearchList] = useState([]);
+  const [selectedResearch, setSelectedResearch] = useState(null);
   const [documents, setDocuments] = useState([]);
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -3944,39 +4091,38 @@ const FormsManagement = ({ driveStatus }) => {
   });
   const [dragActive, setDragActive] = useState(false);
   const [showVersionHistory, setShowVersionHistory] = useState(null);
-  const [replacingDoc, setReplacingDoc] = useState(null);
   const isDriveConnected = !!driveStatus?.connected;
   const fileInputRef = useRef(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(10);
 
   useEffect(() => {
-    fetchPanels();
+    fetchResearch();
   }, []);
 
   useEffect(() => {
-    if (selectedPanel) {
-      fetchPanelDocuments(selectedPanel);
+    if (selectedResearch) {
+      fetchResearchDocuments(selectedResearch);
     }
-  }, [selectedPanel]);
+  }, [selectedResearch]);
 
-  const fetchPanels = async () => {
+  const fetchResearch = async () => {
     try {
       const token = localStorage.getItem('token');
-      const res = await axios.get('/api/programhead/panels', {
+      const res = await axios.get('/api/programhead/research', {
         headers: { Authorization: `Bearer ${token}` }
       });
-      setPanels(res.data || []);
+      setResearchList(res.data || []);
     } catch (error) {
-      console.error('Error fetching panels:', error);
+      console.error('Error fetching research list:', error);
     }
   };
 
-  const fetchPanelDocuments = async (panelId) => {
+  const fetchResearchDocuments = async (researchId) => {
     try {
       setLoading(true);
       const token = localStorage.getItem('token');
-      const res = await axios.get(`/api/programhead/panels/${panelId}/documents`, {
+      const res = await axios.get(`/api/programhead/research/${researchId}/docs`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       setDocuments(res.data.documents || []);
@@ -4006,7 +4152,11 @@ const FormsManagement = ({ driveStatus }) => {
     if (e.dataTransfer.files && e.dataTransfer.files[0]) {
       const file = e.dataTransfer.files[0];
       if (validateFile(file)) {
-        setUploadForm({ ...uploadForm, file });
+        setUploadForm((prev) => ({
+          ...prev,
+          file,
+          title: prev.title || file.name.replace(/\.[^.]+$/, ''),
+        }));
       }
     }
   };
@@ -4015,7 +4165,11 @@ const FormsManagement = ({ driveStatus }) => {
     if (e.target.files && e.target.files[0]) {
       const file = e.target.files[0];
       if (validateFile(file)) {
-        setUploadForm({ ...uploadForm, file });
+        setUploadForm((prev) => ({
+          ...prev,
+          file,
+          title: prev.title || file.name.replace(/\.[^.]+$/, ''),
+        }));
       }
     }
   };
@@ -4050,8 +4204,8 @@ const FormsManagement = ({ driveStatus }) => {
   const handleUpload = async (e) => {
     e.preventDefault();
     
-    if (!selectedPanel) {
-      showWarning('Select Panel', 'Please select a panel first.');
+    if (!selectedResearch) {
+      showWarning('Select Research', 'Please select a research title first.');
       return;
     }
     
@@ -4070,26 +4224,18 @@ const FormsManagement = ({ driveStatus }) => {
       const token = localStorage.getItem('token');
       const formData = new FormData();
       
-      // Handle Drive files: download and convert to File object
       let fileToUpload = uploadForm.file;
       if (uploadForm.file.isDriveFile) {
         try {
-          // Download file from Google Drive using the access token
           const driveResponse = await fetch(
             `https://www.googleapis.com/drive/v3/files/${uploadForm.file.driveFileId}?alt=media`,
             {
-              headers: {
-                Authorization: `Bearer ${uploadForm.file.accessToken}`,
-              },
+              headers: { Authorization: `Bearer ${uploadForm.file.accessToken}` },
             }
           );
 
-          if (!driveResponse.ok) {
-            throw new Error('Failed to download file from Google Drive');
-          }
-
+          if (!driveResponse.ok) throw new Error('Failed to download file from Google Drive');
           const blob = await driveResponse.blob();
-          // Convert blob to File object
           fileToUpload = new File([blob], uploadForm.file.name, {
             type: uploadForm.file.mimeType || blob.type,
           });
@@ -4105,7 +4251,7 @@ const FormsManagement = ({ driveStatus }) => {
       formData.append('title', uploadForm.title);
       formData.append('description', uploadForm.description || '');
 
-      const res = await axios.post(`/api/programhead/panels/${selectedPanel}/documents`, formData, {
+      const res = await axios.post(`/api/programhead/research/${selectedResearch}/docs`, formData, {
         headers: {
           Authorization: `Bearer ${token}`,
           'Content-Type': 'multipart/form-data',
@@ -4114,7 +4260,7 @@ const FormsManagement = ({ driveStatus }) => {
 
       await showSuccess('Upload Complete', res.data.message || 'Document uploaded successfully!');
       setUploadForm({ title: '', description: '', file: null });
-      fetchPanelDocuments(selectedPanel);
+      fetchResearchDocuments(selectedResearch);
     } catch (error) {
       console.error('Error uploading document:', error);
       handlePermissionError(error, 'Error uploading document');
@@ -4123,59 +4269,21 @@ const FormsManagement = ({ driveStatus }) => {
     }
   };
 
-  const handleReplace = async (documentId) => {
-    if (!replacingDoc?.file) {
-      showWarning('Select File', 'Please select a file to upload as the replacement.');
-      return;
-    }
-
-    if (!isDriveConnected) {
-      showWarning('Drive Not Connected', 'Please connect your Google Drive account in Settings before replacing documents.');
-      return;
-    }
-
-    setUploading(true);
-    try {
-      const token = localStorage.getItem('token');
-      const formData = new FormData();
-      formData.append('file', replacingDoc.file);
-      formData.append('description', replacingDoc.description || '');
-
-      const res = await axios.put(`/api/programhead/panels/${selectedPanel}/documents/${documentId}/replace`, formData, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'multipart/form-data',
-        }
-      });
-
-      await showSuccess('Document Replaced', res.data.message || 'Document replaced successfully!');
-      setReplacingDoc(null);
-      fetchPanelDocuments(selectedPanel);
-    } catch (error) {
-      console.error('Error replacing document:', error);
-      handlePermissionError(error, 'Error replacing document');
-    } finally {
-      setUploading(false);
-    }
-  };
-
   const handleRemove = async (documentId) => {
     const confirmResult = await showDangerConfirm(
       'Remove Document?',
-      'This will permanently remove the document from the panel resources.'
+      'This will permanently remove the document from the research resources.'
     );
-    if (!confirmResult?.isConfirmed) {
-      return;
-    }
+    if (!confirmResult?.isConfirmed) return;
 
     try {
       const token = localStorage.getItem('token');
-      const res = await axios.delete(`/api/programhead/panels/${selectedPanel}/documents/${documentId}`, {
+      const res = await axios.delete(`/api/programhead/research/${selectedResearch}/docs/${documentId}`, {
         headers: { Authorization: `Bearer ${token}` }
       });
 
       await showSuccess('Removed', res.data.message || 'Document removed successfully!');
-      fetchPanelDocuments(selectedPanel);
+      fetchResearchDocuments(selectedResearch);
     } catch (error) {
       console.error('Error removing document:', error);
       handlePermissionError(error, 'Error removing document');
@@ -4185,7 +4293,7 @@ const FormsManagement = ({ driveStatus }) => {
   const handleDownload = async (doc) => {
     try {
       const token = localStorage.getItem('token');
-      const response = await axios.get(`/api/programhead/panels/${selectedPanel}/documents/${doc._id}/download`, {
+      const response = await axios.get(`/api/programhead/research/${selectedResearch}/docs/${doc._id}/download`, {
         headers: { Authorization: `Bearer ${token}` },
         responseType: 'blob',
       });
@@ -4204,7 +4312,7 @@ const FormsManagement = ({ driveStatus }) => {
   };
 
   const formatFileSize = (bytes) => {
-    if (bytes === 0) return '0 Bytes';
+    if (bytes === 0 || !bytes) return '0 Bytes';
     const k = 1024;
     const sizes = ['Bytes', 'KB', 'MB'];
     const i = Math.floor(Math.log(bytes) / Math.log(k));
@@ -4212,6 +4320,7 @@ const FormsManagement = ({ driveStatus }) => {
   };
 
   const getFileIcon = (mimeType) => {
+    if (!mimeType) return <FaFileAlt className="text-gray-500" />;
     if (mimeType === 'application/pdf') {
       return <FaFilePdf className="text-red-500" />;
     } else if (mimeType.includes('word') || mimeType.includes('document')) {
@@ -4226,26 +4335,30 @@ const FormsManagement = ({ driveStatus }) => {
         <h2 className="text-xl font-bold text-gray-800">Upload Forms & Documents</h2>
       </div>
 
-      {/* Panel Selection */}
+      {/* Research Selection */}
       <div className="bg-white border border-gray-200 rounded-lg p-5">
         <label className="block text-sm font-medium text-gray-700 mb-2">
           Select Research Title <span className="text-red-500">*</span>
         </label>
         <select
-          value={selectedPanel || ''}
-          onChange={(e) => setSelectedPanel(e.target.value)}
+          value={selectedResearch || ''}
+          onChange={(e) => setSelectedResearch(e.target.value)}
           className="w-full px-4 py-2 rounded-md border border-gray-300 focus:border-[#7C1D23] focus:ring-2 focus:ring-[#7C1D23]/20"
         >
           <option value="">-- Select a research title --</option>
-          {panels.map(panel => (
-            <option key={panel._id} value={panel._id}>
-            {panel.research?.title || 'N/A'} - {panel.type.replace(/_/g, ' ')}
-            </option>
-          ))}
+          {researchList.length === 0 ? (
+            <option disabled>No research titles found</option>
+          ) : (
+            researchList.map(research => (
+              <option key={research._id} value={research._id}>
+                {research.title}
+              </option>
+            ))
+          )}
         </select>
       </div>
 
-      {selectedPanel && (
+      {selectedResearch && (
         <>
           {/* Upload Form */}
           <div className="bg-white border border-gray-200 rounded-lg p-5">
@@ -4260,9 +4373,12 @@ const FormsManagement = ({ driveStatus }) => {
                   value={uploadForm.title}
                   onChange={(e) => setUploadForm({ ...uploadForm, title: e.target.value })}
                   className="w-full px-4 py-2 rounded-md border border-gray-300 focus:border-[#7C1D23] focus:ring-2 focus:ring-[#7C1D23]/20"
-                  placeholder="e.g., Evaluation Rubric"
+                  placeholder="e.g., Evaluation Rubric or Minutes of Defense"
                   required
                 />
+                <p className="mt-1 text-xs text-gray-500">
+                  Use this same form for research-specific minutes. If you upload minutes here, the adviser and students for this research will be notified by email.
+                </p>
               </div>
 
               <div>
@@ -4328,7 +4444,11 @@ const FormsManagement = ({ driveStatus }) => {
                             isDriveFile: true,
                           };
                           if (!validateFile(virtualFile)) return;
-                          setUploadForm({ ...uploadForm, file: virtualFile });
+                          setUploadForm((prev) => ({
+                            ...prev,
+                            file: virtualFile,
+                            title: prev.title || fileInfo.name.replace(/\.[^.]+$/, ''),
+                          }));
                         }}
                       />
     </div>
@@ -4381,7 +4501,7 @@ const FormsManagement = ({ driveStatus }) => {
           {/* Documents List */}
           <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
             <div className="p-5">
-              <h3 className="text-lg font-semibold text-gray-800 mb-4">Panel Resources</h3>
+              <h3 className="text-lg font-semibold text-gray-800 mb-4">Research Documents</h3>
               {loading ? (
                 <p className="text-sm text-gray-500 text-center py-4">Loading documents...</p>
               ) : documents.length === 0 ? (
@@ -4441,13 +4561,6 @@ const FormsManagement = ({ driveStatus }) => {
                           <FaDownload />
                         </button>
                         <button
-                          onClick={() => setReplacingDoc(replacingDoc?.docId === doc._id ? null : { docId: doc._id, file: null, description: '' })}
-                          className="p-2 text-yellow-600 hover:bg-yellow-50 rounded transition-colors"
-                          title="Replace"
-                        >
-                          <FaUpload />
-                        </button>
-                        <button
                           onClick={() => handleRemove(doc._id)}
                           className="p-2 text-red-600 hover:bg-red-50 rounded transition-colors"
                           title="Remove"
@@ -4456,47 +4569,6 @@ const FormsManagement = ({ driveStatus }) => {
                         </button>
                       </div>
                     </div>
-
-                    {/* Replace Form */}
-                    {replacingDoc?.docId === doc._id && (
-                      <div className="mt-4 pt-4 border-t border-gray-200">
-                        <h5 className="text-sm font-medium text-gray-700 mb-2">Replace Document</h5>
-                        <div className="space-y-2">
-                          <input
-                            type="file"
-                            accept=".pdf,.doc,.docx"
-                            onChange={(e) => {
-                              if (e.target.files[0] && validateFile(e.target.files[0])) {
-                                setReplacingDoc({ docId: doc._id, file: e.target.files[0], description: replacingDoc?.description || '' });
-                              }
-                            }}
-                            className="text-sm"
-                          />
-                          <input
-                            type="text"
-                            placeholder="Change description (optional)"
-                            value={replacingDoc?.description || ''}
-                            onChange={(e) => setReplacingDoc({ docId: doc._id, file: replacingDoc?.file, description: e.target.value })}
-                            className="w-full px-3 py-2 text-sm rounded-md border border-gray-300"
-                          />
-                          <div className="flex space-x-2">
-                            <button
-                              onClick={() => handleReplace(doc._id)}
-                              disabled={uploading || !replacingDoc?.file}
-                              className="px-3 py-1 text-sm bg-[#7C1D23] text-white rounded hover:bg-[#5a1519] disabled:opacity-50"
-                            >
-                              Replace
-                            </button>
-                            <button
-                              onClick={() => setReplacingDoc(null)}
-                              className="px-3 py-1 text-sm bg-gray-200 text-gray-700 rounded hover:bg-gray-300"
-                            >
-                              Cancel
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    )}
 
                     {/* Version History */}
                     {showVersionHistory === doc._id && doc.versions && (
@@ -4560,6 +4632,7 @@ const FormsManagement = ({ driveStatus }) => {
 const DeanDocumentsSection = () => {
   const [documents, setDocuments] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [uploading, setUploading] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [currentPage, setCurrentPage] = useState(1);
@@ -4590,7 +4663,10 @@ const DeanDocumentsSection = () => {
   const handleDownload = async (doc) => {
     try {
       const token = localStorage.getItem('token');
-      const response = await axios.get(`/api/programhead/documents/${doc._id}/download`, {
+      const downloadUrl = doc.sourceType === 'panel'
+        ? `/api/programhead/panels/${doc.panelId}/documents/${doc._id}/download`
+        : `/api/programhead/documents/${doc._id}/download`;
+      const response = await axios.get(downloadUrl, {
         headers: { Authorization: `Bearer ${token}` },
         responseType: 'blob'
       });
@@ -4612,7 +4688,10 @@ const DeanDocumentsSection = () => {
   const handleView = async (doc) => {
     try {
       const token = localStorage.getItem('token');
-      const response = await axios.get(`/api/programhead/documents/${doc._id}`, {
+      const viewUrl = doc.sourceType === 'panel'
+        ? `/api/programhead/panels/${doc.panelId}/documents/${doc._id}`
+        : `/api/programhead/documents/${doc._id}`;
+      const response = await axios.get(viewUrl, {
         headers: { Authorization: `Bearer ${token}` },
         responseType: 'blob'
       });
@@ -4705,6 +4784,7 @@ const DeanDocumentsSection = () => {
       template: 'bg-green-100 text-green-700',
       guideline: 'bg-purple-100 text-purple-700',
       policy: 'bg-red-100 text-red-700',
+      panel: 'bg-amber-100 text-amber-700',
       other: 'bg-gray-100 text-gray-700'
     };
     return colors[category] || colors.other;
@@ -4724,7 +4804,7 @@ const DeanDocumentsSection = () => {
   return (
     <div className="bg-white border border-gray-200 rounded-lg p-5">
       <div className="flex justify-between items-center mb-4">
-        <h3 className="text-lg font-semibold text-gray-800">Documents from Dean</h3>
+        <h3 className="text-lg font-semibold text-gray-800">Forms and Documents</h3>
         <span className="text-sm text-gray-600">{filteredDocuments.length} document(s)</span>
       </div>
 
@@ -4750,6 +4830,7 @@ const DeanDocumentsSection = () => {
             <option value="template">Templates</option>
             <option value="guideline">Guidelines</option>
             <option value="policy">Policies</option>
+            <option value="panel">Panel Uploads</option>
             <option value="other">Other</option>
           </select>
         </div>
@@ -4784,6 +4865,11 @@ const DeanDocumentsSection = () => {
                   </div>
                   {doc.description && (
                     <p className="text-xs text-gray-600 mb-2">{doc.description}</p>
+                  )}
+                  {doc.sourceType === 'panel' && (
+                    <p className="text-xs text-amber-700 mb-2">
+                      From {doc.researchTitle || 'research'}{doc.panelName ? ` - ${doc.panelName}` : ''}
+                    </p>
                   )}
                   <div className="flex items-center space-x-3 text-xs text-gray-500">
                     <span>Uploaded by: {doc.uploadedBy?.name || 'Unknown'}</span>
@@ -5449,6 +5535,9 @@ const ResearchRecords = () => {
   const [exporting, setExporting] = useState(false);
   const [showFinalizeModal, setShowFinalizeModal] = useState(false);
   const [selectedResearch, setSelectedResearch] = useState(null);
+  const [showResearchFilesModal, setShowResearchFilesModal] = useState(false);
+  const [selectedResearchFilesRecord, setSelectedResearchFilesRecord] = useState(null);
+  const [linkedFinalizePanel, setLinkedFinalizePanel] = useState(null);
   const [finalizeForm, setFinalizeForm] = useState({
     finalGrade: '',
     evaluationStatus: '',
@@ -5456,7 +5545,6 @@ const ResearchRecords = () => {
     academicYear: '',
     submissionDate: ''
   });
-  const universityGradeOptions = Array.from({ length: 17 }, (_, index) => (1 + index * 0.25).toFixed(2));
   const [finalizing, setFinalizing] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(10);
@@ -5541,14 +5629,44 @@ const ResearchRecords = () => {
     }
   };
 
-  const handleFinalizeResearch = (research) => {
+  const handleFinalizeResearch = async (research) => {
     const normalizedGrade = normalizeGradeValue(research.finalGrade || '');
     const derivedStatus = getEvaluationStatusFromGrade(normalizedGrade);
+    let stage3PanelContext = null;
+
+    try {
+      const token = localStorage.getItem('token');
+      const res = await axios.get('/api/programhead/panels', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+
+      const linkedPanel = (res.data || []).find((panel) => {
+        const researchId = panel.research?._id || panel.research;
+        return researchId === research._id && isStage3PanelType(panel.type);
+      });
+
+      if (linkedPanel) {
+        const activeMembers = (linkedPanel.members || []).filter((member) => member.isSelected);
+        const submittedReviews = (linkedPanel.reviews || []).filter((review) => review.status === 'submitted' && review.grade);
+        stage3PanelContext = {
+          ...linkedPanel,
+          activeMembersCount: activeMembers.length,
+          submittedGradeCount: submittedReviews.length,
+          calculatedGrade: activeMembers.length > 0 && submittedReviews.length === activeMembers.length
+            ? calculateAveragePanelGrade(submittedReviews)
+            : '',
+        };
+      }
+    } catch (error) {
+      console.error('Error loading linked panel for finalization:', error);
+    }
+
     setSelectedResearch(research);
+    setLinkedFinalizePanel(stage3PanelContext);
     // Pre-fill form with existing data if available
     setFinalizeForm({
-      finalGrade: normalizedGrade,
-      evaluationStatus: research.evaluationStatus || derivedStatus || '',
+      finalGrade: stage3PanelContext?.calculatedGrade || normalizedGrade,
+      evaluationStatus: research.evaluationStatus || getEvaluationStatusFromGrade(stage3PanelContext?.calculatedGrade || normalizedGrade) || derivedStatus || '',
       semester: research.semester || '',
       academicYear: research.academicYear || '',
       submissionDate: research.submissionDate ? new Date(research.submissionDate).toISOString().split('T')[0] : ''
@@ -5556,11 +5674,63 @@ const ResearchRecords = () => {
     setShowFinalizeModal(true);
   };
 
+  const handleOpenResearchFiles = (research) => {
+    setSelectedResearchFilesRecord(research);
+    setShowResearchFilesModal(true);
+  };
+
+  const handleViewResearchFile = async (researchId, document) => {
+    try {
+      const token = localStorage.getItem('token');
+      const response = await axios.get(`/api/programhead/research/${researchId}/documents/${document._id}`, {
+        headers: { Authorization: `Bearer ${token}` },
+        responseType: 'blob',
+      });
+
+      const contentType = response.headers['content-type'] || document.driveMimeType || 'application/pdf';
+      const blob = new Blob([response.data], { type: contentType });
+      const url = window.URL.createObjectURL(blob);
+      window.open(url, '_blank', 'noopener,noreferrer');
+      setTimeout(() => window.URL.revokeObjectURL(url), 60000);
+    } catch (error) {
+      console.error('Error viewing research document:', error);
+      showError('Error', error.response?.data?.message || 'Error viewing research document');
+    }
+  };
+
+  const handleDownloadResearchFile = async (researchId, document) => {
+    try {
+      const token = localStorage.getItem('token');
+      const response = await axios.get(`/api/programhead/research/${researchId}/documents/${document._id}/download`, {
+        headers: { Authorization: `Bearer ${token}` },
+        responseType: 'blob',
+      });
+
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', document.filename || 'research-document');
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error('Error downloading research document:', error);
+      showError('Error', error.response?.data?.message || 'Error downloading research document');
+    }
+  };
+
   const handleFinalizeSubmit = async (e) => {
     e.preventDefault();
 
+    const isAutoCalculatedStage3 = !!linkedFinalizePanel;
     const normalizedFinalGrade = normalizeGradeValue(finalizeForm.finalGrade);
-    if (!normalizedFinalGrade || !universityGradeOptions.includes(normalizedFinalGrade)) {
+    if (isAutoCalculatedStage3) {
+      if (!linkedFinalizePanel.calculatedGrade) {
+        showWarning('Validation Error', 'All active Final Oral Defense panelists must submit grades before finalization.');
+        return;
+      }
+    } else if (!normalizedFinalGrade || !UNIVERSITY_GRADE_OPTIONS.includes(normalizedFinalGrade)) {
       showWarning('Validation Error', 'Please select a valid final grade from the university scale.');
       return;
     }
@@ -5604,6 +5774,7 @@ const ResearchRecords = () => {
       
       setShowFinalizeModal(false);
       setSelectedResearch(null);
+      setLinkedFinalizePanel(null);
       setFinalizeForm({
         finalGrade: '',
         evaluationStatus: '',
@@ -5876,6 +6047,12 @@ const ResearchRecords = () => {
                     </p>
                   </div>
                   <div className="flex flex-col gap-2">
+                    <button
+                      onClick={() => handleOpenResearchFiles(research)}
+                      className="px-3 py-1 bg-slate-600 text-white rounded-md text-xs font-medium hover:bg-slate-700 transition-colors"
+                    >
+                      Research Files
+                    </button>
                     {/* Share with Dean — show if pending or rejected and not yet shared */}
                     {(statusKey === 'pending' || statusKey === 'rejected') && (
                       <button
@@ -5993,6 +6170,71 @@ const ResearchRecords = () => {
         </div>
       </div>
 
+      {showResearchFilesModal && selectedResearchFilesRecord && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
+          <div className="bg-white rounded-lg shadow-lg max-w-3xl w-full max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
+              <div>
+                <h3 className="text-lg font-semibold text-gray-800">Research Files</h3>
+                <p className="text-sm text-gray-500">{selectedResearchFilesRecord.title}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowResearchFilesModal(false);
+                  setSelectedResearchFilesRecord(null);
+                }}
+                className="text-gray-500 hover:text-gray-700"
+              >
+                <FaClose className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="p-6">
+              {!selectedResearchFilesRecord.forms || selectedResearchFilesRecord.forms.length === 0 ? (
+                <div className="text-sm text-gray-500 text-center py-8">
+                  No uploaded research files available for this record.
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {selectedResearchFilesRecord.forms.map((document) => (
+                    <div key={document._id} className="border border-gray-200 rounded-lg p-4">
+                      <div className="flex items-start justify-between gap-4">
+                        <div className="flex-1">
+                          <p className="text-sm font-semibold text-gray-900">{document.filename || "Research document"}</p>
+                          <p className="text-xs text-gray-500 mt-1">
+                            {document.type?.replace(/_/g, ' ')} • Uploaded {document.uploadedAt ? new Date(document.uploadedAt).toLocaleDateString() : 'N/A'}
+                          </p>
+                          {document.status && (
+                            <p className="text-xs text-gray-500 mt-1">Status: {document.status}</p>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => handleViewResearchFile(selectedResearchFilesRecord._id, document)}
+                            className="px-3 py-2 border border-gray-300 text-gray-700 rounded-md hover:bg-gray-100 transition-colors text-sm"
+                          >
+                            View
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDownloadResearchFile(selectedResearchFilesRecord._id, document)}
+                            className="px-3 py-2 bg-[#7C1D23] text-white rounded-md hover:bg-[#5a1519] transition-colors text-sm"
+                          >
+                            Download
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Finalize Research Modal */}
       {showFinalizeModal && selectedResearch && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
@@ -6003,6 +6245,7 @@ const ResearchRecords = () => {
                 onClick={() => {
                   setShowFinalizeModal(false);
                   setSelectedResearch(null);
+                  setLinkedFinalizePanel(null);
                   setFinalizeForm({
                     finalGrade: '',
                     evaluationStatus: '',
@@ -6024,12 +6267,23 @@ const ResearchRecords = () => {
               <p className="text-gray-800">
                 {selectedResearch.students?.map(s => s.name).join(', ') || 'N/A'}
               </p>
+              {linkedFinalizePanel && (
+                <div className="mt-3 rounded-md border border-blue-200 bg-blue-50 p-3">
+                  <p className="text-sm font-medium text-blue-800">Final Oral Defense Panel Finalization</p>
+                  <p className="text-sm text-blue-700 mt-1">
+                    Final grade will be auto-calculated from panelist grades for {getPanelTypeLabel(linkedFinalizePanel.type)}.
+                  </p>
+                  <p className="text-xs text-blue-700 mt-2">
+                    Submitted grades: {linkedFinalizePanel.submittedGradeCount} / {linkedFinalizePanel.activeMembersCount}
+                  </p>
+                </div>
+              )}
             </div>
 
             <form onSubmit={handleFinalizeSubmit} className="space-y-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Final Grade <span className="text-red-500">*</span>
+                  {linkedFinalizePanel ? 'Calculated Final Grade' : 'Final Grade'} <span className="text-red-500">*</span>
                 </label>
                 <select
                   value={finalizeForm.finalGrade}
@@ -6043,15 +6297,22 @@ const ResearchRecords = () => {
                   }}
                   className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-[#7C1D23] focus:border-[#7C1D23]"
                   required
+                  disabled={!!linkedFinalizePanel}
                 >
-                  <option value="">Select Final Grade</option>
-                  {universityGradeOptions.map((grade) => (
+                  <option value="">
+                    {linkedFinalizePanel ? 'Waiting for complete panel grades' : 'Select Final Grade'}
+                  </option>
+                  {UNIVERSITY_GRADE_OPTIONS.map((grade) => (
                     <option key={grade} value={grade}>
                       {grade}
                     </option>
                   ))}
                 </select>
-                <p className="text-xs text-gray-500 mt-1">University scale: 1.00-3.00 = Passed, 3.25-5.00 = Failed</p>
+                <p className="text-xs text-gray-500 mt-1">
+                  {linkedFinalizePanel
+                    ? 'This value is averaged from all submitted Final Oral Defense panel grades and rounded to the nearest 0.25.'
+                    : 'University scale: 1.00-3.00 = Passed, 3.25-5.00 = Failed'}
+                </p>
               </div>
 
               <div>
@@ -6384,10 +6645,9 @@ const PanelRecords = () => {
               className="w-full px-3 py-2 rounded-md border border-gray-300 text-sm"
             >
               <option value="all">All Types</option>
-              <option value="oral_defense">Oral Defense</option>
-              <option value="thesis_review">Thesis Review</option>
-              <option value="proposal_defense">Proposal Defense</option>
-              <option value="final_defense">Final Defense</option>
+              {PANEL_TYPE_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
             </select>
           </div>
           <div>
@@ -6515,7 +6775,7 @@ const PanelRecords = () => {
                     <div className="flex items-center gap-3 mb-2">
                       <h4 className="text-base font-semibold text-gray-900">{panel.name}</h4>
                       <span className="px-2 py-1 text-xs font-medium rounded bg-blue-100 text-blue-800 border border-blue-300">
-                        {panel.type?.replace(/_/g, ' ')}
+                        {getPanelTypeLabel(panel.type)}
                       </span>
                     </div>
                     <p className="text-sm text-gray-600 mb-1">{panel.research?.title || 'N/A'}</p>
@@ -6688,7 +6948,7 @@ const PanelRecords = () => {
                         </div>
                         <div className="text-right">
                           <span className="px-2 py-1 text-xs bg-blue-100 text-blue-700 rounded">
-                            {panelist.role?.replace(/_/g, ' ')}
+                            {getPanelRoleLabel(panelist)}
                           </span>
                           {panelist.isExternal && (
                             <span className="ml-2 px-2 py-1 text-xs bg-purple-100 text-purple-700 rounded">

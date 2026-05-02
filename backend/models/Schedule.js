@@ -9,7 +9,15 @@ const scheduleSchema = new mongoose.Schema(
     },
     type: {
       type: String,
-      enum: ["consultation", "proposal_defense", "final_defense"],
+      enum: [
+        "consultation",
+        "title_defense",
+        "proposal",
+        "oral_examination_manuscript",
+        "oral_defense",
+        "proposal_defense",
+        "final_defense",
+      ],
       required: true,
     },
     title: {
