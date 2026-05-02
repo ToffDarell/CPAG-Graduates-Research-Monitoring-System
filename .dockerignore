@@ -1,0 +1,9 @@
+node_modules
+backups
+*.log
+.git
+.gitignore
+.vscode
+.cursor
+frontend
+uploads
