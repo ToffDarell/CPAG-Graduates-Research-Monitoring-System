@@ -4,6 +4,7 @@ import tailwindcss from '@tailwindcss/vite'
 
 // https://vite.dev/config/
 export default defineConfig({
+  base: "/juls4634/", // INSTRUCTOR RULE: base: "/yourusername/"
   plugins: [react(), tailwindcss()],
 
   // ── Development server ──────────────────────────────────────────────────────
@@ -20,8 +21,6 @@ export default defineConfig({
   },
 
   // ── Production preview (used inside Docker container) ───────────────────────
-  // `vite preview` also supports a proxy — /api is forwarded to the
-  // backend Docker service (resolved via Docker's internal DNS).
   preview: {
     port: 3000,
     host: true,   // listen on 0.0.0.0 so Docker can forward the port

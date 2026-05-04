@@ -88,7 +88,7 @@ function App() {
   };
 
   return (
-    <Router>
+    <Router basename="/juls4634">
       <Routes>
         {/* Login as Home Page */}
         <Route
